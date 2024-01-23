@@ -1,4 +1,4 @@
-import stock_data_fetch_v2 as stock_data_fetch
+import stock_data_fetch
 import ml_builder
 
 import pandas as pd
