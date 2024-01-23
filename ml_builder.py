@@ -14,7 +14,7 @@ from sklearn.metrics import mean_absolute_error
 
 # start_time = time.time()
 
-import stock_data_fetch_v2
+# import stock_data_fetch
 
 # Import stock symbols from a CSV file
 def import_stock_data(csv_file):
