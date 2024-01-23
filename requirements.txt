@@ -1,0 +1,11 @@
+setuptools==69.0.1
+pandas==2.1.3
+yfinance==0.2.32
+urllib3==2.1.0
+scikit-learn==1.3.2
+numpy==1.26.2
+matplotlib==3.8.2
+python-dateutil==2.8.2
+timedelta==2020.12.3
+XlsxWriter==3.1.9
+openpyxl==3.1.2
