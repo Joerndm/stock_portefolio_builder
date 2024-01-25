@@ -12,74 +12,34 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.svm import SVR
 from sklearn.metrics import mean_absolute_error
 
-# start_time = time.time()
+import stock_data_fetch
+import import_csv_file
+import split_dataset
+import pca_dataset_analysis
 
-# import stock_data_fetch
-
-# Import stock symbols from a CSV file
-def import_stock_data(csv_file):
-    """
-    Imports stock symbols from a CSV file and returns a pandas DataFrame.
-
-    The CSV file should have a column named 'Symbol' containing the stock symbols.
-
-    Parameters:
-    - csv_file (str): The path to the CSV file.
-
-    Returns:
-    pandas.DataFrame: A DataFrame containing the imported stock symbols.
-
-    Raises:
-    - FileNotFoundError: If the specified CSV file does not exist.
-    - KeyError: If the CSV file does not have a column named 'Symbol'.
-    """
-
-    try:
-        # Read the CSV file into a DataFrame
-        df = pd.read_csv(csv_file)
-
-        # Check if the 'Symbol' column exists in the DataFrame
-        if 'Date' not in df.columns:
-            raise KeyError("CSV file does not have a column named 'Date'.")
-
-        # Return the DataFrame with stock symbols
-        return df
-
-    except FileNotFoundError:
-        raise FileNotFoundError(f"CSV file '{csv_file}' does not exist.")
-
-# Predict the stock price
-def predict_price(stock_df):
-    train_data_df = stock_df[[
-        "Date", "Name", "Ticker", "Currency", "Price", "2Y", "3Y", "4Y", "5Y",
-        "SMA_40", "SMA_120", "EMA_40", "EMA_120", "Revenue", "Revenue growth",
-        "P/S", "Current Ratio", "Current Ratio growth", "P/B", "P/FCF"
-    ]]
-    train_data_df = train_data_df.drop(["Date", "Name", "Ticker", "Currency"], axis=1)
-    forecast_out = int(math.ceil(0.05 * len(train_data_df)))
-    prediction_data_dict = {"Prediction": train_data_df["Price"].shift(-forecast_out).values}
-    prediction_data_df = pd.DataFrame(prediction_data_dict)
-    train_data_df = train_data_df.join(prediction_data_df)
-    scaler = MinMaxScaler()
-    x = np.array(train_data_df.drop(["Price", "Prediction"], axis=1))
-    scaled_x = scaler.fit_transform(x)
-    x_Predictions = scaled_x[-forecast_out:]
-    print(len(x_Predictions))
-    x = scaled_x[:-forecast_out]
-    print(len(x))
-    train_data_df = train_data_df.dropna(axis=0, how="any")
-    y = np.array(train_data_df["Prediction"])
-    x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.20, random_state=1)
+def predict_price(traning_dataset, test_dataset, prediction_dataset, stock_df):
+    x_training_df = traning_dataset.drop(["Price"], axis=1)
+    y_training_df = traning_dataset["Price"]
+    # Convert the DataFrame to a numpy array
+    x_training = np.array(x_training_df)
+    y_training = np.array(y_training_df)
+    x_test_df = test_dataset.drop(["Price"], axis=1)
+    y_test_df = test_dataset["Price"]
+    # Convert the DataFrame to a numpy array
+    x_test = np.array(x_test_df)
+    y_test = np.array(y_test_df)
+    # Convert the DataFrame to a numpy array
+    x_prediction = np.array(prediction_dataset)
     lr = LinearRegression()
-    lr.fit(x_train, y_train)
+    lr.fit(x_training, y_training)
     lr_confidence = lr.score(x_test, y_test)
     lr_mean_absolute_error = mean_absolute_error(y_test, lr.predict(x_test))
     rf = RandomForestRegressor()
-    rf.fit(x_train, y_train)
+    rf.fit(x_test, y_test)
     rf_confidence = rf.score(x_test, y_test)
     rf_mean_absolute_error = mean_absolute_error(y_test, rf.predict(x_test))
     rg = Ridge()
-    rg.fit(x_train, y_train)
+    rg.fit(x_test, y_test)
     # Print the fitted model's weight and intercept
     # print(f"Weight: {rg.coef_}")
     # print(f"Intercept: {rg.intercept_}")
@@ -93,22 +53,17 @@ def predict_price(stock_df):
     # print(f"{rg.intercept_}")
     rg_confidence = rg.score(x_test, y_test)
     rg_mean_absolute_error = mean_absolute_error(y_test, rg.predict(x_test))
-    svm = SVR()
-    svm.fit(x_train, y_train)
-    svm_confidence = svm.score(x_test, y_test)
-    svm_mean_absolute_error = mean_absolute_error(y_test, svm.predict(x_test))
-    predict_precision_df = pd.DataFrame({"Model": ["Linear Regression", "Random Forest", "Ridge", "Support Vector Regression"],
-        "Confidence": [lr_confidence, rf_confidence, rg_confidence, svm_confidence],
-        "Mean Absolute Error": [lr_mean_absolute_error, rf_mean_absolute_error, rg_mean_absolute_error, svm_mean_absolute_error]
+    predict_precision_df = pd.DataFrame({"Model": ["Linear Regression", "Random Forest", "Ridge"],
+        "Confidence": [lr_confidence, rf_confidence, rg_confidence],
+        "Mean Absolute Error": [lr_mean_absolute_error, rf_mean_absolute_error, rg_mean_absolute_error]
     })
     print(predict_precision_df)
-    forecast_set_lr = lr.predict(x_Predictions)
-    forecast_set_rf = rf.predict(x_Predictions)
-    forecast_set_rg = rg.predict(x_Predictions)
-    forecast_set_svm = svm.predict(x_Predictions)
+    forecast_set_lr = lr.predict(x_prediction)
+    forecast_set_rf = rf.predict(x_prediction)
+    forecast_set_rg = rg.predict(x_prediction)
     date_list = []
-    for i in range(len(x_Predictions)):
-        x = len(x_Predictions) - i
+    for i in range(len(x_prediction)):
+        x = len(x_prediction) - i
         date = stock_df["Date"].values[-x]
         date = datetime.datetime.strptime(date, '%Y-%m-%d')
         date_list.append(date)
@@ -116,10 +71,9 @@ def predict_price(stock_df):
 
     forecast_dict = {"Date":date_list, "Price_lr":forecast_set_lr,
                     "Price_rf":forecast_set_rf, "Price_rg":forecast_set_rg,
-                    "Price_svm":forecast_set_svm
     }
     forecast_df = pd.DataFrame(forecast_dict)
-    # print(forecast_df)
+    print(forecast_df)
     predicted_return = ((forecast_df.iloc[-1]["Price_rg"] / forecast_df.iloc[0]["Price_rg"]) - 1) * 100
     if predicted_return > 0:
         print(f"The prediction expects a profitable return on: {predicted_return}%, over the next {len(forecast_df)} days.")
@@ -131,7 +85,7 @@ def predict_price(stock_df):
 
     return forecast_df
 
-# Plot the graph
+
 def plot_graph(stock_data_df, forecast_data_df):
     """
     Plots a graph of the stock data.
@@ -150,12 +104,11 @@ def plot_graph(stock_data_df, forecast_data_df):
     forecast_data_df["Price_lr"].plot()
     forecast_data_df["Price_rf"].plot()
     forecast_data_df["Price_rg"].plot()
-    forecast_data_df["Price_svm"].plot()
     plt.legend([
-        "Stock Price", "Linear Regression", "Random Forest",
-        "Ridge", "Support Vector Machine"
+        "Stock Price", "Linear Regression",
+        "Random Forest", "Ridge"
         ],
-        loc="upper right"
+        loc="best"
     )
     # plt.legend([
     #     "Stock Price", "Ridge"
@@ -172,22 +125,69 @@ def plot_graph(stock_data_df, forecast_data_df):
     my_path = os.path.abspath(__file__)
     path = os.path.dirname(my_path)
     # Save the graph
-    try:
-        plt.savefig(os.path.join(path, "generated_graphs", graph_name), bbox_inches="tight", pad_inches=0.5, transparent=False, format="png")
+    # try:
+    #     plt.savefig(os.path.join(path, "generated_graphs", graph_name), bbox_inches="tight", pad_inches=0.5, transparent=False, format="png")
 
 
-    except FileNotFoundError:
-        raise FileNotFoundError("The graph could not be saved. Please check the file name or path.")
     # Show the graph
-    # plt.show()
+    plt.show()
+
+    # except FileNotFoundError:
+    #     raise FileNotFoundError("The graph could not be saved. Please check the file name or path.")
 
 
-# # Import stock data from a CSV file
-# stock_data_df = import_stock_data('stock_data_single_v2.csv')
-# # Predict the stock price
-# forecast_df = predict_price(stock_data_df)
-# # end_time = time.time()
-# # execution_time = end_time - start_time
-# # print(f"Execution time: {execution_time} seconds to build dataset and ML models.")
-# # Plot the graph
-# plot_graph(stock_data_df, forecast_df)
+if __name__ == "__main__":
+    start_time = time.time()
+    stock_symbols_df = stock_data_fetch.import_stock_symbols('index_symbol_list_single_stock.csv')
+    stock_symbols_list = stock_symbols_df['Symbol'].tolist()
+    stock_symbol = stock_symbols_list[0]
+    print(stock_symbol)
+    # Fetch stock data for the imported stock symbols
+    stock_data_df = stock_data_fetch.fetch_stock_price_data(stock_symbol)
+    # print(stock_data_df)
+    # Fetch stock data for the imported stock symbols
+    full_stock_financial_data_df = stock_data_fetch.fetch_stock_financial_data(stock_symbol)
+    # print(full_stock_financial_data_df)
+    # Combine stock data with stock financial data
+    combined_stock_data_df = stock_data_fetch.combine_stock_data(stock_data_df, full_stock_financial_data_df)
+    # print(combined_stock_data_df)
+    # Calculate ratios
+    combined_stock_data_df = stock_data_fetch.calculate_ratios(combined_stock_data_df)
+    # print(combined_stock_data_df)
+    # Create a dictionary of dataframes to export to Excel
+    dataframes = {
+        # "Stock Data": stock_data_df,
+        # "Full Stock Financial Data": full_stock_financial_data_df,
+        "Combined Stock Data": combined_stock_data_df
+    }
+    # Export the dataframes to an Excel file
+    stock_data_fetch.export_to_excel(dataframes, 'stock_data_single_v2.xlsx')
+    # Import the stock data from an Excel file
+    dataframes = stock_data_fetch.import_excel("stock_data_single_v2.xlsx")
+    for key, value in dataframes.items():
+        dataframe = value
+
+
+    # Export the stock data to a CSV file
+    stock_data_fetch.convert_excel_to_csv(dataframe, "stock_data_single_v2")
+    stock_data_df = import_csv_file.import_as_df('stock_data_single_v2.csv')
+    # Split the dataset into traning, test data and prediction data
+    x_training_data, x_test_data, y_training_data, y_test_data, prediction_data = split_dataset.dataset_train_test_split(stock_data_df, 0.20, 1)
+    # Reduce the dataset dimensions with PCA
+    x_training_dataset, x_test_dataset, x_prediction_dataset = pca_dataset_analysis.pca_dataset_transformation(x_training_data, x_test_data, prediction_data, 10)
+    # Combine the reduced dataset with the stock price
+    x_training_dataset_df = pd.DataFrame(x_training_dataset)
+    y_training_data_df = pd.DataFrame(y_training_data, columns=["Price"])
+    traning_dataset_df = x_training_dataset_df.join(y_training_data_df)
+    x_test_dataset_df = pd.DataFrame(x_test_dataset)
+    y_test_data_df = pd.DataFrame(y_test_data, columns=["Price"])
+    test_dataset_df = x_test_dataset_df.join(y_test_data_df)
+    x_prediction_dataset_df = pd.DataFrame(x_prediction_dataset)
+    # Predict the stock price
+    forecast_df = predict_price(traning_dataset_df, test_dataset_df, x_prediction_dataset_df, stock_data_df)
+    # Calculate the execution time
+    end_time = time.time()
+    execution_time = end_time - start_time
+    print(f"Execution time: {execution_time} seconds to build dataset and ML models.")
+    # Plot the graph
+    plot_graph(stock_data_df, forecast_df)
