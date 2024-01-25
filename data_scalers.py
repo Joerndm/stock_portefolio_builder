@@ -1,5 +1,4 @@
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
-import pandas as pd
 
 def data_preprocessing_minmax_scaler(data):
     # Scale data before applying PCA

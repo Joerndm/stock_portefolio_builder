@@ -73,7 +73,7 @@ def predict_price(traning_dataset, test_dataset, prediction_dataset, stock_df):
                     "Price_rf":forecast_set_rf, "Price_rg":forecast_set_rg,
     }
     forecast_df = pd.DataFrame(forecast_dict)
-    print(forecast_df)
+    # print(forecast_df)
     predicted_return = ((forecast_df.iloc[-1]["Price_rg"] / forecast_df.iloc[0]["Price_rg"]) - 1) * 100
     if predicted_return > 0:
         print(f"The prediction expects a profitable return on: {predicted_return}%, over the next {len(forecast_df)} days.")
@@ -125,15 +125,16 @@ def plot_graph(stock_data_df, forecast_data_df):
     my_path = os.path.abspath(__file__)
     path = os.path.dirname(my_path)
     # Save the graph
-    # try:
-    #     plt.savefig(os.path.join(path, "generated_graphs", graph_name), bbox_inches="tight", pad_inches=0.5, transparent=False, format="png")
+    try:
+        plt.savefig(os.path.join(path, "generated_graphs", graph_name), bbox_inches="tight", pad_inches=0.5, transparent=False, format="png")
+        plt.close()
 
 
     # Show the graph
-    plt.show()
+    # plt.show()
 
-    # except FileNotFoundError:
-    #     raise FileNotFoundError("The graph could not be saved. Please check the file name or path.")
+    except FileNotFoundError:
+        raise FileNotFoundError("The graph could not be saved. Please check the file name or path.")
 
 
 if __name__ == "__main__":

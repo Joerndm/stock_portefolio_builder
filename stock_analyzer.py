@@ -1,8 +1,11 @@
-import stock_data_fetch
-import ml_builder
-
 import pandas as pd
+import time
 
+import stock_data_fetch
+import import_csv_file
+import split_dataset
+import pca_dataset_analysis
+import ml_builder
 
 # Import stock symbols from a CSV file
 def import_stock_symbols(csv_file):
@@ -38,15 +41,16 @@ def import_stock_symbols(csv_file):
 
 
 if __name__ == "__main__":
+    start_time = time.time()
     # Import stock symbols from a CSV file
     stock_symbols_df = import_stock_symbols('index_symbol_list_multiple_stocks.csv')
     stock_symbols_list = stock_symbols_df['Symbol'].tolist()
     print(stock_symbols_df)
-    # stock_symbols_df['Symbol'].tolist()
+
+    # Fetch stock data for the imported stock symbols
     for index, row in stock_symbols_df.iterrows():
         stock = row["Symbol"]
         print(stock)
-        # Fetch stock data for the imported stock symbols
         stock_data_df = stock_data_fetch.fetch_stock_price_data(stock)
         # print(stock_data_df)
         # Fetch stock data for the imported stock symbols
@@ -74,9 +78,24 @@ if __name__ == "__main__":
 
         # Export the stock data to a CSV file
         stock_data_fetch.convert_excel_to_csv(dataframe, "stock_data_single_v2")
-        # Import the stock data from a CSV file
-        stock_data_df = ml_builder.import_stock_data('stock_data_single_v2.csv')
+        stock_data_df = import_csv_file.import_as_df('stock_data_single_v2.csv')
+        # Split the dataset into traning, test data and prediction data
+        x_training_data, x_test_data, y_training_data, y_test_data, prediction_data = split_dataset.dataset_train_test_split(stock_data_df, 0.20, 1)
+        # Reduce the dataset dimensions with PCA
+        x_training_dataset, x_test_dataset, x_prediction_dataset = pca_dataset_analysis.pca_dataset_transformation(x_training_data, x_test_data, prediction_data, 10)
+        # Combine the reduced dataset with the stock price
+        x_training_dataset_df = pd.DataFrame(x_training_dataset)
+        y_training_data_df = pd.DataFrame(y_training_data, columns=["Price"])
+        traning_dataset_df = x_training_dataset_df.join(y_training_data_df)
+        x_test_dataset_df = pd.DataFrame(x_test_dataset)
+        y_test_data_df = pd.DataFrame(y_test_data, columns=["Price"])
+        test_dataset_df = x_test_dataset_df.join(y_test_data_df)
+        x_prediction_dataset_df = pd.DataFrame(x_prediction_dataset)
         # Predict the stock price
-        forecast_df = ml_builder.predict_price(stock_data_df)
+        forecast_df = ml_builder.predict_price(traning_dataset_df, test_dataset_df, x_prediction_dataset_df, stock_data_df)
         # Plot the graph
         ml_builder.plot_graph(stock_data_df, forecast_df)
+        # Calculate the execution time
+        end_time = time.time()
+        execution_time = end_time - start_time
+        print(f"Execution time: {execution_time} seconds to build dataset and ML models.")
