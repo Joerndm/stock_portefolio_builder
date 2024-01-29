@@ -22,6 +22,7 @@ def  pca_dataset_transformation(x_traning_data, x_test_data, prediction_data, co
     print(f"Shape of test dataset after PCA transformation: {reduced_test_dataset.shape}")
     print(f"Shape of prediction dataset after PCA transformation: {reduced_prediction_dataset.shape}")
     # check how much variance is explained by each principal component
+    print("Variance explained by each principal component: ")
     print(pca_model.explained_variance_ratio_)
     # # Access the principal components
     # principal_components = pca_model.components_
