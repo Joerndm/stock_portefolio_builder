@@ -150,7 +150,7 @@ def ridge_model(traning_dataset, test_dataset, prediction_dataset, stock_df):
     rg_confidence = rg.score(x_test, y_test)
     rg_mean_absolute_error = mean_absolute_error(y_test, rg.predict(x_test))
     rg_mean_squared_error = mean_squared_error(y_test, rg.predict(x_test))
-    predict_precision_df = pd.DataFrame({"Model": [""],
+    predict_precision_df = pd.DataFrame({"Model": ["Ridge Regression"],
         "Confidence": [rg_confidence],
         "Mean Absolute Error": [rg_mean_absolute_error],
         "Mean Squared Error": [rg_mean_squared_error]
@@ -256,7 +256,7 @@ def decision_tree_model(traning_dataset, test_dataset, prediction_dataset, stock
     y_test = np.array(y_test_df)
     # Convert the DataFrame to a numpy array
     x_prediction = np.array(prediction_dataset)
-    dt = tree.DecisionTreeRegressor()
+    dt = tree.DecisionTreeRegressor(max_depth=10)
     dt.fit(x_training, y_training)
     dt_confidence = dt.score(x_test, y_test)
     dt_mean_absolute_error = mean_absolute_error(y_test, dt.predict(x_test))
@@ -293,7 +293,7 @@ def decision_tree_model(traning_dataset, test_dataset, prediction_dataset, stock
     return forecast_df
 
 
-def neural_network_model(traning_dataset, test_dataset, prediction_dataset, hiddenLayer_1, hiddenLayer_2, hiddenLayer_3, iterations, randomState, stock_df):
+def neural_network_model(traning_dataset, test_dataset, prediction_dataset, hiddenLayer_1, hiddenLayer_2, hiddenLayer_3, hiddenLayer_4, iterations, randomState, stock_df):
     x_training_df = traning_dataset.drop(["Price"], axis=1)
     y_training_df = traning_dataset["Price"]
     # Convert the DataFrame to a numpy array
@@ -306,7 +306,7 @@ def neural_network_model(traning_dataset, test_dataset, prediction_dataset, hidd
     y_test = np.array(y_test_df)
     # Convert the DataFrame to a numpy array
     x_prediction = np.array(prediction_dataset)
-    nn = MLPRegressor(hidden_layer_sizes=(hiddenLayer_1, hiddenLayer_2, hiddenLayer_3), max_iter=iterations, random_state=randomState,)
+    nn = MLPRegressor(alpha=1e-5, hidden_layer_sizes=(hiddenLayer_1, hiddenLayer_2, hiddenLayer_3, hiddenLayer_4), max_iter=iterations, random_state=randomState,)
     nn.fit(x_training, y_training)
     nn_confidence = nn.score(x_test, y_test)
     nn_mean_absolute_error = mean_absolute_error(y_test, nn.predict(x_test))
@@ -346,23 +346,29 @@ def neural_network_model(traning_dataset, test_dataset, prediction_dataset, hidd
 def predict_price(traning_dataset, test_dataset, prediction_dataset, stock_df):
     lr_forecast = linear_model(traning_dataset, test_dataset, prediction_dataset, stock_df)
     # print(lr_forecast)
-    rf_forecast = random_forest_regressor_model(traning_dataset, test_dataset, prediction_dataset, stock_df)
-    # print(rf_forecast)
-    rd_forecast = ridge_model(traning_dataset, test_dataset, prediction_dataset, stock_df)
-    # print(rd_forecast)
-    forecast_df = lr_forecast.join(rf_forecast)
-    forecast_df = forecast_df.join(rd_forecast)
+    # rf_forecast = random_forest_regressor_model(traning_dataset, test_dataset, prediction_dataset, stock_df)
+    # # print(rf_forecast)
+    # forecast_df = lr_forecast.join(rf_forecast)
+    # rd_forecast = ridge_model(traning_dataset, test_dataset, prediction_dataset, stock_df)
+    # # print(rd_forecast)
+    # forecast_df = forecast_df.join(rd_forecast)
     # print(forecast_df)
-    for kernel_type in ["linear", "poly"]:
+    # kernel_list = ["linear"]
+    kernel_list = ["poly"]
+    # # kernel_list = ["linear", "poly"]
+    for kernel_type in kernel_list:
         svm_forecast = svm_model(traning_dataset, test_dataset, prediction_dataset, stock_df, kernel_type)
         # print(svm_forecast)
-        forecast_df = forecast_df.join(svm_forecast)
+        forecast_df = lr_forecast.join(svm_forecast)
+        # forecast_df = forecast_df.join(svm_forecast)
         forecast_df.rename(columns={"Price_svm":f"Price_svm_{kernel_type}"}, inplace=True)
 
 
     # dt_forecast = decision_tree_model(traning_dataset, test_dataset, prediction_dataset, stock_df)
+    # # print(dt_forecast)
     # forecast_df = forecast_df.join(dt_forecast)
-    nn_forecast = neural_network_model(traning_dataset, test_dataset, prediction_dataset, 10, 10, 10, 100, 1, stock_df)
+    nn_forecast = neural_network_model(traning_dataset, test_dataset, prediction_dataset, 30, 60, 60, 30, 100, 1, stock_df)
+    # print(nn_forecast)
     forecast_df = forecast_df.join(nn_forecast)
     print(forecast_df)
     forecast_df = forecast_df.reset_index()
