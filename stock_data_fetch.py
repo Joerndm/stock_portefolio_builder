@@ -920,8 +920,8 @@ def fetch_stock_financial_data(stock_symbol):
                     balancesheet_df.loc[index, "Total Assets growth"] = 0.0
                     balancesheet_df.loc[index, "Current Assets growth"] = 0.0
                     balancesheet_df.loc[index, "Cash and Cash Equivalents growth"] = 0.0
-                    balancesheet_df.loc[index, "Total Liabilities growth"] = 0.0
                     balancesheet_df.loc[index, "Total Equity growth"] = 0.0
+                    balancesheet_df.loc[index, "Total Liabilities growth"] = 0.0
                     balancesheet_df.loc[index, "Current Liabilities growth"] = 0.0
                     balancesheet_df.loc[index, "Book Value growth"] = 0.0
                     balancesheet_df.loc[index, "Book Value per share growth"] = 0.0
