@@ -2,9 +2,6 @@ import pandas as pd
 from sklearn.decomposition import PCA
 from sklearn.model_selection import train_test_split
 
-import import_csv_file
-import split_dataset
-
 def  pca_dataset_transformation(x_traning_data, x_test_data, prediction_data, component_amount):
     # Create a PCA model
     pca_model = PCA(n_components=component_amount)
@@ -39,6 +36,9 @@ def  pca_dataset_transformation(x_traning_data, x_test_data, prediction_data, co
     return reduced_traning_dataset, reduced_test_dataset, reduced_prediction_dataset
 
 if __name__ == "__main__":
+    import import_csv_file
+    import split_dataset
+    
     stock_data_df = import_csv_file.import_as_df('stock_data_single_v2.csv')
     x_training_data, x_test_data, y_training_data, y_test_data, prediction_data = split_dataset.dataset_train_test_split(stock_data_df, 0.20, 1)
     x_training_dataset, x_test_dataset, x_prediction_dataset = pca_dataset_transformation(x_training_data, x_test_data, prediction_data, 4)

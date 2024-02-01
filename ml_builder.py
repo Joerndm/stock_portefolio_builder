@@ -13,10 +13,7 @@ from sklearn.metrics import mean_absolute_error
 from sklearn.metrics import mean_squared_error
 from sklearn.metrics import r2_score
 
-import stock_data_fetch
-import import_csv_file
-import split_dataset
-import pca_dataset_analysis
+
 
 def linear_model(traning_dataset, test_dataset, prediction_dataset, stock_df):
     x_training_df = traning_dataset.drop(["Price"], axis=1)
@@ -317,6 +314,10 @@ def neural_network_model(traning_dataset, test_dataset, prediction_dataset, hidd
         "Mean Squared Error": [nn_mean_squared_error]
     })
     print(predict_precision_df)
+    # ['1M', '3M', '6M', '9M', '1Y', '2Y', '3Y', '4Y',
+    # '5Y', 'SMA_40', 'SMA_120', 'EMA_40', 'EMA_120',
+    # 'EPS', 'EPS growth', 'P/S', 'P/E', 'P/B', 'P/FCF'
+    # ]
     forecast_set_nn = nn.predict(x_prediction)
     date_list = []
     for i in range(len(x_prediction)):
@@ -424,6 +425,11 @@ def plot_graph(stock_data_df, forecast_data_df):
 
 
 if __name__ == "__main__":
+    import stock_data_fetch
+    import import_csv_file
+    import split_dataset
+    import pca_dataset_analysis
+
     start_time = time.time()
     stock_symbols_df = stock_data_fetch.import_stock_symbols('index_symbol_list_single_stock.csv')
     stock_symbols_list = stock_symbols_df['Symbol'].tolist()
