@@ -1,10 +1,9 @@
 import pandas as pd
-import time
 
 import stock_data_fetch
 import import_csv_file
 import split_dataset
-import pca_dataset_analysis
+import dimension_reduction
 import ml_builder
 
 # Import stock symbols from a CSV file
@@ -41,6 +40,8 @@ def import_stock_symbols(csv_file):
 
 
 if __name__ == "__main__":
+    import time
+    
     start_time = time.time()
     # Import stock symbols from a CSV file
     stock_symbols_df = import_stock_symbols('index_symbol_list_multiple_stocks.csv')
@@ -82,7 +83,7 @@ if __name__ == "__main__":
         # Split the dataset into traning, test data and prediction data
         x_training_data, x_test_data, y_training_data, y_test_data, prediction_data = split_dataset.dataset_train_test_split(stock_data_df, 0.20, 1)
         # Reduce the dataset dimensions with PCA
-        x_training_dataset, x_test_dataset, x_prediction_dataset = pca_dataset_analysis.pca_dataset_transformation(x_training_data, x_test_data, prediction_data, 10)
+        x_training_dataset, x_test_dataset, x_prediction_dataset = dimension_reduction.feature_selection(12, x_training_data, x_test_data, y_training_data, y_test_data, prediction_data, stock_data_df)
         # Combine the reduced dataset with the stock price
         x_training_dataset_df = pd.DataFrame(x_training_dataset)
         y_training_data_df = pd.DataFrame(y_training_data, columns=["Price"])

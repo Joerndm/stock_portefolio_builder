@@ -1,6 +1,5 @@
 import os
 import pandas as pd
-import time
 import datetime
 import numpy as np
 import matplotlib.pyplot as plt
@@ -425,10 +424,12 @@ def plot_graph(stock_data_df, forecast_data_df):
 
 
 if __name__ == "__main__":
+    import time
+    
     import stock_data_fetch
     import import_csv_file
     import split_dataset
-    import pca_dataset_analysis
+    import dimension_reduction
 
     start_time = time.time()
     stock_symbols_df = stock_data_fetch.import_stock_symbols('index_symbol_list_single_stock.csv')
@@ -466,8 +467,8 @@ if __name__ == "__main__":
     stock_data_df = import_csv_file.import_as_df('stock_data_single_v2.csv')
     # Split the dataset into traning, test data and prediction data
     x_training_data, x_test_data, y_training_data, y_test_data, prediction_data = split_dataset.dataset_train_test_split(stock_data_df, 0.20, 1)
-    # Reduce the dataset dimensions with PCA
-    x_training_dataset, x_test_dataset, x_prediction_dataset = pca_dataset_analysis.pca_dataset_transformation(x_training_data, x_test_data, prediction_data, 10)
+    # Feature selection
+    x_training_dataset, x_test_dataset, x_prediction_dataset = dimension_reduction.feature_selection(12, x_training_data, x_test_data, y_training_data, y_test_data, prediction_data, stock_data_df)
     # Combine the reduced dataset with the stock price
     x_training_dataset_df = pd.DataFrame(x_training_dataset)
     y_training_data_df = pd.DataFrame(y_training_data, columns=["Price"])
