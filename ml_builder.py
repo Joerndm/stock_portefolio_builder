@@ -406,22 +406,22 @@ def plot_graph(stock_data_df, forecast_data_df):
     plt.ylabel("Price")
     plt.title(f"Stock Price Prediction of {stock_data_df.iloc[0]["Name"]}")
     # Change " " in stock_data_df.iloc[0]["Name"] to "_" to avoid error when saving the graph
-    # stock_data_df = stock_data_df.replace({"Name": [" ", "/"]}, {"Name": "_"}, regex=True)
-    # stock_name = stock_data_df.iloc[0]["Name"]
-    # graph_name = str(f"stock_prediction_of_{stock_name}.png")
-    # my_path = os.path.abspath(__file__)
-    # path = os.path.dirname(my_path)
-    # # Save the graph
-    # try:
-    #     plt.savefig(os.path.join(path, "generated_graphs", graph_name), bbox_inches="tight", pad_inches=0.5, transparent=False, format="png")
-    #     plt.close()
+    stock_data_df = stock_data_df.replace({"Name": [" ", "/"]}, {"Name": "_"}, regex=True)
+    stock_name = stock_data_df.iloc[0]["Name"]
+    graph_name = str(f"stock_prediction_of_{stock_name}.png")
+    my_path = os.path.abspath(__file__)
+    path = os.path.dirname(my_path)
+    # Save the graph
+    try:
+        plt.savefig(os.path.join(path, "generated_graphs", graph_name), bbox_inches="tight", pad_inches=0.5, transparent=False, format="png")
+        plt.close()
 
 
     # Show the graph
-    plt.show()
+    # plt.show()
 
-    # except FileNotFoundError:
-    #     raise FileNotFoundError("The graph could not be saved. Please check the file name or path.")
+    except FileNotFoundError:
+        raise FileNotFoundError("The graph could not be saved. Please check the file name or path.")
 
 
 if __name__ == "__main__":
