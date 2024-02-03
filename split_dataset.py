@@ -2,6 +2,7 @@ from sklearn.model_selection import train_test_split
 import numpy as np
 import math
 
+import import_csv_file
 import data_scalers
 
 def dataset_train_test_split(dataset_dataframe, ts, rs):
@@ -36,7 +37,5 @@ def dataset_train_test_split(dataset_dataframe, ts, rs):
 
 
 if __name__ == "__main__":
-    import import_csv_file
-
     stock_data_df = import_csv_file.import_as_df('stock_data_single_v2.csv')
     x_training_data, x_test_data, y_training_data, y_test_data, prediction_data = dataset_train_test_split(stock_data_df, 0.20, 1)

@@ -11,8 +11,12 @@ from sklearn.neural_network import MLPRegressor
 from sklearn.metrics import mean_absolute_error
 from sklearn.metrics import mean_squared_error
 from sklearn.metrics import r2_score
+import time
 
-
+import stock_data_fetch
+import import_csv_file
+import split_dataset
+import dimension_reduction
 
 def linear_model(traning_dataset, test_dataset, prediction_dataset, stock_df):
     x_training_df = traning_dataset.drop(["Price"], axis=1)
@@ -346,12 +350,12 @@ def neural_network_model(traning_dataset, test_dataset, prediction_dataset, hidd
 def predict_price(traning_dataset, test_dataset, prediction_dataset, stock_df):
     lr_forecast = linear_model(traning_dataset, test_dataset, prediction_dataset, stock_df)
     # print(lr_forecast)
-    # rf_forecast = random_forest_regressor_model(traning_dataset, test_dataset, prediction_dataset, stock_df)
+    rf_forecast = random_forest_regressor_model(traning_dataset, test_dataset, prediction_dataset, stock_df)
     # # print(rf_forecast)
-    # forecast_df = lr_forecast.join(rf_forecast)
-    # rd_forecast = ridge_model(traning_dataset, test_dataset, prediction_dataset, stock_df)
+    forecast_df = lr_forecast.join(rf_forecast)
+    rd_forecast = ridge_model(traning_dataset, test_dataset, prediction_dataset, stock_df)
     # # print(rd_forecast)
-    # forecast_df = forecast_df.join(rd_forecast)
+    forecast_df = forecast_df.join(rd_forecast)
     # print(forecast_df)
     # kernel_list = ["linear"]
     kernel_list = ["poly"]
@@ -367,7 +371,7 @@ def predict_price(traning_dataset, test_dataset, prediction_dataset, stock_df):
     # dt_forecast = decision_tree_model(traning_dataset, test_dataset, prediction_dataset, stock_df)
     # # print(dt_forecast)
     # forecast_df = forecast_df.join(dt_forecast)
-    nn_forecast = neural_network_model(traning_dataset, test_dataset, prediction_dataset, 30, 60, 60, 30, 100, 1, stock_df)
+    nn_forecast = neural_network_model(traning_dataset, test_dataset, prediction_dataset, 45, 60, 60, 45, 100, 1, stock_df)
     # print(nn_forecast)
     forecast_df = forecast_df.join(nn_forecast)
     print(forecast_df)
@@ -424,13 +428,6 @@ def plot_graph(stock_data_df, forecast_data_df):
 
 
 if __name__ == "__main__":
-    import time
-    
-    import stock_data_fetch
-    import import_csv_file
-    import split_dataset
-    import dimension_reduction
-
     start_time = time.time()
     stock_symbols_df = stock_data_fetch.import_stock_symbols('index_symbol_list_single_stock.csv')
     stock_symbols_list = stock_symbols_df['Symbol'].tolist()

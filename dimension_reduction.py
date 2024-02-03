@@ -4,6 +4,9 @@ from sklearn.feature_selection import SelectKBest
 from sklearn.feature_selection import r_regression
 from sklearn.decomposition import PCA
 
+import import_csv_file
+import split_dataset
+
 def feature_selection(dimensions, x_traning_data, x_test_data, y_traning_data, y_test_data, prediction_data, dataset_df):
     # Create a SelectKBest object to select features with two best ANOVA F-Values
     selector = SelectKBest(r_regression, k=dimensions)
@@ -84,10 +87,8 @@ def  pca_dataset_transformation(x_traning_data, x_test_data, prediction_data, co
 
     return reduced_traning_dataset, reduced_test_dataset, reduced_prediction_dataset
 
+
 if __name__ == "__main__":
-    import import_csv_file
-    import split_dataset
-    
     stock_data_df = import_csv_file.import_as_df('stock_data_single_v2.csv')
     x_training_data, x_test_data, y_training_data, y_test_data, prediction_data = split_dataset.dataset_train_test_split(stock_data_df, 0.20, 1)
     x_training_dataset, x_test_dataset, x_prediction_dataset = feature_selection(15, x_training_data, x_test_data, y_training_data, y_test_data, prediction_data, stock_data_df)

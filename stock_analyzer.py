@@ -1,4 +1,5 @@
 import pandas as pd
+import time
 
 import stock_data_fetch
 import import_csv_file
@@ -40,14 +41,11 @@ def import_stock_symbols(csv_file):
 
 
 if __name__ == "__main__":
-    import time
-    
     start_time = time.time()
     # Import stock symbols from a CSV file
     stock_symbols_df = import_stock_symbols('index_symbol_list_multiple_stocks.csv')
     stock_symbols_list = stock_symbols_df['Symbol'].tolist()
     print(stock_symbols_df)
-
     # Fetch stock data for the imported stock symbols
     for index, row in stock_symbols_df.iterrows():
         stock = row["Symbol"]
