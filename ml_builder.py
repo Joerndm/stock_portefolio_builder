@@ -2,6 +2,8 @@ import os
 import pandas as pd
 import datetime
 import numpy as np
+import matplotlib
+matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.ensemble import RandomForestRegressor
@@ -417,7 +419,7 @@ def plot_graph(stock_data_df, forecast_data_df):
     # Save the graph
     try:
         plt.savefig(os.path.join(path, "generated_graphs", graph_name), bbox_inches="tight", pad_inches=0.5, transparent=False, format="png")
-        plt.close()
+        # plt.close()
 
 
     # Show the graph

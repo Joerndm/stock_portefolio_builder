@@ -41,13 +41,13 @@ def import_stock_symbols(csv_file):
 
 
 if __name__ == "__main__":
-    start_time = time.time()
     # Import stock symbols from a CSV file
     stock_symbols_df = import_stock_symbols('index_symbol_list_multiple_stocks.csv')
     stock_symbols_list = stock_symbols_df['Symbol'].tolist()
     print(stock_symbols_df)
     # Fetch stock data for the imported stock symbols
     for index, row in stock_symbols_df.iterrows():
+        start_time = time.time()
         stock = row["Symbol"]
         print(stock)
         stock_data_df = stock_data_fetch.fetch_stock_price_data(stock)
