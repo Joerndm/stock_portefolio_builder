@@ -337,6 +337,14 @@ def neural_network_model(traning_dataset, test_dataset, prediction_dataset, hidd
     forecast_df = pd.DataFrame(forecast_dict)
     forecast_df = forecast_df.set_index("Date")
     # print(forecast_df)
+    # Create variable storing the model's equation
+    model_equation = "y = "
+    for feature in range(len(nn.coefs_[0])):
+        model_equation += f"{nn.coefs_[0][feature]} * {x_training_df.columns[feature]} + "
+    model_equation += f"{nn.intercepts_[0]}"
+    # Print the model's equation
+    print("The equation of the price prediction model is: ")
+    print(model_equation)
     predicted_return = ((forecast_df.iloc[-1]["Price_nn"] / forecast_df.iloc[0]["Price_nn"]) - 1) * 100
     if predicted_return > 0:
         print(f"The prediction expects a profitable return on: {predicted_return}%, over the next {len(forecast_df)} days.")
@@ -373,7 +381,7 @@ def predict_price(traning_dataset, test_dataset, prediction_dataset, stock_df):
     # dt_forecast = decision_tree_model(traning_dataset, test_dataset, prediction_dataset, stock_df)
     # # print(dt_forecast)
     # forecast_df = forecast_df.join(dt_forecast)
-    nn_forecast = neural_network_model(traning_dataset, test_dataset, prediction_dataset, 45, 60, 60, 45, 100, 1, stock_df)
+    nn_forecast = neural_network_model(traning_dataset, test_dataset, prediction_dataset, 70, 60, 50, 40, 100, 1, stock_df)
     # print(nn_forecast)
     forecast_df = forecast_df.join(nn_forecast)
     print(forecast_df)
@@ -419,7 +427,8 @@ def plot_graph(stock_data_df, forecast_data_df):
     # Save the graph
     try:
         plt.savefig(os.path.join(path, "generated_graphs", graph_name), bbox_inches="tight", pad_inches=0.5, transparent=False, format="png")
-        # plt.close()
+        plt.clf()
+        plt.close("all")
 
 
     # Show the graph
