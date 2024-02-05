@@ -8,7 +8,7 @@ import dimension_reduction
 import ml_builder
 
 # Import stock symbols from a CSV file
-def import_stock_symbols(csv_file):
+def import_symbols(csv_file):
     """
     Imports stock symbols from a CSV file and returns a pandas DataFrame.
 
@@ -42,7 +42,7 @@ def import_stock_symbols(csv_file):
 
 if __name__ == "__main__":
     # Import stock symbols from a CSV file
-    stock_symbols_df = import_stock_symbols('index_symbol_list_multiple_stocks.csv')
+    stock_symbols_df = import_symbols('index_symbol_list_multiple_stocks.csv')
     stock_symbols_list = stock_symbols_df['Symbol'].tolist()
     print(stock_symbols_df)
     # Fetch stock data for the imported stock symbols

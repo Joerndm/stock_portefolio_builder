@@ -1,11 +1,12 @@
 import pandas as pd
+import numpy as np
 import yfinance as yf
 import time
 import datetime
 from dateutil.relativedelta import relativedelta
 
 # Import stock symbols from a CSV file
-def import_stock_symbols(csv_file):
+def import_symbols(csv_file):
     """
     Imports stock symbols from a CSV file and returns a pandas DataFrame.
 
@@ -733,6 +734,8 @@ def fetch_stock_financial_data(stock_symbol):
         balancesheet_df["Return on Assets growth"] = 0.0
         balancesheet_df["Return on Equity"] = 0.0
         balancesheet_df["Return on Equity growth"] = 0.0
+        balancesheet_df["Return on Invested Capital"] = 0.0
+        balancesheet_df["Return on Invested Capital growth"] = 0.0
         balancesheet_df["Current Ratio"] = 0.0
         balancesheet_df["Current Ratio growth"] = 0.0
         balancesheet_df["Quick Ratio"] = 0.0
@@ -758,6 +761,7 @@ def fetch_stock_financial_data(stock_symbol):
                     balancesheet_df.loc[index, "Book Value per share"] = (balancesheet_df.loc[index, "Total Equity Gross Minority Interest"] / income_stmt_df.loc[index, "Diluted Average Shares"])
                     balancesheet_df.loc[index, "Return on Assets"] = (income_stmt_df.loc[index, "Net Income Common Stockholders"] / balancesheet_df.loc[index, "Total Assets"])
                     balancesheet_df.loc[index, "Return on Equity"] = (income_stmt_df.loc[index, "Net Income Common Stockholders"] / balancesheet_df.loc[index, "Total Equity Gross Minority Interest"])
+                    balancesheet_df.loc[index, "Return on Invested Capital"] = (income_stmt_df.loc[index, "Net Income Common Stockholders"] / (balancesheet_df.loc[index, "Total Equity Gross Minority Interest"] + balancesheet_df.loc[index, "Total Liabilities Net Minority Interest"]))
                     balancesheet_df.loc[index, "Current Ratio"] = ((balancesheet_df.loc[index, "Current Assets"]) / balancesheet_df.loc[index, "Current Liabilities"])
                     balancesheet_df.loc[index, "Quick Ratio"] = (balancesheet_df.loc[index, "Cash And Cash Equivalents"] / balancesheet_df.loc[index, "Current Liabilities"])
                     balancesheet_df.loc[index, "Debt to Equity"] = (balancesheet_df.loc[index, "Total Liabilities Net Minority Interest"] / balancesheet_df.loc[index, "Total Equity Gross Minority Interest"])
@@ -772,6 +776,7 @@ def fetch_stock_financial_data(stock_symbol):
                         balancesheet_df.loc[index, "Book Value per share growth"] = 0.0
                         balancesheet_df.loc[index, "Return on Assets growth"] = 0.0
                         balancesheet_df.loc[index, "Return on Equity growth"] = 0.0
+                        balancesheet_df.loc[index, "Return on Invested Capital growth"] = 0.0
                         balancesheet_df.loc[index, "Current Ratio growth"] = 0.0
                         balancesheet_df.loc[index, "Quick Ratio growth"] = 0.0
                         balancesheet_df.loc[index, "Debt to Equity growth"] = 0.0
@@ -786,6 +791,7 @@ def fetch_stock_financial_data(stock_symbol):
                         balancesheet_df.loc[index, "Book Value per share growth"] = ((balancesheet_df.iloc[index]["Book Value per share"] / balancesheet_df.iloc[index-1]["Book Value per share"])-1)
                         balancesheet_df.loc[index, "Return on Assets growth"] = ((balancesheet_df.iloc[index]["Return on Assets"] / balancesheet_df.iloc[index-1]["Return on Assets"])-1)
                         balancesheet_df.loc[index, "Return on Equity growth"] = ((balancesheet_df.iloc[index]["Return on Equity"] / balancesheet_df.iloc[index-1]["Return on Equity"])-1)
+                        balancesheet_df.loc[index, "Return on Invested Capital growth"] = ((balancesheet_df.iloc[index]["Return on Invested Capital"] / balancesheet_df.iloc[index-1]["Return on Invested Capital"])-1)
                         balancesheet_df.loc[index, "Current Ratio growth"] = ((balancesheet_df.iloc[index]["Current Ratio"] / balancesheet_df.iloc[index-1]["Current Ratio"])-1)
                         balancesheet_df.loc[index, "Quick Ratio growth"] = ((balancesheet_df.iloc[index]["Quick Ratio"] / balancesheet_df.iloc[index-1]["Quick Ratio"])-1)
                         balancesheet_df.loc[index, "Debt to Equity growth"] = ((balancesheet_df.iloc[index]["Debt to Equity"] / balancesheet_df.iloc[index-1]["Debt to Equity"])-1)                
@@ -839,6 +845,7 @@ def fetch_stock_financial_data(stock_symbol):
                     balancesheet_df.loc[index, "Book Value per share"] = (balancesheet_df.loc[index, "Total Equity Gross Minority Interest"] / income_stmt_df.loc[index, "Diluted Average Shares"])
                     balancesheet_df.loc[index, "Return on Assets"] = (income_stmt_df.loc[index, "Net Income Common Stockholders"] / balancesheet_df.loc[index, "Total Assets"])
                     balancesheet_df.loc[index, "Return on Equity"] = (income_stmt_df.loc[index, "Net Income Common Stockholders"] / balancesheet_df.loc[index, "Total Equity Gross Minority Interest"])
+                    balancesheet_df.loc[index, "Return on Invested Capital"] = (income_stmt_df.loc[index, "Net Income Common Stockholders"] / (balancesheet_df.loc[index, "Total Equity Gross Minority Interest"] + balancesheet_df.loc[index, "Total Liabilities Net Minority Interest"]))
                     balancesheet_df.loc[index, "Current Ratio"] = ((balancesheet_df.loc[index, "Current Assets"]) / balancesheet_df.loc[index, "Current Liabilities"])
                     balancesheet_df.loc[index, "Quick Ratio"] = (balancesheet_df.loc[index, "Cash And Cash Equivalents"] / balancesheet_df.loc[index, "Current Liabilities"])
                     balancesheet_df.loc[index, "Debt to Equity"] = (balancesheet_df.loc[index, "Total Liabilities Net Minority Interest"] / balancesheet_df.loc[index, "Total Equity Gross Minority Interest"])
@@ -853,6 +860,7 @@ def fetch_stock_financial_data(stock_symbol):
                         balancesheet_df.loc[index, "Book Value per share growth"] = 0.0
                         balancesheet_df.loc[index, "Return on Assets growth"] = 0.0
                         balancesheet_df.loc[index, "Return on Equity growth"] = 0.0
+                        balancesheet_df.loc[index, "Return on Invested Capital growth"] = 0.0
                         balancesheet_df.loc[index, "Current Ratio growth"] = 0.0
                         balancesheet_df.loc[index, "Quick Ratio growth"] = 0.0
                         balancesheet_df.loc[index, "Debt to Equity growth"] = 0.0
@@ -867,6 +875,7 @@ def fetch_stock_financial_data(stock_symbol):
                         balancesheet_df.loc[index, "Book Value per share growth"] = ((balancesheet_df.iloc[index]["Book Value per share"] / balancesheet_df.iloc[index-1]["Book Value per share"])-1)
                         balancesheet_df.loc[index, "Return on Assets growth"] = ((balancesheet_df.iloc[index]["Return on Assets"] / balancesheet_df.iloc[index-1]["Return on Assets"])-1)
                         balancesheet_df.loc[index, "Return on Equity growth"] = ((balancesheet_df.iloc[index]["Return on Equity"] / balancesheet_df.iloc[index-1]["Return on Equity"])-1)
+                        balancesheet_df.loc[index, "Return on Invested Capital growth"] = ((balancesheet_df.iloc[index]["Return on Invested Capital"] / balancesheet_df.iloc[index-1]["Return on Invested Capital"])-1)
                         balancesheet_df.loc[index, "Current Ratio growth"] = ((balancesheet_df.iloc[index]["Current Ratio"] / balancesheet_df.iloc[index-1]["Current Ratio"])-1)
                         balancesheet_df.loc[index, "Quick Ratio growth"] = ((balancesheet_df.iloc[index]["Quick Ratio"] / balancesheet_df.iloc[index-1]["Quick Ratio"])-1)
                         balancesheet_df.loc[index, "Debt to Equity growth"] = ((balancesheet_df.iloc[index]["Debt to Equity"] / balancesheet_df.iloc[index-1]["Debt to Equity"])-1)
@@ -876,6 +885,7 @@ def fetch_stock_financial_data(stock_symbol):
                     balancesheet_df.loc[index, "Book Value per share"] = (balancesheet_df.loc[index, "Total Equity Gross Minority Interest"] / income_stmt_df.loc[index, "Diluted Average Shares"])
                     balancesheet_df.loc[index, "Return on Assets"] = (income_stmt_df.loc[index, "Net Income Common Stockholders"] / balancesheet_df.loc[index, "Total Assets"])
                     balancesheet_df.loc[index, "Return on Equity"] = (income_stmt_df.loc[index, "Net Income Common Stockholders"] / balancesheet_df.loc[index, "Total Equity Gross Minority Interest"])
+                    balancesheet_df.loc[index, "Return on Invested Capital"] = (income_stmt_df.loc[index, "Net Income Common Stockholders"] / (balancesheet_df.loc[index, "Total Equity Gross Minority Interest"] + balancesheet_df.loc[index, "Total Liabilities Net Minority Interest"]))
                     balancesheet_df.loc[index, "Current Ratio"] = (balancesheet_df.loc[index, "Current Assets"] / balancesheet_df.loc[index, "Current Liabilities"])
                     balancesheet_df.loc[index, "Quick Ratio"] = (balancesheet_df.loc[index, "Cash Cash Equivalents And Short Term Investments"] / balancesheet_df.loc[index, "Current Liabilities"])
                     balancesheet_df.loc[index, "Debt to Equity"] = (balancesheet_df.loc[index, "Total Liabilities Net Minority Interest"] / balancesheet_df.loc[index, "Total Equity Gross Minority Interest"])
@@ -890,6 +900,7 @@ def fetch_stock_financial_data(stock_symbol):
                         balancesheet_df.loc[index, "Book Value per share growth"] = 0.0
                         balancesheet_df.loc[index, "Return on Assets growth"] = 0.0
                         balancesheet_df.loc[index, "Return on Equity growth"] = 0.0
+                        balancesheet_df.loc[index, "Return on Invested Capital growth"] = 0.0
                         balancesheet_df.loc[index, "Current Ratio growth"] = 0.0
                         balancesheet_df.loc[index, "Quick Ratio growth"] = 0.0
                         balancesheet_df.loc[index, "Debt to Equity growth"] = 0.0
@@ -904,6 +915,7 @@ def fetch_stock_financial_data(stock_symbol):
                         balancesheet_df.loc[index, "Book Value per share growth"] = ((balancesheet_df.iloc[index]["Book Value per share"] / balancesheet_df.iloc[index-1]["Book Value per share"])-1)
                         balancesheet_df.loc[index, "Return on Assets growth"] = ((balancesheet_df.iloc[index]["Return on Assets"] / balancesheet_df.iloc[index-1]["Return on Assets"])-1)
                         balancesheet_df.loc[index, "Return on Equity growth"] = ((balancesheet_df.iloc[index]["Return on Equity"] / balancesheet_df.iloc[index-1]["Return on Equity"])-1)
+                        balancesheet_df.loc[index, "Return on Invested Capital growth"] = ((balancesheet_df.iloc[index]["Return on Invested Capital"] / balancesheet_df.iloc[index-1]["Return on Invested Capital"])-1)
                         balancesheet_df.loc[index, "Current Ratio growth"] = ((balancesheet_df.iloc[index]["Current Ratio"] / balancesheet_df.iloc[index-1]["Current Ratio"])-1)
                         balancesheet_df.loc[index, "Quick Ratio growth"] = ((balancesheet_df.iloc[index]["Quick Ratio"] / balancesheet_df.iloc[index-1]["Quick Ratio"])-1)
                         balancesheet_df.loc[index, "Debt to Equity growth"] = ((balancesheet_df.iloc[index]["Debt to Equity"] / balancesheet_df.iloc[index-1]["Debt to Equity"])-1)
@@ -913,6 +925,7 @@ def fetch_stock_financial_data(stock_symbol):
                 balancesheet_df.loc[index, "Book Value per share"] = (balancesheet_df.loc[index, "Total Equity Gross Minority Interest"] / income_stmt_df.loc[index, "Diluted Average Shares"])
                 balancesheet_df.loc[index, "Return on Assets"] = (income_stmt_df.loc[index, "Net Income Common Stockholders"] / balancesheet_df.loc[index, "Total Assets"])
                 balancesheet_df.loc[index, "Return on Equity"] = (income_stmt_df.loc[index, "Net Income Common Stockholders"] / balancesheet_df.loc[index, "Total Equity Gross Minority Interest"])
+                balancesheet_df.loc[index, "Return on Invested Capital"] = (income_stmt_df.loc[index, "Net Income Common Stockholders"] / (balancesheet_df.loc[index, "Total Equity Gross Minority Interest"] + balancesheet_df.loc[index, "Total Liabilities Net Minority Interest"]))
                 balancesheet_df.loc[index, "Current Ratio"] = (balancesheet_df.loc[index, "Current Assets"] / balancesheet_df.loc[index, "Current Liabilities"])
                 balancesheet_df.loc[index, "Quick Ratio"] = (balancesheet_df.loc[index, "Cash Cash Equivalents And Short Term Investments"] / balancesheet_df.loc[index, "Current Liabilities"])
                 balancesheet_df.loc[index, "Debt to Equity"] = (balancesheet_df.loc[index, "Total Liabilities Net Minority Interest"] / balancesheet_df.loc[index, "Total Equity Gross Minority Interest"])
@@ -927,6 +940,7 @@ def fetch_stock_financial_data(stock_symbol):
                     balancesheet_df.loc[index, "Book Value per share growth"] = 0.0
                     balancesheet_df.loc[index, "Return on Assets growth"] = 0.0
                     balancesheet_df.loc[index, "Return on Equity growth"] = 0.0
+                    balancesheet_df.loc[index, "Return on Invested Capital growth"] = 0.0
                     balancesheet_df.loc[index, "Current Ratio growth"] = 0.0
                     balancesheet_df.loc[index, "Quick Ratio growth"] = 0.0
                     balancesheet_df.loc[index, "Debt to Equity growth"] = 0.0
@@ -941,6 +955,7 @@ def fetch_stock_financial_data(stock_symbol):
                     balancesheet_df.loc[index, "Book Value per share growth"] = ((balancesheet_df.iloc[index]["Book Value per share"] / balancesheet_df.iloc[index-1]["Book Value per share"])-1)
                     balancesheet_df.loc[index, "Return on Assets growth"] = ((balancesheet_df.iloc[index]["Return on Assets"] / balancesheet_df.iloc[index-1]["Return on Assets"])-1)
                     balancesheet_df.loc[index, "Return on Equity growth"] = ((balancesheet_df.iloc[index]["Return on Equity"] / balancesheet_df.iloc[index-1]["Return on Equity"])-1)
+                    balancesheet_df.loc[index, "Return on Invested Capital growth"] = ((balancesheet_df.iloc[index]["Return on Invested Capital"] / balancesheet_df.iloc[index-1]["Return on Invested Capital"])-1)
                     balancesheet_df.loc[index, "Current Ratio growth"] = ((balancesheet_df.iloc[index]["Current Ratio"] / balancesheet_df.iloc[index-1]["Current Ratio"])-1)
                     balancesheet_df.loc[index, "Quick Ratio growth"] = ((balancesheet_df.iloc[index]["Quick Ratio"] / balancesheet_df.iloc[index-1]["Quick Ratio"])-1)
                     balancesheet_df.loc[index, "Debt to Equity growth"] = ((balancesheet_df.iloc[index]["Debt to Equity"] / balancesheet_df.iloc[index-1]["Debt to Equity"])-1)
@@ -990,15 +1005,16 @@ def fetch_stock_financial_data(stock_symbol):
                         "Total Equity Gross Minority Interest": "Total Equity"
                     })
                     full_stock_financial_data_df = full_stock_financial_data_df[[
-                        "Ticker" ,"Date", "Amount of stocks", "Revenue", "Revenue growth", "Net Income", "Net Income growth", "Net Income Margin", "Net Income Margin growth",
-                        "EPS", "EPS growth", "Total Assets", "Total Assets growth", "Current Assets", "Current Assets growth",
-                        "Cash and Cash Equivalents", "Cash and Cash Equivalents growth", "Total Liabilities",
-                        "Total Liabilities growth", "Total Equity", "Total Equity growth", "Current Liabilities",
+                        "Ticker" ,"Date", "Amount of stocks", "Revenue", "Revenue growth", "Net Income", "Net Income growth",
+                        "Net Income Margin", "Net Income Margin growth", "EPS", "EPS growth", "Total Assets", "Total Assets growth",
+                        "Current Assets", "Current Assets growth", "Cash and Cash Equivalents", "Cash and Cash Equivalents growth",
+                        "Total Liabilities", "Total Liabilities growth", "Total Equity", "Total Equity growth", "Current Liabilities",
                         "Current Liabilities growth", "Book Value", "Book Value growth", "Book Value per share",
                         "Book Value per share growth", "Return on Assets", "Return on Assets growth", "Return on Equity",
-                        "Return on Equity growth", "Current Ratio", "Current Ratio growth", "Quick Ratio",
-                        "Quick Ratio growth", "Debt to Equity", "Debt to Equity growth",
-                        "Free Cash Flow", "Free Cash Flow growth", "Free Cash Flow per share", "Free Cash Flow per share growth"
+                        "Return on Equity growth", "Return on Invested Capital", "Return on Invested Capital growth", 
+                        "Current Ratio", "Current Ratio growth", "Quick Ratio", "Quick Ratio growth", "Debt to Equity",
+                        "Debt to Equity growth","Free Cash Flow", "Free Cash Flow growth", "Free Cash Flow per share",
+                        "Free Cash Flow per share growth"
                     ]]
                 else:
                     full_stock_financial_data_df = full_stock_financial_data_df.rename(columns={
@@ -1008,15 +1024,16 @@ def fetch_stock_financial_data(stock_symbol):
                         "Total Equity Gross Minority Interest": "Total Equity"
                     })
                     full_stock_financial_data_df = full_stock_financial_data_df[[
-                        "Ticker" ,"Date", "Amount of stocks", "Revenue", "Revenue growth", "Operating Income", "Operating Earnings growth", "Operating Margin", "Operating Margin growth",
-                        "Net Income", "Net Income growth", "Net Income Margin", "Net Income Margin growth", "EPS", "EPS growth", "Total Assets",
-                        "Total Assets growth", "Current Assets", "Current Assets growth", "Cash and Cash Equivalents",
-                        "Cash and Cash Equivalents growth", "Total Liabilities", "Total Liabilities growth", "Total Equity",
-                        "Total Equity growth", "Current Liabilities", "Current Liabilities growth", "Book Value", "Book Value growth",
-                        "Book Value per share", "Book Value per share growth", "Return on Assets", "Return on Assets growth",
-                        "Return on Equity", "Return on Equity growth", "Current Ratio", "Current Ratio growth", "Quick Ratio",
-                        "Quick Ratio growth", "Debt to Equity", "Debt to Equity growth",
-                        "Free Cash Flow", "Free Cash Flow growth", "Free Cash Flow per share", "Free Cash Flow per share growth"
+                        "Ticker" ,"Date", "Amount of stocks", "Revenue", "Revenue growth", "Operating Income", "Operating Earnings growth",
+                        "Operating Margin", "Operating Margin growth", "Net Income", "Net Income growth", "Net Income Margin",
+                        "Net Income Margin growth", "EPS", "EPS growth", "Total Assets", "Total Assets growth", "Current Assets",
+                        "Current Assets growth", "Cash and Cash Equivalents", "Cash and Cash Equivalents growth", "Total Liabilities",
+                        "Total Liabilities growth", "Total Equity", "Total Equity growth", "Current Liabilities", "Current Liabilities growth",
+                        "Book Value", "Book Value growth", "Book Value per share", "Book Value per share growth", "Return on Assets",
+                        "Return on Assets growth", "Return on Equity", "Return on Equity growth", "Return on Invested Capital",
+                        "Return on Invested Capital growth", "Current Ratio", "Current Ratio growth", "Quick Ratio", "Quick Ratio growth",
+                        "Debt to Equity", "Debt to Equity growth", "Free Cash Flow", "Free Cash Flow growth", "Free Cash Flow per share",
+                        "Free Cash Flow per share growth"
                     ]]
         elif "insurance" in industry.lower():
             if "Gross Profit" not in income_stmt_df.columns:
@@ -1028,15 +1045,14 @@ def fetch_stock_financial_data(stock_symbol):
                         "Total Equity Gross Minority Interest": "Total Equity"
                     })
                     full_stock_financial_data_df = full_stock_financial_data_df[[
-                        "Ticker" ,"Date", "Amount of stocks", "Revenue", "Revenue growth", "Net Income", "Net Income growth", "Net Income Margin", "Net Income Margin growth",
-                        "EPS", "EPS growth", "Total Assets", "Total Assets growth", "Current Assets", "Current Assets growth",
-                        "Cash and Cash Equivalents", "Cash and Cash Equivalents growth", "Total Liabilities",
-                        "Total Liabilities growth", "Total Equity", "Total Equity growth", "Current Liabilities",
-                        "Current Liabilities growth", "Book Value", "Book Value growth", "Book Value per share",
-                        "Book Value per share growth", "Return on Assets", "Return on Assets growth", "Return on Equity",
-                        "Return on Equity growth", "Current Ratio", "Current Ratio growth", "Quick Ratio",
-                        "Quick Ratio growth", "Debt to Equity", "Debt to Equity growth",
-                        "Free Cash Flow", "Free Cash Flow growth", "Free Cash Flow per share", "Free Cash Flow per share growth"
+                        "Ticker" ,"Date", "Amount of stocks", "Revenue", "Revenue growth", "Net Income", "Net Income growth", "Net Income Margin",
+                        "Net Income Margin growth", "EPS", "EPS growth", "Total Assets", "Total Assets growth", "Current Assets", "Current Assets growth",
+                        "Cash and Cash Equivalents", "Cash and Cash Equivalents growth", "Total Liabilities", "Total Liabilities growth", "Total Equity",
+                        "Total Equity growth", "Current Liabilities", "Current Liabilities growth", "Book Value", "Book Value growth", "Book Value per share",
+                        "Book Value per share growth", "Return on Assets", "Return on Assets growth", "Return on Equity", "Return on Equity growth",
+                        "Return on Invested Capital", "Return on Invested Capital growth", "Current Ratio", "Current Ratio growth", "Quick Ratio",
+                        "Quick Ratio growth", "Debt to Equity", "Debt to Equity growth", "Free Cash Flow", "Free Cash Flow growth", "Free Cash Flow per share",
+                        "Free Cash Flow per share growth"
                     ]]
                 else:
                     full_stock_financial_data_df = full_stock_financial_data_df.rename(columns={
@@ -1046,15 +1062,14 @@ def fetch_stock_financial_data(stock_symbol):
                         "Total Equity Gross Minority Interest": "Total Equity"
                     })
                     full_stock_financial_data_df = full_stock_financial_data_df[[
-                        "Ticker" ,"Date", "Amount of stocks", "Revenue", "Revenue growth", "Operating Income", "Operating Earnings growth", "Operating Margin", "Operating Margin growth",
-                        "Net Income", "Net Income growth", "Net Income Margin", "Net Income Margin growth", "EPS", "EPS growth", "Total Assets",
-                        "Total Assets growth", "Current Assets", "Current Assets growth", "Cash and Cash Equivalents",
-                        "Cash and Cash Equivalents growth", "Total Liabilities", "Total Liabilities growth", "Total Equity",
-                        "Total Equity growth", "Current Liabilities", "Current Liabilities growth", "Book Value", "Book Value growth",
-                        "Book Value per share", "Book Value per share growth", "Return on Assets", "Return on Assets growth",
-                        "Return on Equity", "Return on Equity growth", "Current Ratio", "Current Ratio growth", "Quick Ratio",
-                        "Quick Ratio growth", "Debt to Equity", "Debt to Equity growth",
-                        "Free Cash Flow", "Free Cash Flow growth", "Free Cash Flow per share", "Free Cash Flow per share growth"
+                        "Ticker" ,"Date", "Amount of stocks", "Revenue", "Revenue growth", "Operating Income", "Operating Earnings growth", "Operating Margin",
+                        "Operating Margin growth", "Net Income", "Net Income growth", "Net Income Margin", "Net Income Margin growth", "EPS", "EPS growth",
+                        "Total Assets", "Total Assets growth", "Current Assets", "Current Assets growth", "Cash and Cash Equivalents",
+                        "Cash and Cash Equivalents growth", "Total Liabilities", "Total Liabilities growth", "Total Equity", "Total Equity growth",
+                        "Current Liabilities", "Current Liabilities growth", "Book Value", "Book Value growth", "Book Value per share", "Book Value per share growth",
+                        "Return on Assets", "Return on Assets growth", "Return on Equity", "Return on Equity growth", "Return on Invested Capital",
+                        "Return on Invested Capital growth", "Current Ratio", "Current Ratio growth", "Quick Ratio", "Quick Ratio growth", "Debt to Equity",
+                        "Debt to Equity growth", "Free Cash Flow", "Free Cash Flow growth", "Free Cash Flow per share", "Free Cash Flow per share growth"
                     ]]
             else:
                 full_stock_financial_data_df = full_stock_financial_data_df.rename(columns={
@@ -1072,8 +1087,8 @@ def fetch_stock_financial_data(stock_symbol):
                     "Total Liabilities growth", "Total Equity", "Total Equity growth", "Current Liabilities",
                     "Current Liabilities growth", "Book Value", "Book Value growth", "Book Value per share",
                     "Book Value per share growth", "Return on Assets", "Return on Assets growth", "Return on Equity",
-                    "Return on Equity growth", "Current Ratio", "Current Ratio growth", "Quick Ratio",
-                    "Quick Ratio growth", "Debt to Equity", "Debt to Equity growth",
+                    "Return on Equity growth", "Return on Invested Capital", "Return on Invested Capital growth", "Current Ratio",
+                    "Current Ratio growth", "Quick Ratio", "Quick Ratio growth", "Debt to Equity", "Debt to Equity growth",
                     "Free Cash Flow", "Free Cash Flow growth", "Free Cash Flow per share", "Free Cash Flow per share growth"
                 ]]
         elif "biotechnology" in industry.lower():
@@ -1092,8 +1107,8 @@ def fetch_stock_financial_data(stock_symbol):
                     "Total Liabilities growth", "Total Equity", "Total Equity growth", "Current Liabilities",
                     "Current Liabilities growth", "Book Value", "Book Value growth", "Book Value per share",
                     "Book Value per share growth", "Return on Assets", "Return on Assets growth", "Return on Equity",
-                    "Return on Equity growth", "Current Ratio", "Current Ratio growth", "Quick Ratio",
-                    "Quick Ratio growth", "Debt to Equity", "Debt to Equity growth",
+                    "Return on Equity growth", "Return on Invested Capital", "Return on Invested Capital growth", "Current Ratio",
+                    "Current Ratio growth", "Quick Ratio", "Quick Ratio growth", "Debt to Equity", "Debt to Equity growth",
                     "Free Cash Flow", "Free Cash Flow growth", "Free Cash Flow per share", "Free Cash Flow per share growth"
                 ]]
             else:
@@ -1112,8 +1127,8 @@ def fetch_stock_financial_data(stock_symbol):
                     "Total Liabilities growth", "Total Equity", "Total Equity growth", "Current Liabilities",
                     "Current Liabilities growth", "Book Value", "Book Value growth", "Book Value per share",
                     "Book Value per share growth", "Return on Assets", "Return on Assets growth", "Return on Equity",
-                    "Return on Equity growth", "Current Ratio", "Current Ratio growth", "Quick Ratio",
-                    "Quick Ratio growth", "Debt to Equity", "Debt to Equity growth",
+                    "Return on Equity growth", "Return on Invested Capital", "Return on Invested Capital growth", "Current Ratio",
+                    "Current Ratio growth", "Quick Ratio", "Quick Ratio growth", "Debt to Equity", "Debt to Equity growth",
                     "Free Cash Flow", "Free Cash Flow growth", "Free Cash Flow per share", "Free Cash Flow per share growth"
                 ]]
         else:
@@ -1132,8 +1147,8 @@ def fetch_stock_financial_data(stock_symbol):
                 "Total Liabilities growth", "Total Equity", "Total Equity growth", "Current Liabilities",
                 "Current Liabilities growth", "Book Value", "Book Value growth", "Book Value per share",
                 "Book Value per share growth", "Return on Assets", "Return on Assets growth", "Return on Equity",
-                "Return on Equity growth", "Current Ratio", "Current Ratio growth", "Quick Ratio",
-                "Quick Ratio growth", "Debt to Equity", "Debt to Equity growth",
+                "Return on Equity growth", "Return on Invested Capital", "Return on Invested Capital growth", "Current Ratio",
+                "Current Ratio growth", "Quick Ratio", "Quick Ratio growth", "Debt to Equity", "Debt to Equity growth",
                 "Free Cash Flow", "Free Cash Flow growth", "Free Cash Flow per share", "Free Cash Flow per share growth"
             ]]
 
@@ -1143,6 +1158,7 @@ def fetch_stock_financial_data(stock_symbol):
     
     
     return full_stock_financial_data_df     
+
 #Create a function the combines dataframe from fetch_stock_price_data with full_stock_financial_data_df from fetch_stock_financial_data
 def combine_stock_data(stock_data_df, full_stock_financial_data_df):
     """
@@ -1198,7 +1214,7 @@ def calculate_ratios(combined_stock_data_df):
     combined_stock_data_df["P/FCF"] = combined_stock_data_df["Price"] / combined_stock_data_df["Free Cash Flow per share growth"]
     print("Ratios have been calculated successfully, and added to the dataframe.")
     return combined_stock_data_df
-
+  
 # Create a function that exports the dataframes to an Excel file
 def export_to_excel(dataframes, excel_file):
     """
@@ -1306,8 +1322,8 @@ def convert_excel_to_csv(dataframe, file_name):
 if __name__ == "__main__":
     start_time = time.time()
     # Import stock symbols from a CSV file
-    stock_symbols_df = import_stock_symbols('index_symbol_list_single_stock.csv')
-    stock_symbols_list = stock_symbols_df['Symbol'].tolist()
+    stock_symbols_df = import_symbols("index_symbol_list_single_stock.csv")
+    stock_symbols_list = stock_symbols_df["Symbol"].tolist()
     stock_symbol = stock_symbols_list[0]
     print(stock_symbol)
     # Fetch stock data for the imported stock symbols
@@ -1329,7 +1345,7 @@ if __name__ == "__main__":
         "Combined Stock Data": combined_stock_data_df
     }
     # Export the dataframes to an Excel file
-    export_to_excel(dataframes, 'stock_data_single_v2.xlsx')
+    export_to_excel(dataframes, "stock_data_single_v2.xlsx")
     # Import the stock data from an Excel file
     dataframes = import_excel("stock_data_single_v2.xlsx")
     for key, value in dataframes.items():

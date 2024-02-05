@@ -440,7 +440,7 @@ def plot_graph(stock_data_df, forecast_data_df):
 
 if __name__ == "__main__":
     start_time = time.time()
-    stock_symbols_df = stock_data_fetch.import_stock_symbols('index_symbol_list_single_stock.csv')
+    stock_symbols_df = stock_data_fetch.import_symbols('index_symbol_list_single_stock.csv')
     stock_symbols_list = stock_symbols_df['Symbol'].tolist()
     stock_symbol = stock_symbols_list[0]
     print(stock_symbol)
