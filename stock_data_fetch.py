@@ -39,6 +39,7 @@ def import_symbols(csv_file):
         # Return the DataFrame with stock symbols
         return df[['Symbol']]
 
+
     except FileNotFoundError:
         raise FileNotFoundError(f"CSV file '{csv_file}' does not exist.")
     
@@ -107,6 +108,7 @@ def fetch_stock_price_data(stock_symbol):
         )
         return stock_price_data_df
     
+
     except KeyError:
         raise KeyError(f"Stock symbol '{stock_symbol}' is invalid or not found.")
 
@@ -507,6 +509,7 @@ def calculate_moving_averages(stock_price_data_df):
         # Return the stock_price_data_df DataFrame
         return stock_price_data_df
 
+
     except KeyError:
         raise KeyError(f"Stock symbol '{stock_symbol}' is invalid or not found.")
 
@@ -539,26 +542,26 @@ def calculate_standard_diviation_value(stock_price_data_df):
         stock_price_data_df["STD_Div_120"] = 0.0
         # Loop through each row in stock_price_data_df
         for index, row in stock_price_data_df.iterrows():
-            # Calculate STD_Div_40 for every row
+            # Calculate std_div_40 for every row
             if index == 0:
-                STD_Div_40 = 0.0            
+                std_div_40 = 0.0            
             elif index >= 40:
-                STD_Div_40 = stock_price_data_df.iloc[index-39:index+1]["Price"].std()
+                std_div_40 = stock_price_data_df.iloc[index-39:index+1]["Price"].std()
             else:
-                STD_Div_40 = stock_price_data_df.iloc[0:index+1]["Price"].std()
+                std_div_40 = stock_price_data_df.iloc[0:index+1]["Price"].std()
 
             # Update the STD_Div_40 column with the calculated value
-            stock_price_data_df.loc[index, "STD_Div_40"] = STD_Div_40
-            # Calculate STD_Div_120 for every row
+            stock_price_data_df.loc[index, "STD_Div_40"] = std_div_40
+            # Calculate std_div_120 for every row
             if index == 0:
-                STD_Div_120 = 0.0
+                std_div_120 = 0.0
             elif index >= 120:
-                STD_Div_120 = stock_price_data_df.iloc[index-119:index+1]["Price"].std()
+                std_div_120 = stock_price_data_df.iloc[index-119:index+1]["Price"].std()
             else:
-                STD_Div_120 = stock_price_data_df.iloc[0:index+1]["Price"].std()
+                std_div_120 = stock_price_data_df.iloc[0:index+1]["Price"].std()
 
             # Update the STD_Div_120 column with the calculated value
-            stock_price_data_df.loc[index, "STD_Div_120"] = STD_Div_120
+            stock_price_data_df.loc[index, "STD_Div_120"] = std_div_120
             # Create print statement per 250 index processed
             if index % 250 == 0:
                 print(f"Processed {index} rows, out of {len(stock_price_data_df)} rows.")
@@ -625,6 +628,69 @@ def calculate_bollinger_bands(stock_price_data_df):
 
     except KeyError:
         raise KeyError(f"Stock symbol '{stock_symbol}' is invalid or not found.")
+
+# Calculate the stock price momentum
+def calculate_momentum(stock_price_data_df):
+    """
+    Calculates the momentum for the given stock data and returns a pandas DataFrame.
+
+    The DataFrame will contain the date, stock name, stock symbol, price, and the momentum.
+
+    Parameters:
+    - stock_price_data_df (pandas.DataFrame): A DataFrame containing the stock data.
+
+    Returns:
+    pandas.DataFrame: A DataFrame containing the momentum.
+
+    Raises:
+    - ValueError: If the stock_price_data_df parameter is empty.
+    - KeyError: If the stock symbol is invalid or not found.
+    """
+
+    # Checking if the stock_price_data_df parameter is empty
+    if stock_price_data_df.empty:
+        raise ValueError("No stock data provided.")
+    
+
+    try:
+        # Calculate the momentum for the given stock data
+        # Create a new columns in stock_price_data_df called Momentum
+        stock_price_data_df["Momentum"] = 0.0
+        for index, row in stock_price_data_df.iterrows():
+            # Calculate STD_Div_40 for every row
+            if index == 0:
+                momentum = 0.0    
+            elif stock_price_data_df.iloc[index]["Price"] >= stock_price_data_df.iloc[index-1]["Price"]:
+                if stock_price_data_df.loc[index-1, "Momentum"] <= 0:
+                    momentum = 1
+                    # Update the Momentum column with the calculated value
+                    stock_price_data_df.loc[index, "Momentum"] = momentum
+                elif stock_price_data_df.loc[index-1, "Momentum"] > 0:
+                    momentum = stock_price_data_df.loc[index-1, "Momentum"] + 1
+                    # Update the Momentum column with the calculated value
+                    stock_price_data_df.loc[index, "Momentum"] = momentum
+            elif stock_price_data_df.iloc[index]["Price"] < stock_price_data_df.iloc[index-1]["Price"]:
+                if stock_price_data_df.loc[index-1, "Momentum"] >= 0:
+                    momentum = -1
+                    # Update the Momentum column with the calculated value
+                    stock_price_data_df.loc[index, "Momentum"] = momentum
+                elif stock_price_data_df.loc[index-1, "Momentum"] < 0:
+                    momentum = stock_price_data_df.loc[index-1, "Momentum"] - 1
+                    # Update the Momentum column with the calculated value
+                    stock_price_data_df.loc[index, "Momentum"] = momentum
+
+
+            # Create print statement per 250 index processed
+            if index % 250 == 0:
+                print(f"Processed {index} rows, out of {len(stock_price_data_df)} rows.")
+
+        print("Momentum calculated successfully.")
+        # Return the stock_price_data_df DataFrame
+        return stock_price_data_df
+    
+
+    except KeyError:
+        raise KeyError(f"Stock symbol '{stock_symbol}' is invalid or not found.")                
 
 # Import financial stock data using yfinance and a list of stock symbols
 def fetch_stock_financial_data(stock_symbol):
@@ -1318,12 +1384,12 @@ def fetch_stock_financial_data(stock_symbol):
             ]]
 
 
+        return full_stock_financial_data_df     
+    
+    
     except KeyError:
         raise KeyError(f"Stock symbol '{symbol}' is invalid or not found.")
     
-    
-    return full_stock_financial_data_df     
-
 #Create a function the combines dataframe from fetch_stock_price_data with full_stock_financial_data_df from fetch_stock_financial_data
 def combine_stock_data(stock_data_df, full_stock_financial_data_df):
     """
@@ -1437,6 +1503,7 @@ def export_to_excel(dataframes, excel_file):
         writer.close()
         print("Dataframes have been successfully exported as xlsx file.")
 
+
     except ValueError as e:
         raise ValueError(f"Error exporting to Excel: {e}")
 
@@ -1475,6 +1542,7 @@ def import_excel(excel_file):
 
         # Return the dictionary of dataframes
         return dataframes
+
 
     except ValueError as e:
         raise ValueError(f"Error importing from Excel: {e}")
@@ -1525,8 +1593,8 @@ if __name__ == "__main__":
     stock_price_data_df = calculate_moving_averages(stock_price_data_df)
     stock_price_data_df = calculate_standard_diviation_value(stock_price_data_df)
     stock_price_data_df = calculate_bollinger_bands(stock_price_data_df)
-    print(stock_price_data_df.info())
-    print(stock_price_data_df.describe())
+    # print(stock_price_data_df.info())
+    # print(stock_price_data_df.describe())
     # Fetch stock data for the imported stock symbols
     full_stock_financial_data_df = fetch_stock_financial_data(stock_symbol)
     # print(full_stock_financial_data_df)
@@ -1536,6 +1604,7 @@ if __name__ == "__main__":
     # Calculate ratios
     combined_stock_data_df = calculate_ratios(combined_stock_data_df)
     # print(combined_stock_data_df)
+    combined_stock_data_df = calculate_momentum(combined_stock_data_df)
     # Create a dictionary of dataframes to export to Excel
     dataframes = {
         # "Stock Price Data": stock_price_data_df,
