@@ -7,7 +7,32 @@ from sklearn.decomposition import PCA
 import import_csv_file
 import split_dataset
 
+# Create a function to reduce the dataset dimensions with SelectKBest
 def feature_selection(dimensions, x_traning_data, x_test_data, y_traning_data, y_test_data, prediction_data, dataset_df):
+    """
+    Reduce the dataset dimensions with SelectKBest.
+
+    Parameters:
+    - dimensions (int): The number of features to select.
+    - x_traning_data (numpy.ndarray): The training data.
+    - x_test_data (numpy.ndarray): The test data.
+    - y_traning_data (numpy.ndarray): The training labels.
+    - y_test_data (numpy.ndarray): The test labels.
+    - prediction_data (numpy.ndarray): The prediction data.
+    - dataset_df (pandas.DataFrame): The dataset.
+
+    Returns:
+    - numpy.ndarray: The reduced training data.
+    - numpy.ndarray: The reduced test data.
+    - numpy.ndarray: The reduced prediction data.
+
+    Raises:
+    - ValueError: If the specified dimension amount is greater than the number of features in the dataset.
+    """
+    
+    if dimensions > x_traning_data.shape[1]:
+        raise ValueError("The specified dimension amount is greater than the number of features in the dataset.")
+
     # Create a SelectKBest object to select features with two best ANOVA F-Values
     selector = SelectKBest(r_regression, k=dimensions)
     # Combince numpy arrays x_traning_data and x_test_data
@@ -52,8 +77,29 @@ def feature_selection(dimensions, x_traning_data, x_test_data, y_traning_data, y
     # print(selected_features.pvalues_)
     return reduced_traning_dataset, reduced_test_dataset, reduced_prediction_dataset
 
-
+# Create a function to reduce the dataset dimensions with PCA
 def  pca_dataset_transformation(x_traning_data, x_test_data, prediction_data, component_amount):
+    """
+    Reduce the dataset dimensions with PCA.
+    
+    Parameters:
+    - x_traning_data (numpy.ndarray): The training data.
+    - x_test_data (numpy.ndarray): The test data.
+    - prediction_data (numpy.ndarray): The prediction data.
+    - component_amount (int): The number of principal components to keep.
+    
+    Returns:
+    - numpy.ndarray: The reduced training data.
+    - numpy.ndarray: The reduced test data.
+    - numpy.ndarray: The reduced prediction data.
+    
+    Raises:
+    - ValueError: If the specified component amount is greater than the number of features in the dataset.
+    """
+
+    if component_amount > x_traning_data.shape[1]:
+        raise ValueError("The specified component amount is greater than the number of features in the dataset.")
+    
     # Create a PCA model
     pca_model = PCA(n_components=component_amount)
     x_fitting_data = np.concatenate((x_traning_data, x_test_data), axis=0)
@@ -87,9 +133,9 @@ def  pca_dataset_transformation(x_traning_data, x_test_data, prediction_data, co
 
     return reduced_traning_dataset, reduced_test_dataset, reduced_prediction_dataset
 
-
+# Run the main function
 if __name__ == "__main__":
-    stock_data_df = import_csv_file.import_as_df('stock_data_single_v2.csv')
+    stock_data_df = import_csv_file.import_as_df('stock_data_single.csv')
     x_training_data, x_test_data, y_training_data, y_test_data, prediction_data = split_dataset.dataset_train_test_split(stock_data_df, 0.20, 1)
     x_training_dataset, x_test_dataset, x_prediction_dataset = feature_selection(15, x_training_data, x_test_data, y_training_data, y_test_data, prediction_data, stock_data_df)
     # x_training_dataset, x_test_dataset, x_prediction_dataset = pca_dataset_transformation(x_training_data, x_test_data, prediction_data, 10)

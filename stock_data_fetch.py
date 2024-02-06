@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -24,8 +25,12 @@ def import_symbols(csv_file):
     """
 
     try:
-        # Read the CSV file into a DataFrame
-        df = pd.read_csv(csv_file)
+        # Read the CSV file from current position into a DataFrame
+        my_path = os.path.abspath(__file__)
+        path = os.path.dirname(my_path)
+        import_location = os.path.join(path, csv_file)
+        print(import_location)
+        df = pd.read_csv(import_location)
 
         # Check if the 'Symbol' column exists in the DataFrame
         if 'Symbol' not in df.columns:
@@ -96,24 +101,52 @@ def fetch_stock_price_data(stock_symbol):
             index=[0]
         )
         # Create a temporary DataFrame with the stock data joined with the stock_price_data_df and stock_info_df
-        temp_stock_data_df = stock_price_data_df.join(
+        stock_price_data_df = stock_price_data_df.join(
             stock_info_df,
             how="cross"
         )
-        # Create a new columns in temp_stock_data_df called 1M, 3M, 6M, 9M, 1Y, 2Y, 3Y, 4Y, and 5Y
-        temp_stock_data_df["1M"] = 0.0
-        temp_stock_data_df["3M"] = 0.0
-        temp_stock_data_df["6M"] = 0.0
-        temp_stock_data_df["9M"] = 0.0
-        temp_stock_data_df["1Y"] = 0.0
-        temp_stock_data_df["2Y"] = 0.0
-        temp_stock_data_df["3Y"] = 0.0
-        temp_stock_data_df["4Y"] = 0.0
-        temp_stock_data_df["5Y"] = 0.0
-        # Loop through each row in temp_stock_data_df
-        for index, row in temp_stock_data_df.iterrows():
+        return stock_price_data_df
+    
+    except KeyError:
+        raise KeyError(f"Stock symbol '{stock_symbol}' is invalid or not found.")
+
+# Calculate the period returns for the given stock data    
+def calculate_period_returns(stock_price_data_df):
+    """
+    Calculates the period returns for the given stock data and returns a pandas DataFrame.
+
+    The DataFrame will contain the date, stock name, stock symbol, and the period returns.
+
+    Parameters:
+    - stock_price_data_df (pandas.DataFrame): A DataFrame containing the stock data.
+
+    Returns:
+    pandas.DataFrame: A DataFrame containing the period returns.
+
+    Raises:
+    - ValueError: If the stock_price_data_df parameter is empty.
+    """
+
+    # Check if the stock_price_data_df parameter is empty
+    if stock_price_data_df.empty:
+        raise ValueError("The stock_price_data_df parameter cannot be empty.")
+        
+
+    try:
+        # Create a new columns in stock_price_data_df called 1M, 3M, 6M, 9M, 1Y, 2Y, 3Y, 4Y, and 5Y
+        stock_price_data_df["1M"] = 0.0
+        stock_price_data_df["3M"] = 0.0
+        stock_price_data_df["6M"] = 0.0
+        stock_price_data_df["9M"] = 0.0
+        stock_price_data_df["1Y"] = 0.0
+        stock_price_data_df["2Y"] = 0.0
+        stock_price_data_df["3Y"] = 0.0
+        stock_price_data_df["4Y"] = 0.0
+        stock_price_data_df["5Y"] = 0.0
+        # Loop through each row in stock_price_data_df
+        for index, row in stock_price_data_df.iterrows():
             # Calculate the date 1 month ago
-            date = temp_stock_data_df["Date"].loc[index]
+            date = stock_price_data_df["Date"].loc[index]
             date_1_month_ago = date - relativedelta(months=1)
             if date_1_month_ago.weekday() == 5:
                 date_1_month_ago = date_1_month_ago - datetime.timedelta(days=1)
@@ -124,7 +157,7 @@ def fetch_stock_price_data(stock_symbol):
 
 
             date_1_month_ago = date_1_month_ago.strftime("%Y-%m-%d")
-            date_1_month_ago = temp_stock_data_df["Date"].loc[temp_stock_data_df["Date"] <= date_1_month_ago]
+            date_1_month_ago = stock_price_data_df["Date"].loc[stock_price_data_df["Date"] <= date_1_month_ago]
             if date_1_month_ago.empty:
                 date_1_month_ago = None
             else:
@@ -132,19 +165,17 @@ def fetch_stock_price_data(stock_symbol):
                 # Format the date with dtype datetime64[ns]
                 date_1_month_ago = pd.to_datetime(date_1_month_ago)
 
-
             # Calculate the 1 month change
             if date_1_month_ago != None:
-                one_month_change = (((temp_stock_data_df.loc[index, "Price"] / temp_stock_data_df.loc[temp_stock_data_df["Date"] == date_1_month_ago, "Price"])-1))
+                one_month_change = (((stock_price_data_df.loc[index, "Price"] / stock_price_data_df.loc[stock_price_data_df["Date"] == date_1_month_ago, "Price"])-1))
                 one_month_change = one_month_change.values[-1]
             else:
-                one_month_change = (((temp_stock_data_df.loc[index, "Price"] / temp_stock_data_df.loc[0, "Price"])-1))
-
+                one_month_change = (((stock_price_data_df.loc[index, "Price"] / stock_price_data_df.loc[0, "Price"])-1))
 
             # Update the 1M Change column with the calculated value
-            temp_stock_data_df.loc[index, "1M"] = one_month_change
+            stock_price_data_df.loc[index, "1M"] = one_month_change
             # Calculate the date 3 months ago
-            date = temp_stock_data_df["Date"].loc[index]
+            date = stock_price_data_df["Date"].loc[index]
             date_3_months_ago = date - relativedelta(months=3)
             if date_3_months_ago.weekday() == 5:
                 date_3_months_ago = date_3_months_ago - datetime.timedelta(days=1)
@@ -155,7 +186,7 @@ def fetch_stock_price_data(stock_symbol):
 
 
             date_3_months_ago = date_3_months_ago.strftime("%Y-%m-%d")
-            date_3_months_ago = temp_stock_data_df["Date"].loc[temp_stock_data_df["Date"] <= date_3_months_ago]
+            date_3_months_ago = stock_price_data_df["Date"].loc[stock_price_data_df["Date"] <= date_3_months_ago]
             if date_3_months_ago.empty:
                 date_3_months_ago = None
             else:
@@ -163,19 +194,17 @@ def fetch_stock_price_data(stock_symbol):
                 # Format the date with dtype datetime64[ns]
                 date_3_months_ago = pd.to_datetime(date_3_months_ago)
 
-
             # Calculate the 3 month change
             if date_3_months_ago != None:
-                three_month_change = (((temp_stock_data_df["Price"].loc[index]/temp_stock_data_df["Price"].loc[temp_stock_data_df["Date"] == date_3_months_ago])-1))
+                three_month_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].loc[stock_price_data_df["Date"] == date_3_months_ago])-1))
                 three_month_change = three_month_change.values[-1]
             else:
-                three_month_change = (((temp_stock_data_df["Price"].loc[index]/temp_stock_data_df["Price"].iloc[0])-1))
-
+                three_month_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].iloc[0])-1))
 
             # Update the 3M Change column with the calculated value
-            temp_stock_data_df.loc[index, "3M"] = three_month_change
+            stock_price_data_df.loc[index, "3M"] = three_month_change
             # Calculate the date 6 months ago
-            date = temp_stock_data_df["Date"].loc[index]
+            date = stock_price_data_df["Date"].loc[index]
             date_6_months_ago = date - relativedelta(months=6)
             if date_6_months_ago.weekday() == 5:
                 date_6_months_ago = date_6_months_ago - datetime.timedelta(days=1)
@@ -186,7 +215,7 @@ def fetch_stock_price_data(stock_symbol):
 
 
             date_6_months_ago = date_6_months_ago.strftime("%Y-%m-%d")
-            date_6_months_ago = temp_stock_data_df["Date"].loc[temp_stock_data_df["Date"] <= date_6_months_ago]
+            date_6_months_ago = stock_price_data_df["Date"].loc[stock_price_data_df["Date"] <= date_6_months_ago]
             if date_6_months_ago.empty:
                 date_6_months_ago = None
             else:
@@ -194,19 +223,17 @@ def fetch_stock_price_data(stock_symbol):
                 # Format the date with dtype datetime64[ns]
                 date_6_months_ago = pd.to_datetime(date_6_months_ago)
 
-
             # Calculate the 6 month change
             if date_6_months_ago != None:
-                six_month_change = (((temp_stock_data_df["Price"].loc[index]/temp_stock_data_df["Price"].loc[temp_stock_data_df["Date"] == date_6_months_ago])-1))
+                six_month_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].loc[stock_price_data_df["Date"] == date_6_months_ago])-1))
                 six_month_change = six_month_change.values[-1]
             else:
-                six_month_change = (((temp_stock_data_df["Price"].loc[index]/temp_stock_data_df["Price"].iloc[0])-1))
-
+                six_month_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].iloc[0])-1))
 
             # Update the 6M Change column with the calculated value
-            temp_stock_data_df.loc[index, "6M"] = six_month_change
+            stock_price_data_df.loc[index, "6M"] = six_month_change
             # Calculate the date 9 months ago
-            date = temp_stock_data_df["Date"].loc[index]
+            date = stock_price_data_df["Date"].loc[index]
             date_9_months_ago = date - relativedelta(months=9)
             if date_9_months_ago.weekday() == 5:
                 date_9_months_ago = date_9_months_ago - datetime.timedelta(days=1)
@@ -217,7 +244,7 @@ def fetch_stock_price_data(stock_symbol):
 
 
             date_9_months_ago = date_9_months_ago.strftime("%Y-%m-%d")
-            date_9_months_ago = temp_stock_data_df["Date"].loc[temp_stock_data_df["Date"] <= date_9_months_ago]
+            date_9_months_ago = stock_price_data_df["Date"].loc[stock_price_data_df["Date"] <= date_9_months_ago]
             if date_9_months_ago.empty:
                 date_9_months_ago = None
             else:
@@ -225,19 +252,17 @@ def fetch_stock_price_data(stock_symbol):
                 # Format the date with dtype datetime64[ns]
                 date_9_months_ago = pd.to_datetime(date_9_months_ago)
 
-            
             # Calculate the 9 month change
             if date_9_months_ago != None:
-                nine_month_change = (((temp_stock_data_df["Price"].loc[index]/temp_stock_data_df["Price"].loc[temp_stock_data_df["Date"] == date_9_months_ago])-1))
+                nine_month_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].loc[stock_price_data_df["Date"] == date_9_months_ago])-1))
                 nine_month_change = nine_month_change.values[-1]
             else:
-                nine_month_change = (((temp_stock_data_df["Price"].loc[index]/temp_stock_data_df["Price"].iloc[0])-1))
-
+                nine_month_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].iloc[0])-1))
 
             # Update the 9M Change column with the calculated value
-            temp_stock_data_df.loc[index, "9M"] = nine_month_change
+            stock_price_data_df.loc[index, "9M"] = nine_month_change
             # Calculate the date 1 year ago
-            date = temp_stock_data_df["Date"].loc[index]
+            date = stock_price_data_df["Date"].loc[index]
             date_1_year_ago = date - relativedelta(years=1)
             if date_1_year_ago.weekday() == 5:
                 date_1_year_ago = date_1_year_ago - datetime.timedelta(days=1)
@@ -248,7 +273,7 @@ def fetch_stock_price_data(stock_symbol):
 
 
             date_1_year_ago = date_1_year_ago.strftime("%Y-%m-%d")
-            date_1_year_ago = temp_stock_data_df["Date"].loc[temp_stock_data_df["Date"] <= date_1_year_ago]
+            date_1_year_ago = stock_price_data_df["Date"].loc[stock_price_data_df["Date"] <= date_1_year_ago]
             if date_1_year_ago.empty:
                 date_1_year_ago = None
             else:
@@ -256,19 +281,17 @@ def fetch_stock_price_data(stock_symbol):
                 # Format the date with dtype datetime64[ns]
                 date_1_year_ago = pd.to_datetime(date_1_year_ago)
 
-
             # Calculate the 1 year change
             if date_1_year_ago != None:
-                one_year_change = (((temp_stock_data_df["Price"].loc[index]/temp_stock_data_df["Price"].loc[temp_stock_data_df["Date"] == date_1_year_ago])-1))
+                one_year_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].loc[stock_price_data_df["Date"] == date_1_year_ago])-1))
                 one_year_change = one_year_change.values[-1]
             else:
-                one_year_change = (((temp_stock_data_df["Price"].loc[index]/temp_stock_data_df["Price"].iloc[0])-1))
-
+                one_year_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].iloc[0])-1))
 
             # Update the 1Y Change column with the calculated value
-            temp_stock_data_df.loc[index, "1Y"] = one_year_change
+            stock_price_data_df.loc[index, "1Y"] = one_year_change
             # Calculate the date 2 years ago
-            date = temp_stock_data_df["Date"].loc[index]
+            date = stock_price_data_df["Date"].loc[index]
             date_2_years_ago = date - relativedelta(years=2)
             if date_2_years_ago.weekday() == 5:
                 date_2_years_ago = date_2_years_ago - datetime.timedelta(days=1)
@@ -279,7 +302,7 @@ def fetch_stock_price_data(stock_symbol):
 
 
             date_2_years_ago = date_2_years_ago.strftime("%Y-%m-%d")
-            date_2_years_ago = temp_stock_data_df["Date"].loc[temp_stock_data_df["Date"] <= date_2_years_ago]
+            date_2_years_ago = stock_price_data_df["Date"].loc[stock_price_data_df["Date"] <= date_2_years_ago]
             if date_2_years_ago.empty:
                 date_2_years_ago = None
             else:
@@ -287,19 +310,17 @@ def fetch_stock_price_data(stock_symbol):
                 # Format the date with dtype datetime64[ns]
                 date_2_years_ago = pd.to_datetime(date_2_years_ago)
 
-
             # Calculate the 2 year change
             if date_2_years_ago != None:
-                two_year_change = (((temp_stock_data_df["Price"].loc[index]/temp_stock_data_df["Price"].loc[temp_stock_data_df["Date"] == date_2_years_ago])-1))
+                two_year_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].loc[stock_price_data_df["Date"] == date_2_years_ago])-1))
                 two_year_change = two_year_change.values[-1]
             else:
-                two_year_change = (((temp_stock_data_df["Price"].loc[index]/temp_stock_data_df["Price"].iloc[0])-1))
-
+                two_year_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].iloc[0])-1))
 
             # Update the 2Y Change column with the calculated value
-            temp_stock_data_df.loc[index, "2Y"] = two_year_change
+            stock_price_data_df.loc[index, "2Y"] = two_year_change
             # Calculate the date 3 years ago
-            date = temp_stock_data_df["Date"].loc[index]
+            date = stock_price_data_df["Date"].loc[index]
             date_3_years_ago = date - relativedelta(years=3)
             if date_3_years_ago.weekday() == 5:
                 date_3_years_ago = date_3_years_ago - datetime.timedelta(days=1)
@@ -310,7 +331,7 @@ def fetch_stock_price_data(stock_symbol):
 
 
             date_3_years_ago = date_3_years_ago.strftime("%Y-%m-%d")
-            date_3_years_ago = temp_stock_data_df["Date"].loc[temp_stock_data_df["Date"] <= date_3_years_ago]
+            date_3_years_ago = stock_price_data_df["Date"].loc[stock_price_data_df["Date"] <= date_3_years_ago]
             if date_3_years_ago.empty:
                 date_3_years_ago = None
             else:
@@ -318,19 +339,17 @@ def fetch_stock_price_data(stock_symbol):
                 # Format the date with dtype datetime64[ns]
                 date_3_years_ago = pd.to_datetime(date_3_years_ago)
 
-
             # Calculate the 3 year change
             if date_3_years_ago != None:
-                three_year_change = (((temp_stock_data_df["Price"].loc[index]/temp_stock_data_df["Price"].loc[temp_stock_data_df["Date"] == date_3_years_ago])-1))
+                three_year_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].loc[stock_price_data_df["Date"] == date_3_years_ago])-1))
                 three_year_change = three_year_change.values[-1]
             else:
-                three_year_change = (((temp_stock_data_df["Price"].loc[index]/temp_stock_data_df["Price"].iloc[0])-1))
-
+                three_year_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].iloc[0])-1))
 
             # Update the 3Y Change column with the calculated value
-            temp_stock_data_df.loc[index, "3Y"] = three_year_change
+            stock_price_data_df.loc[index, "3Y"] = three_year_change
             # Calculate the date 4 years ago
-            date = temp_stock_data_df["Date"].loc[index]
+            date = stock_price_data_df["Date"].loc[index]
             date_4_years_ago = date - relativedelta(years=4)
             if date_4_years_ago.weekday() == 5:
                 date_4_years_ago = date_4_years_ago - datetime.timedelta(days=1)
@@ -341,7 +360,7 @@ def fetch_stock_price_data(stock_symbol):
 
 
             date_4_years_ago = date_4_years_ago.strftime("%Y-%m-%d")
-            date_4_years_ago = temp_stock_data_df["Date"].loc[temp_stock_data_df["Date"] <= date_4_years_ago]
+            date_4_years_ago = stock_price_data_df["Date"].loc[stock_price_data_df["Date"] <= date_4_years_ago]
             if date_4_years_ago.empty:
                 date_4_years_ago = None
             else:
@@ -349,19 +368,17 @@ def fetch_stock_price_data(stock_symbol):
                 # Format the date with dtype datetime64[ns]
                 date_4_years_ago = pd.to_datetime(date_4_years_ago)
 
-
             # Calculate the 4 year change
             if date_4_years_ago != None:
-                four_year_change = (((temp_stock_data_df["Price"].loc[index]/temp_stock_data_df["Price"].loc[temp_stock_data_df["Date"] == date_4_years_ago])-1))
+                four_year_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].loc[stock_price_data_df["Date"] == date_4_years_ago])-1))
                 four_year_change = four_year_change.values[-1]
             else:
-                four_year_change = (((temp_stock_data_df["Price"].loc[index]/temp_stock_data_df["Price"].iloc[0])-1))
-
+                four_year_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].iloc[0])-1))
 
             # Update the 4Y Change column with the calculated value
-            temp_stock_data_df.loc[index, "4Y"] = four_year_change
+            stock_price_data_df.loc[index, "4Y"] = four_year_change
             # Calculate the date 5 years ago
-            date = temp_stock_data_df["Date"].loc[index]
+            date = stock_price_data_df["Date"].loc[index]
             date_5_years_ago = date - relativedelta(years=5)
             if date_5_years_ago.weekday() == 5:
                 date_5_years_ago = date_5_years_ago - datetime.timedelta(days=1)
@@ -372,7 +389,7 @@ def fetch_stock_price_data(stock_symbol):
 
 
             date_5_years_ago = date_5_years_ago.strftime("%Y-%m-%d")
-            date_5_years_ago = temp_stock_data_df["Date"].loc[temp_stock_data_df["Date"] <= date_5_years_ago]
+            date_5_years_ago = stock_price_data_df["Date"].loc[stock_price_data_df["Date"] <= date_5_years_ago]
             if date_5_years_ago.empty:
                 date_5_years_ago = None
             else:
@@ -380,85 +397,234 @@ def fetch_stock_price_data(stock_symbol):
                 # Format the date with dtype datetime64[ns]
                 date_5_years_ago = pd.to_datetime(date_5_years_ago)
 
-
             # Calculate the 5 year change
             if date_5_years_ago != None:
-                five_year_change = (((temp_stock_data_df["Price"].loc[index]/temp_stock_data_df["Price"].loc[temp_stock_data_df["Date"] == date_5_years_ago])-1))
+                five_year_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].loc[stock_price_data_df["Date"] == date_5_years_ago])-1))
                 five_year_change = five_year_change.values[-1]
             else:
-                five_year_change = (((temp_stock_data_df["Price"].loc[index]/temp_stock_data_df["Price"].iloc[0])-1))
-
+                five_year_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].iloc[0])-1))
 
             # Update the 5Y Change column with the calculated value
-            temp_stock_data_df.loc[index, "5Y"] = five_year_change
-            # Create print statement per 100 index processed
+            stock_price_data_df.loc[index, "5Y"] = five_year_change
+            # Create print statement per 250 index processed
             if index % 250 == 0:
-                print(f"Processed {index} rows, out of {len(temp_stock_data_df)} rows.")
+                print(f"Processed {index} rows, out of {len(stock_price_data_df)} rows.")
 
+        print("Period returns calculated successfully.")
+        # Return the stock_price_data_df DataFrame
+        return stock_price_data_df
+    
 
-        # Create a new columns in temp_stock_data_df called SMA_40, SMA_120, EMA_40, and EMA_120
-        temp_stock_data_df["SMA_40"] = 0.0
-        temp_stock_data_df["SMA_120"] = 0.0
-        temp_stock_data_df["EMA_40"] = 0.0
-        temp_stock_data_df["EMA_120"] = 0.0
-        # Loop through each row in temp_stock_data_df
-        for index, row in temp_stock_data_df.iterrows():
+    except KeyError:
+        raise KeyError(f"Stock symbol '{stock_symbol}' is invalid or not found.")
+    
+# Calculate the moving averages for the given stock data
+def calculate_moving_averages(stock_price_data_df):
+    """
+    Calculates the moving averages for the given stock data and returns a pandas DataFrame.
+
+    The DataFrame will contain the date, stock name, stock symbol, price, and the moving averages.
+
+    Parameters:
+    - stock_price_data_df (pandas.DataFrame): A DataFrame containing the stock data.
+
+    Returns:
+    pandas.DataFrame: A DataFrame containing the moving averages.
+
+    Raises:
+    - ValueError: If the stock_price_data_df parameter is empty.
+    """
+
+    # Check if the stock_price_data_df parameter is empty
+    if stock_price_data_df.empty:
+        raise ValueError("The stock_price_data_df parameter cannot be empty.")
+    
+
+    try:
+        # Create a new columns in stock_price_data_df called SMA_40, SMA_120, EMA_40, and EMA_120
+        stock_price_data_df["SMA_40"] = 0.0
+        stock_price_data_df["SMA_120"] = 0.0
+        stock_price_data_df["EMA_40"] = 0.0
+        stock_price_data_df["EMA_120"] = 0.0
+        # Loop through each row in stock_price_data_df
+        for index, row in stock_price_data_df.iterrows():
             # Calculate SMA_40 for every row
-            if index >= 40:
-                sma_40 = temp_stock_data_df.iloc[index-39:index+1]["Price"].mean()
+            if index == 0:
+                sma_40 = stock_price_data_df.iloc[index]["Price"]
+            elif index >= 40:
+                sma_40 = stock_price_data_df.iloc[index-39:index+1]["Price"].mean()
             else:
-                sma_40 = temp_stock_data_df.iloc[0:index]["Price"].mean()
-
+                sma_40 = stock_price_data_df.iloc[0:index+1]["Price"].mean()
 
             # Update the SMA_40 column with the calculated value
-            temp_stock_data_df.loc[index, "SMA_40"] = sma_40
+            stock_price_data_df.loc[index, "SMA_40"] = sma_40
             # Calculate SMA_120 for every row
-            if index >= 120:
-                sma_120 = temp_stock_data_df.iloc[index-119:index+1]["Price"].mean()
+            if index == 0:
+                sma_120 = stock_price_data_df.iloc[index]["Price"]
+            elif index >= 120:
+                sma_120 = stock_price_data_df.iloc[index-119:index+1]["Price"].mean()
             else:
-                sma_120 = temp_stock_data_df.iloc[0:index+1]["Price"].mean()
-
+                sma_120 = stock_price_data_df.iloc[0:index+1]["Price"].mean()
 
             # Update the SMA_120 column with the calculated value
-            temp_stock_data_df.loc[index, "SMA_120"] = sma_120
+            stock_price_data_df.loc[index, "SMA_120"] = sma_120
             # Calculate EMA_40 for every row
-            if index >= 40:
-                ema_40 = temp_stock_data_df.iloc[index-39:index+1]["Price"].ewm(span=40).mean()
+            if index == 0:
+                ema_40 = stock_price_data_df.iloc[index]["Price"]
+            elif index >= 40:
+                ema_40 = stock_price_data_df.iloc[index-39:index+1]["Price"].ewm(span=40).mean()
                 ema_40 = ema_40.values[-1]
             else:
-                ema_40 = temp_stock_data_df.iloc[0:index+1]["Price"].ewm(span=40).mean()
+                ema_40 = stock_price_data_df.iloc[0:index+1]["Price"].ewm(span=40).mean()
                 if ema_40.empty:
                     ema_40 = 0.0
                 else:
                     ema_40 = ema_40.values[-1]
 
-
             # Update the EMA_40 column with the calculated value
-            temp_stock_data_df.loc[index, "EMA_40"] = ema_40
+            stock_price_data_df.loc[index, "EMA_40"] = ema_40
             # Calculate EMA_120 for every row
-            if index >= 120:
-                ema_120 = temp_stock_data_df.iloc[index-119:index+1]["Price"].ewm(span=120).mean()
+            if index == 0:
+                ema_120 = stock_price_data_df.iloc[index]["Price"]
+            elif index >= 120:
+                ema_120 = stock_price_data_df.iloc[index-119:index+1]["Price"].ewm(span=120).mean()
                 ema_120 = ema_120.values[-1]
             else:
-                ema_120 = temp_stock_data_df.iloc[0:index+1]["Price"].ewm(span=120).mean()
+                ema_120 = stock_price_data_df.iloc[0:index+1]["Price"].ewm(span=120).mean()
                 if ema_120.empty:
                     ema_120 = 0.0
                 else:
                     ema_120 = ema_120.values[-1]
 
-
             # Update the EMA_120 column with the calculated value
-            temp_stock_data_df.loc[index, "EMA_120"] = ema_120
-            # Create print statement per 100 index processed
+            stock_price_data_df.loc[index, "EMA_120"] = ema_120
+            # Create print statement per 250 index processed
             if index % 250 == 0:
-                print(f"Processed {index} rows, out of {len(temp_stock_data_df)} rows.")
+                print(f"Processed {index} rows, out of {len(stock_price_data_df)} rows.")
 
+
+        print("Moving averages calculated successfully.")
+        # Return the stock_price_data_df DataFrame
+        return stock_price_data_df
 
     except KeyError:
         raise KeyError(f"Stock symbol '{stock_symbol}' is invalid or not found.")
 
-    # Return the DataFrame with stock data
-    return temp_stock_data_df
+# Calculate the standard deviation of the stock price
+def calculate_standard_diviation_value(stock_price_data_df):
+    """
+    Calculates the standard deviation of the stock price and returns a pandas DataFrame.
+
+    The DataFrame will contain the date, stock name, stock symbol, price, and the standard deviation of the stock price.
+
+    Parameters:
+    - stock_price_data_df (pandas.DataFrame): A DataFrame containing the stock data.
+
+    Returns:
+    pandas.DataFrame: A DataFrame containing the standard deviation of the stock price.
+
+    Raises:
+    - ValueError: If the stock_price_data_df parameter is empty.
+    """
+
+    # Checking if the combined_stock_price_data_df parameter is empty
+    if stock_price_data_df.empty:
+        raise ValueError("No stock data provided.")
+    
+
+    try:
+        # Calculate the standard deviation of the stock price
+        # Create a new columns in stock_price_data_df called STD_Div_40, STD_Div_120
+        stock_price_data_df["STD_Div_40"] = 0.0
+        stock_price_data_df["STD_Div_120"] = 0.0
+        # Loop through each row in stock_price_data_df
+        for index, row in stock_price_data_df.iterrows():
+            # Calculate STD_Div_40 for every row
+            if index == 0:
+                STD_Div_40 = 0.0            
+            elif index >= 40:
+                STD_Div_40 = stock_price_data_df.iloc[index-39:index+1]["Price"].std()
+            else:
+                STD_Div_40 = stock_price_data_df.iloc[0:index+1]["Price"].std()
+
+            # Update the STD_Div_40 column with the calculated value
+            stock_price_data_df.loc[index, "STD_Div_40"] = STD_Div_40
+            # Calculate STD_Div_120 for every row
+            if index == 0:
+                STD_Div_120 = 0.0
+            elif index >= 120:
+                STD_Div_120 = stock_price_data_df.iloc[index-119:index+1]["Price"].std()
+            else:
+                STD_Div_120 = stock_price_data_df.iloc[0:index+1]["Price"].std()
+
+            # Update the STD_Div_120 column with the calculated value
+            stock_price_data_df.loc[index, "STD_Div_120"] = STD_Div_120
+            # Create print statement per 250 index processed
+            if index % 250 == 0:
+                print(f"Processed {index} rows, out of {len(stock_price_data_df)} rows.")
+
+
+        print("Standard deviation of the stock price calculated successfully.")
+        # Return the stock_price_data_df DataFrame        
+        return stock_price_data_df
+        
+
+    except KeyError:
+        raise KeyError(f"Stock symbol '{stock_symbol}' is invalid or not found.")
+
+# Calculate the stock price momentum
+def calculate_bollinger_bands(stock_price_data_df):
+    """
+    Calculates the Bollinger Bands for the given stock data and returns a pandas DataFrame.
+
+    The DataFrame will contain the date, stock name, stock symbol, price, and the Bollinger Bands.
+
+    Parameters:
+    - stock_price_data_df (pandas.DataFrame): A DataFrame containing the stock data.
+
+    Returns:
+    pandas.DataFrame: A DataFrame containing the Bollinger Bands.
+
+    Raises:
+    - ValueError: If the stock_price_data_df parameter is empty.
+    """
+
+    # Checking if the stock_price_data_df parameter is empty
+    if stock_price_data_df.empty:
+        raise ValueError("No stock data provided.")
+    
+
+    try:
+        # Calculate the Bollinger Bands for the given stock data
+        # Create a new columns in stock_price_data_df called Bollinger_Bands_40, Bollinger_Bands_120
+        stock_price_data_df["Bollinger_Band_40_Upper"] = 0.0
+        stock_price_data_df["Bollinger_Band_40_Lower"] = 0.0
+        stock_price_data_df["Bollinger_Band_120_Upper"] = 0.0
+        stock_price_data_df["Bollinger_Band_120_Lower"] = 0.0
+        # Loop through each row in stock_price_data_df
+        for index, row in stock_price_data_df.iterrows():
+            # Calculate Bollinger_Bands_40 for every row
+            bollinger_Band_40_Upper = (stock_price_data_df.iloc[index]["SMA_40"] + (stock_price_data_df.iloc[index]["STD_Div_40"] * 2))
+            bollinger_Band_40_Lower = (stock_price_data_df.iloc[index]["SMA_40"] - (stock_price_data_df.iloc[index]["STD_Div_40"] * 2))
+            # Update the Bollinger_Bands_40 column with the calculated value
+            stock_price_data_df.loc[index, "Bollinger_Band_40_Upper"] = bollinger_Band_40_Upper
+            stock_price_data_df.loc[index, "Bollinger_Band_40_Lower"] = bollinger_Band_40_Lower
+            bollinger_Band_120_Upper = (stock_price_data_df.iloc[index]["SMA_120"] + (stock_price_data_df.iloc[index]["STD_Div_120"] * 2))
+            bollinger_Band_120_Lower = (stock_price_data_df.iloc[index]["SMA_120"] - (stock_price_data_df.iloc[index]["STD_Div_120"] * 2))
+            # Update the Bollinger_Bands_120 column with the calculated value
+            stock_price_data_df.loc[index, "Bollinger_Band_120_Upper"] = bollinger_Band_120_Upper
+            stock_price_data_df.loc[index, "Bollinger_Band_120_Lower"] = bollinger_Band_120_Lower
+            # Create print statement per 250 index processed
+            if index % 250 == 0:
+                print(f"Processed {index} rows, out of {len(stock_price_data_df)} rows.")
+
+        print("Bollinger Bands calculated successfully.")
+        # Return the stock_price_data_df DataFrame
+        return stock_price_data_df
+    
+
+    except KeyError:
+        raise KeyError(f"Stock symbol '{stock_symbol}' is invalid or not found.")
 
 # Import financial stock data using yfinance and a list of stock symbols
 def fetch_stock_financial_data(stock_symbol):
@@ -482,8 +648,7 @@ def fetch_stock_financial_data(stock_symbol):
     if not stock_symbol:
         raise ValueError("No stock symbols provided.")
 
-    # Creating an empty DataFrame
-    stock_data_df = pd.DataFrame()
+
     try:
         symbol = stock_symbol
         # Checking if the stock symbol is valid
@@ -1204,6 +1369,25 @@ def combine_stock_data(stock_data_df, full_stock_financial_data_df):
 
 # Create a function that calculates P/S, P/E, P/B and P/FCF ratios
 def calculate_ratios(combined_stock_data_df):
+    """
+    Calculates P/S, P/E, P/B and P/FCF ratios.
+
+    The function calculates the P/S, P/E, P/B and P/FCF ratios and adds them to the DataFrame.
+
+    Parameters:
+    - combined_stock_data_df (pd.DataFrame): A DataFrame with combined stock data.
+
+    Returns:
+    - combined_stock_data_df (pd.DataFrame): A DataFrame with the ratios added.
+
+    Raises:
+    - ValueError: If the combined_stock_data_df parameter is empty.
+    """
+
+    # Checking if the combined_stock_data_df parameter is empty
+    if combined_stock_data_df.empty:
+        raise ValueError("No combined stock data provided.")
+
     # Calculate the P/S ratio
     combined_stock_data_df["P/S"] = combined_stock_data_df["Price"] / (combined_stock_data_df["Revenue"] / combined_stock_data_df["Amount of stocks"])
     # Calculate the P/E ratio
@@ -1214,7 +1398,7 @@ def calculate_ratios(combined_stock_data_df):
     combined_stock_data_df["P/FCF"] = combined_stock_data_df["Price"] / combined_stock_data_df["Free Cash Flow per share growth"]
     print("Ratios have been calculated successfully, and added to the dataframe.")
     return combined_stock_data_df
-  
+
 # Create a function that exports the dataframes to an Excel file
 def export_to_excel(dataframes, excel_file):
     """
@@ -1240,7 +1424,10 @@ def export_to_excel(dataframes, excel_file):
             raise ValueError("No Excel file path provided.")
 
         # Create a Pandas Excel writer object
-        writer = pd.ExcelWriter(excel_file, engine="xlsxwriter")
+        my_path = os.path.abspath(__file__)
+        path = os.path.dirname(my_path)
+        export_location = os.path.join(path, excel_file)
+        writer = pd.ExcelWriter(export_location, engine='xlsxwriter')
 
         # Export each dataframe to a separate sheet in the Excel file
         for sheet_name, dataframe in dataframes.items():
@@ -1277,7 +1464,10 @@ def import_excel(excel_file):
         dataframes = {}
 
         # Create a Pandas Excel file reader object
-        reader = pd.ExcelFile(excel_file)
+        my_path = os.path.abspath(__file__)
+        path = os.path.dirname(my_path)
+        import_location = os.path.join(path, excel_file)
+        reader = pd.ExcelFile(import_location)
 
         # Import each sheet in the Excel file into a separate dataframe
         for sheet_name in reader.sheet_names:
@@ -1312,13 +1502,16 @@ def convert_excel_to_csv(dataframe, file_name):
             raise ValueError("No file name provided.")
 
         # Convert the Excel file to a CSV file
-        dataframe.to_csv(f"{file_name}.csv", sep=',', encoding='utf-8', index=False)
+        my_path = os.path.abspath(__file__)
+        path = os.path.dirname(my_path)
+        export_location = os.path.join(path, f"{file_name}.csv")
+        dataframe.to_csv(export_location, sep=',', encoding='utf-8', index=False)
         
 
     except ValueError as e:
         raise ValueError(f"Error converting to CSV: {e}")
 
-
+# Run the main function
 if __name__ == "__main__":
     start_time = time.time()
     # Import stock symbols from a CSV file
@@ -1327,33 +1520,38 @@ if __name__ == "__main__":
     stock_symbol = stock_symbols_list[0]
     print(stock_symbol)
     # Fetch stock data for the imported stock symbols
-    stock_data_df = fetch_stock_price_data(stock_symbol)
-    # print(stock_data_df)
+    stock_price_data_df = fetch_stock_price_data(stock_symbol)
+    stock_price_data_df = calculate_period_returns(stock_price_data_df)
+    stock_price_data_df = calculate_moving_averages(stock_price_data_df)
+    stock_price_data_df = calculate_standard_diviation_value(stock_price_data_df)
+    stock_price_data_df = calculate_bollinger_bands(stock_price_data_df)
+    print(stock_price_data_df.info())
+    print(stock_price_data_df.describe())
     # Fetch stock data for the imported stock symbols
     full_stock_financial_data_df = fetch_stock_financial_data(stock_symbol)
     # print(full_stock_financial_data_df)
     # Combine stock data with stock financial data
-    combined_stock_data_df = combine_stock_data(stock_data_df, full_stock_financial_data_df)
+    combined_stock_data_df = combine_stock_data(stock_price_data_df, full_stock_financial_data_df)
     # print(combined_stock_data_df)
     # Calculate ratios
     combined_stock_data_df = calculate_ratios(combined_stock_data_df)
     # print(combined_stock_data_df)
     # Create a dictionary of dataframes to export to Excel
     dataframes = {
-        # "Stock Data": stock_data_df,
+        # "Stock Price Data": stock_price_data_df,
         # "Full Stock Financial Data": full_stock_financial_data_df,
         "Combined Stock Data": combined_stock_data_df
     }
     # Export the dataframes to an Excel file
-    export_to_excel(dataframes, "stock_data_single_v2.xlsx")
+    export_to_excel(dataframes, "stock_data_single.xlsx")
     # Import the stock data from an Excel file
-    dataframes = import_excel("stock_data_single_v2.xlsx")
+    dataframes = import_excel("stock_data_single.xlsx")
     for key, value in dataframes.items():
         dataframe = value
 
 
     # Export the stock data to a CSV file
-    convert_excel_to_csv(dataframe, "stock_data_single_v2")
+    convert_excel_to_csv(dataframe, "stock_data_single")
     # Calculate the execution time
     end_time = time.time()
     execution_time = end_time - start_time

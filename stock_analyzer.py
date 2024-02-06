@@ -50,13 +50,17 @@ if __name__ == "__main__":
         start_time = time.time()
         stock = row["Symbol"]
         print(stock)
-        stock_data_df = stock_data_fetch.fetch_stock_price_data(stock)
-        # print(stock_data_df)
+        # Fetch stock data for the imported stock symbols
+        stock_price_data_df = stock_data_fetch.fetch_stock_price_data(stock)
+        stock_price_data_df = stock_data_fetch.calculate_period_returns(stock_price_data_df)
+        stock_price_data_df = stock_data_fetch.calculate_moving_averages(stock_price_data_df)
+        stock_price_data_df = stock_data_fetch.calculate_standard_diviation_value(stock_price_data_df)
+        # print(stock_price_data_df)
         # Fetch stock data for the imported stock symbols
         full_stock_financial_data_df = stock_data_fetch.fetch_stock_financial_data(stock)
         # print(full_stock_financial_data_df)
         # Combine stock data with stock financial data
-        combined_stock_data_df = stock_data_fetch.combine_stock_data(stock_data_df, full_stock_financial_data_df)
+        combined_stock_data_df = stock_data_fetch.combine_stock_data(stock_price_data_df, full_stock_financial_data_df)
         # print(combined_stock_data_df)
         # Calculate ratios
         combined_stock_data_df = stock_data_fetch.calculate_ratios(combined_stock_data_df)
@@ -81,7 +85,7 @@ if __name__ == "__main__":
         # Split the dataset into traning, test data and prediction data
         x_training_data, x_test_data, y_training_data, y_test_data, prediction_data = split_dataset.dataset_train_test_split(stock_data_df, 0.20, 1)
         # Reduce the dataset dimensions with PCA
-        x_training_dataset, x_test_dataset, x_prediction_dataset = dimension_reduction.feature_selection(12, x_training_data, x_test_data, y_training_data, y_test_data, prediction_data, stock_data_df)
+        x_training_dataset, x_test_dataset, x_prediction_dataset = dimension_reduction.feature_selection(15, x_training_data, x_test_data, y_training_data, y_test_data, prediction_data, stock_data_df)
         # Combine the reduced dataset with the stock price
         x_training_dataset_df = pd.DataFrame(x_training_dataset)
         y_training_data_df = pd.DataFrame(y_training_data, columns=["Price"])

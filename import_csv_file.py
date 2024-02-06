@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 
 def import_as_df(csv_file):
@@ -19,7 +20,11 @@ def import_as_df(csv_file):
 
     try:
         # Read the CSV file into a DataFrame
-        df = pd.read_csv(csv_file)
+        my_path = os.path.abspath(__file__)
+        path = os.path.dirname(my_path)
+        import_location = os.path.join(path, csv_file)
+        # print(import_location)
+        df = pd.read_csv(import_location)
 
         # Check if the 'Symbol' column exists in the DataFrame
         if 'Date' not in df.columns:
