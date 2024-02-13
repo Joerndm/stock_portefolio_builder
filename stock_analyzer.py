@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import time
 
@@ -26,8 +27,12 @@ def import_symbols(csv_file):
     """
 
     try:
-        # Read the CSV file into a DataFrame
-        df = pd.read_csv(csv_file)
+        # Read the CSV file from current position into a DataFrame
+        my_path = os.path.abspath(__file__)
+        path = os.path.dirname(my_path)
+        import_location = os.path.join(path, csv_file)
+        print(import_location)
+        df = pd.read_csv(import_location)
 
         # Check if the 'Symbol' column exists in the DataFrame
         if 'Symbol' not in df.columns:
@@ -55,20 +60,14 @@ if __name__ == "__main__":
         stock_price_data_df = stock_data_fetch.calculate_period_returns(stock_price_data_df)
         stock_price_data_df = stock_data_fetch.calculate_moving_averages(stock_price_data_df)
         stock_price_data_df = stock_data_fetch.calculate_standard_diviation_value(stock_price_data_df)
-        # print(stock_price_data_df)
         # Fetch stock data for the imported stock symbols
         full_stock_financial_data_df = stock_data_fetch.fetch_stock_financial_data(stock)
-        # print(full_stock_financial_data_df)
         # Combine stock data with stock financial data
         combined_stock_data_df = stock_data_fetch.combine_stock_data(stock_price_data_df, full_stock_financial_data_df)
-        # print(combined_stock_data_df)
         # Calculate ratios
         combined_stock_data_df = stock_data_fetch.calculate_ratios(combined_stock_data_df)
-        # print(combined_stock_data_df)
         # Create a dictionary of dataframes to export to Excel
         dataframes = {
-            # "Stock Data": stock_data_df,
-            # "Full Stock Financial Data": full_stock_financial_data_df,
             "Combined Stock Data": combined_stock_data_df
         }
         # Export the dataframes to an Excel file
@@ -85,15 +84,15 @@ if __name__ == "__main__":
         # Split the dataset into traning, test data and prediction data
         x_training_data, x_test_data, y_training_data, y_test_data, prediction_data = split_dataset.dataset_train_test_split(stock_data_df, 0.20, 1)
         # Reduce the dataset dimensions with PCA
-        x_training_dataset, x_test_dataset, x_prediction_dataset = dimension_reduction.feature_selection(15, x_training_data, x_test_data, y_training_data, y_test_data, prediction_data, stock_data_df)
+        x_training_dataset, x_test_dataset, x_prediction_dataset, selected_features_list = dimension_reduction.feature_selection(15, x_training_data, x_test_data, y_training_data, y_test_data, prediction_data, stock_data_df)
         # Combine the reduced dataset with the stock price
-        x_training_dataset_df = pd.DataFrame(x_training_dataset)
+        x_training_dataset_df = pd.DataFrame(x_training_dataset, columns=selected_features_list)
         y_training_data_df = pd.DataFrame(y_training_data, columns=["Price"])
         traning_dataset_df = x_training_dataset_df.join(y_training_data_df)
-        x_test_dataset_df = pd.DataFrame(x_test_dataset)
+        x_test_dataset_df = pd.DataFrame(x_test_dataset, columns=selected_features_list)
         y_test_data_df = pd.DataFrame(y_test_data, columns=["Price"])
         test_dataset_df = x_test_dataset_df.join(y_test_data_df)
-        x_prediction_dataset_df = pd.DataFrame(x_prediction_dataset)
+        x_prediction_dataset_df = pd.DataFrame(x_prediction_dataset, columns=selected_features_list)
         # Predict the stock price
         forecast_df = ml_builder.predict_price(traning_dataset_df, test_dataset_df, x_prediction_dataset_df, stock_data_df)
         # Plot the graph

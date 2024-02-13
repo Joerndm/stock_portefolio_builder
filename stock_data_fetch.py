@@ -1,6 +1,5 @@
 import os
 import pandas as pd
-import numpy as np
 import yfinance as yf
 import time
 import datetime
@@ -750,6 +749,8 @@ def fetch_stock_financial_data(stock_symbol):
         income_stmt_df = income_stmt_df.reset_index()
         # Rename the index column to Date
         income_stmt_df = income_stmt_df.rename(columns={"index": "Date"})
+        # Fill the NaN values in the income_stmt_df dataframe with values from the previous row
+        income_stmt_df = income_stmt_df.ffill()
         # Use stock_data to chack if bank is part of the registered industry for the stock
         stock_info = stock_data.info
         industry = stock_info["industry"]
@@ -1391,47 +1392,51 @@ def fetch_stock_financial_data(stock_symbol):
         raise KeyError(f"Stock symbol '{symbol}' is invalid or not found.")
     
 #Create a function the combines dataframe from fetch_stock_price_data with full_stock_financial_data_df from fetch_stock_financial_data
-def combine_stock_data(stock_data_df, full_stock_financial_data_df):
+def combine_stock_data(stock_price_data_df, full_stock_financial_data_df):
     """
     Combines stock data with financial stock data.
 
     The function combines stock data with financial stock data and returns a DataFrame with the combined data.
 
     Parameters:
-    - stock_data_df (pd.DataFrame): A DataFrame with stock data.
+    - stock_price_data_df (pd.DataFrame): A DataFrame with stock data.
     - full_stock_financial_data_df (pd.DataFrame): A DataFrame with financial stock data.
 
     Returns:
     - combined_stock_data_df (pd.DataFrame): A DataFrame with the combined data.
 
     Raises:
-    - ValueError: If the stock_data_df parameter is empty or if the full_stock_financial_data_df parameter is empty.
+    - ValueError: If the stock_price_data_df parameter is empty or if the full_stock_financial_data_df parameter is empty.
+    - ValueError: Failed to combine stock data and financial stock data.
     """
     
-    # Checking if the stock_data_df parameter is empty
-    if stock_data_df.empty:
+    # Checking if the stock_price_data_df parameter is empty
+    if stock_price_data_df.empty:
         raise ValueError("No stock data provided.")
     
-
     # Checking if the full_stock_financial_data_df parameter is empty
     if full_stock_financial_data_df.empty:
         raise ValueError("No financial stock data provided.")
 
+    try:
+        # Create a list of column names to copy from full_stock_financial_data_df to stock_price_data_df
+        column_names = full_stock_financial_data_df.columns[2:]
+        # Create a copy of stock_price_data_df
+        combined_stock_data_df = stock_price_data_df.copy()
+        # Add columns from full_stock_financial_data_df to stock_price_data_df
+        for year in range(len(full_stock_financial_data_df["Date"])):
+            combined_stock_data_df.loc[combined_stock_data_df["Date"] >= full_stock_financial_data_df.iloc[year]["Date"], column_names] = full_stock_financial_data_df.iloc[year].values[2:]
 
-    # Create a list of column names to copy from full_stock_financial_data_df to stock_data_df
-    column_names = full_stock_financial_data_df.columns[2:]
-    # Create a copy of stock_data_df
-    combined_stock_data_df = stock_data_df.copy()
-    # Add columns from full_stock_financial_data_df to stock_data_df
-    for year in range(len(full_stock_financial_data_df["Date"])):
-        combined_stock_data_df.loc[combined_stock_data_df["Date"] >= full_stock_financial_data_df.iloc[year]["Date"], column_names] = full_stock_financial_data_df.iloc[year].values[2:]
 
+        # Drop rows with NaN values in combined_stock_data_df
+        combined_stock_data_df = combined_stock_data_df.dropna()
+        combined_stock_data_df = combined_stock_data_df.reset_index(drop=True)
+        print("Stock data and financial stock data combined successfully.")
+        return combined_stock_data_df
+    
 
-    # Drop rows with NaN values in stock_data_df
-    combined_stock_data_df = combined_stock_data_df.dropna()
-    combined_stock_data_df = combined_stock_data_df.reset_index(drop=True)
-    print("Stock data and financial stock data combined successfully.")
-    return combined_stock_data_df
+    except ValueError as e:
+        raise ValueError(f"Error combining stock data: {e}")
 
 # Create a function that calculates P/S, P/E, P/B and P/FCF ratios
 def calculate_ratios(combined_stock_data_df):
@@ -1593,8 +1598,6 @@ if __name__ == "__main__":
     stock_price_data_df = calculate_moving_averages(stock_price_data_df)
     stock_price_data_df = calculate_standard_diviation_value(stock_price_data_df)
     stock_price_data_df = calculate_bollinger_bands(stock_price_data_df)
-    # print(stock_price_data_df.info())
-    # print(stock_price_data_df.describe())
     # Fetch stock data for the imported stock symbols
     full_stock_financial_data_df = fetch_stock_financial_data(stock_symbol)
     # print(full_stock_financial_data_df)

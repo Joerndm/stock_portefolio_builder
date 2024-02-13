@@ -45,15 +45,9 @@ def dataset_train_test_split(dataset_dataframe, ts, rs):
         scaled_x = data_scalers.data_preprocessing_minmax_scaler(x)
         # print(scaled_x)
         x_Predictions = scaled_x[-forecast_out:]
-        # print(x_Predictions)
-        print(len(x_Predictions))
         x = scaled_x[:-forecast_out]
-        # print(x)
-        print(len(x))
         train_data_df = train_data_df.dropna(axis=0, how="any")
         y = np.array(train_data_df["Prediction"])
-        # print(y)
-        # print(len(y))
         x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=ts, random_state=rs)
         return x_train, x_test, y_train, y_test, x_Predictions
     

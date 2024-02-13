@@ -29,7 +29,7 @@ def feature_selection(dimensions, x_traning_data, x_test_data, y_traning_data, y
     Raises:
     - ValueError: If the specified dimension amount is greater than the number of features in the dataset.
     """
-    
+
     if dimensions > x_traning_data.shape[1]:
         raise ValueError("The specified dimension amount is greater than the number of features in the dataset.")
 
@@ -53,10 +53,7 @@ def feature_selection(dimensions, x_traning_data, x_test_data, y_traning_data, y
     print(f"Shape of traning dataset after feature selection: {reduced_traning_dataset.shape}")
     print(f"Shape of test dataset after feature selection: {reduced_test_dataset.shape}")
     print(f"Shape of prediction dataset after feature selection: {reduced_prediction_dataset.shape}")
-    # print(dataset_column_list)
     # Check the selected features
-    print("Selected features: ")
-    # print(selected_features.get_support())
     dataset_column_list = dataset_df.columns
     drop_colum_list = ["Date", "Name", "Ticker", "Currency"]
     for column in drop_colum_list:
@@ -64,18 +61,20 @@ def feature_selection(dimensions, x_traning_data, x_test_data, y_traning_data, y
             dataset_column_list = dataset_column_list.drop([column])
 
 
+    selected_features_list = []
     for i in range(len(selected_features.get_support())):
         if selected_features.get_support()[i]:
-            print(dataset_column_list[i])
+            selected_features_list.append(dataset_column_list[i])
 
 
+    # print(selected_features_list)
     # # Check the ANOVA F-Values
     # print("ANOVA F-Values: ")
     # print(selected_features.scores_)
     # # Check the p-values
     # print("P-Values: ")
     # print(selected_features.pvalues_)
-    return reduced_traning_dataset, reduced_test_dataset, reduced_prediction_dataset
+    return reduced_traning_dataset, reduced_test_dataset, reduced_prediction_dataset, selected_features_list
 
 # Create a function to reduce the dataset dimensions with PCA
 def  pca_dataset_transformation(x_traning_data, x_test_data, prediction_data, component_amount):
@@ -137,11 +136,11 @@ def  pca_dataset_transformation(x_traning_data, x_test_data, prediction_data, co
 if __name__ == "__main__":
     stock_data_df = import_csv_file.import_as_df('stock_data_single.csv')
     x_training_data, x_test_data, y_training_data, y_test_data, prediction_data = split_dataset.dataset_train_test_split(stock_data_df, 0.20, 1)
-    x_training_dataset, x_test_dataset, x_prediction_dataset = feature_selection(15, x_training_data, x_test_data, y_training_data, y_test_data, prediction_data, stock_data_df)
+    x_training_dataset, x_test_dataset, x_prediction_dataset, selected_features_list = feature_selection(15, x_training_data, x_test_data, y_training_data, y_test_data, prediction_data, stock_data_df)
     # x_training_dataset, x_test_dataset, x_prediction_dataset = pca_dataset_transformation(x_training_data, x_test_data, prediction_data, 10)
     x_training_dataset_df = pd.DataFrame(x_training_dataset)
     x_test_dataset_df = pd.DataFrame(x_test_dataset)
     x_prediction_dataset_df = pd.DataFrame(x_prediction_dataset)
-    print(x_training_dataset_df)
-    print(x_test_dataset_df)
-    print(x_prediction_dataset_df)
+    # print(x_training_dataset_df)
+    # print(x_test_dataset_df)
+    # print(x_prediction_dataset_df)

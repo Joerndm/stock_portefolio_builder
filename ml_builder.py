@@ -3,7 +3,7 @@ import pandas as pd
 import datetime
 import numpy as np
 import matplotlib
-matplotlib.use('TkAgg')
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.ensemble import RandomForestRegressor
@@ -376,67 +376,91 @@ def neural_network_model(traning_dataset, test_dataset, prediction_dataset, hidd
     pandas.DataFrame: A DataFrame containing the predicted stock prices.
 
     Raises:
-    None
+    - ValueError: If the prediction could not be completed.
     """
-    x_training_df = traning_dataset.drop(["Price"], axis=1)
-    y_training_df = traning_dataset["Price"]
-    # Convert the DataFrame to a numpy array
-    x_training = np.array(x_training_df)
-    y_training = np.array(y_training_df)
-    x_test_df = test_dataset.drop(["Price"], axis=1)
-    y_test_df = test_dataset["Price"]
-    # Convert the DataFrame to a numpy array
-    x_test = np.array(x_test_df)
-    y_test = np.array(y_test_df)
-    # Convert the DataFrame to a numpy array
-    x_prediction = np.array(prediction_dataset)
-    nn = MLPRegressor(alpha=1e-5, hidden_layer_sizes=(hiddenLayer_1, hiddenLayer_2, hiddenLayer_3, hiddenLayer_4), max_iter=iterations, random_state=randomState,)
-    nn.fit(x_training, y_training)
-    nn_confidence = nn.score(x_test, y_test)
-    nn_mean_absolute_error = mean_absolute_error(y_test, nn.predict(x_test))
-    nn_mean_squared_error = mean_squared_error(y_test, nn.predict(x_test))
-    predict_precision_df = pd.DataFrame({"Model": ["Neural Network"],
-        "Confidence": [nn_confidence],
-        "Mean Absolute Error": [nn_mean_absolute_error],
-        "Mean Squared Error": [nn_mean_squared_error]
-    })
-    print(predict_precision_df)
-    # ['1M', '3M', '6M', '9M', '1Y', '2Y', '3Y', '4Y',
-    # '5Y', 'SMA_40', 'SMA_120', 'EMA_40', 'EMA_120',
-    # 'EPS', 'EPS growth', 'P/S', 'P/E', 'P/B', 'P/FCF'
-    # ]
-    forecast_set_nn = nn.predict(x_prediction)
-    date_list = []
-    for i in range(len(x_prediction)):
-        x = len(x_prediction) - i
-        date = stock_df["Date"].values[-x]
-        date = datetime.datetime.strptime(date, '%Y-%m-%d')
-        date_list.append(date)
+
+    try:
+        x_training_df = traning_dataset.drop(["Price"], axis=1)
+        y_training_df = traning_dataset["Price"]
+        # Convert the DataFrame to a numpy array
+        x_training = np.array(x_training_df)
+        y_training = np.array(y_training_df)
+        x_test_df = test_dataset.drop(["Price"], axis=1)
+        y_test_df = test_dataset["Price"]
+        # Convert the DataFrame to a numpy array
+        x_test = np.array(x_test_df)
+        y_test = np.array(y_test_df)
+        nn = MLPRegressor(alpha=1e-5, hidden_layer_sizes=(hiddenLayer_1, hiddenLayer_2, hiddenLayer_3, hiddenLayer_4), max_iter=iterations, random_state=randomState,)
+        nn.fit(x_training, y_training)
+        nn_confidence = nn.score(x_test, y_test)
+        nn_mean_absolute_error = mean_absolute_error(y_test, nn.predict(x_test))
+        nn_mean_squared_error = mean_squared_error(y_test, nn.predict(x_test))
+        predict_precision_df = pd.DataFrame({"Model": ["Neural Network"],
+            "Confidence": [nn_confidence],
+            "Mean Absolute Error": [nn_mean_absolute_error],
+            "Mean Squared Error": [nn_mean_squared_error]
+        })
+        print(predict_precision_df)
+        # ['1M', '3M', '6M', '9M', '1Y', '2Y', '3Y', '4Y',
+        # '5Y', 'SMA_40', 'SMA_120', 'EMA_40', 'EMA_120',
+        # 'EPS', 'EPS growth', 'P/S', 'P/E', 'P/B', 'P/FCF'
+        # ]
+        # Loop through each row in stock_price_data_df
+        forecast_set_nn = []
+        date_list = []
+        for index, row in prediction_dataset.iterrows():
+            if index == 0:
+                continue    
+            elif index > 0 and index != len(prediction_dataset) - 1:
+                # Convert the DataFrame to a numpy array
+                x_prediction = np.array(prediction_dataset.iloc[index-1:index+1])
+                forecast = nn.predict(x_prediction)
+                forecast_price = forecast[0]
+                forecast_set_nn.append(forecast_price)
+                date = stock_df.loc[index, "Date"]
+                date = datetime.datetime.strptime(date, '%Y-%m-%d')
+                date_list.append(date)
+            elif index == len(prediction_dataset) - 1:
+                x_prediction = np.array(prediction_dataset.iloc[index-1:index+1])
+                forecast = nn.predict(x_prediction)
+                for price in range(len(forecast)):
+                    forecast_price = forecast[price]
+                    forecast_set_nn.append(forecast_price)
 
 
-    forecast_dict = {"Date":date_list, "Price_nn":forecast_set_nn
-    }
-    forecast_df = pd.DataFrame(forecast_dict)
-    forecast_df = forecast_df.set_index("Date")
-    # print(forecast_df)
-    # Create variable storing the model's equation
-    # model_equation = "y = "
-    # for feature in range(len(nn.coefs_[0])):
-    #     model_equation += f"{nn.coefs_[0][feature]} * {x_training_df.columns[feature]} + "
-    # model_equation += f"{nn.intercepts_[0]}"
-    # # Print the model's equation
-    # print("The equation of the price prediction model is: ")
-    # print(model_equation)
-    predicted_return = ((forecast_df.iloc[-1]["Price_nn"] / forecast_df.iloc[0]["Price_nn"]) - 1) * 100
-    if predicted_return > 0:
-        print(f"The prediction expects a profitable return on: {predicted_return}%, over the next {len(forecast_df)} days.")
-    elif predicted_return < 0:
-        print(f"The prediction expects a loss of: {predicted_return}%, over the next {len(forecast_df)} days.")
-    else:
-        print(f"The prediction expects no return over the next {len(forecast_df)} days.")
+        i = len(prediction_dataset)
+        date_df = stock_df.iloc[-i:]["Date"].copy()
+        # Reset the index of the DataFrame
+        date_df = date_df.reset_index(drop=True)
+        # Convert values in Date column to datetime
+        date_df = date_df.astype('datetime64[ns]')
+        forecast_dict = {"Price_nn":forecast_set_nn
+        }
+        forecast_df = pd.DataFrame(forecast_dict)
+        forecast_df = forecast_df.join(date_df)
+        forecast_df = forecast_df.set_index("Date")
+        # Create variable storing the model's equation
+        # model_equation = "y = "
+        # for feature in range(len(nn.coefs_[0])):
+        #     model_equation += f"{nn.coefs_[0][feature]} * {x_training_df.columns[feature]} + "
+        # model_equation += f"{nn.intercepts_[0]}"
+        # # Print the model's equation
+        # print("The equation of the price prediction model is: ")
+        # print(model_equation)
+        predicted_return = ((forecast_df.iloc[-1]["Price_nn"] / forecast_df.iloc[0]["Price_nn"]) - 1) * 100
+        if predicted_return > 0:
+            print(f"The prediction expects a profitable return on: {predicted_return}%, over the next {len(forecast_df)} days.")
+        elif predicted_return < 0:
+            print(f"The prediction expects a loss of: {predicted_return}%, over the next {len(forecast_df)} days.")
+        else:
+            print(f"The prediction expects no return over the next {len(forecast_df)} days.")
 
 
-    return forecast_df
+        return forecast_df
+    
+
+    except ValueError:
+        raise ValueError("The prediction could not be completed. Please check the input data.")
 
 # Combines the predicted stock prices from different models
 def predict_price(traning_dataset, test_dataset, prediction_dataset, stock_df):
@@ -490,7 +514,7 @@ def predict_price(traning_dataset, test_dataset, prediction_dataset, stock_df):
     except ValueError:
         raise ValueError("The prediction could not be completed. Please check the input data.")
 
-
+# Plots a graph of the stock data
 def plot_graph(stock_data_df, forecast_data_df):
     """
     Plots a graph of the stock data.
@@ -580,15 +604,15 @@ if __name__ == "__main__":
     # Split the dataset into traning, test data and prediction data
     x_training_data, x_test_data, y_training_data, y_test_data, prediction_data = split_dataset.dataset_train_test_split(stock_data_df, 0.20, 1)
     # Feature selection
-    x_training_dataset, x_test_dataset, x_prediction_dataset = dimension_reduction.feature_selection(15, x_training_data, x_test_data, y_training_data, y_test_data, prediction_data, stock_data_df)
+    x_training_dataset, x_test_dataset, x_prediction_dataset, selected_features_list = dimension_reduction.feature_selection(15, x_training_data, x_test_data, y_training_data, y_test_data, prediction_data, stock_data_df)
     # Combine the reduced dataset with the stock price
-    x_training_dataset_df = pd.DataFrame(x_training_dataset)
+    x_training_dataset_df = pd.DataFrame(x_training_dataset, columns=selected_features_list)
     y_training_data_df = pd.DataFrame(y_training_data, columns=["Price"])
     traning_dataset_df = x_training_dataset_df.join(y_training_data_df)
-    x_test_dataset_df = pd.DataFrame(x_test_dataset)
+    x_test_dataset_df = pd.DataFrame(x_test_dataset, columns=selected_features_list)
     y_test_data_df = pd.DataFrame(y_test_data, columns=["Price"])
     test_dataset_df = x_test_dataset_df.join(y_test_data_df)
-    x_prediction_dataset_df = pd.DataFrame(x_prediction_dataset)
+    x_prediction_dataset_df = pd.DataFrame(x_prediction_dataset, columns=selected_features_list)
     # Predict the stock price
     forecast_df = predict_price(traning_dataset_df, test_dataset_df, x_prediction_dataset_df, stock_data_df)
     # Plot the graph
