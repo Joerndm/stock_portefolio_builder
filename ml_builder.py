@@ -1,9 +1,11 @@
 import os
 import pandas as pd
+import numpy
+import matplotlib.pyplot as pyplot
 import datetime
 import numpy as np
 import matplotlib
-matplotlib.use('Agg')
+matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.ensemble import RandomForestRegressor
@@ -19,6 +21,7 @@ import stock_data_fetch
 import import_csv_file
 import split_dataset
 import dimension_reduction
+import monte_carlo_sim
 
 # Fits a linear regression model to the traning dataset and predicts the stock price
 def linear_model(traning_dataset, test_dataset, prediction_dataset, stock_df):
@@ -481,24 +484,24 @@ def predict_price(traning_dataset, test_dataset, prediction_dataset, stock_df):
     """
 
     try:
-        lr_forecast = linear_model(traning_dataset, test_dataset, prediction_dataset, stock_df)
+        # lr_forecast = linear_model(traning_dataset, test_dataset, prediction_dataset, stock_df)
         # print(lr_forecast)
-        rf_forecast = random_forest_regressor_model(traning_dataset, test_dataset, prediction_dataset, stock_df)
+        # rf_forecast = random_forest_regressor_model(traning_dataset, test_dataset, prediction_dataset, stock_df)
         # # print(rf_forecast)
-        forecast_df = lr_forecast.join(rf_forecast)
-        rd_forecast = ridge_model(traning_dataset, test_dataset, prediction_dataset, stock_df)
+        # forecast_df = lr_forecast.join(rf_forecast)
+        # rd_forecast = ridge_model(traning_dataset, test_dataset, prediction_dataset, stock_df)
         # # print(rd_forecast)
-        forecast_df = forecast_df.join(rd_forecast)
+        # forecast_df = forecast_df.join(rd_forecast)
         # print(forecast_df)
         # kernel_list = ["linear"]
-        kernel_list = ["poly"]
+        # kernel_list = ["poly"]
         # # kernel_list = ["linear", "poly"]
-        for kernel_type in kernel_list:
-            svm_forecast = svm_model(traning_dataset, test_dataset, prediction_dataset, stock_df, kernel_type)
-            # print(svm_forecast)
-            forecast_df = lr_forecast.join(svm_forecast)
-            # forecast_df = forecast_df.join(svm_forecast)
-            forecast_df.rename(columns={"Price_svm":f"Price_svm_{kernel_type}"}, inplace=True)
+        # for kernel_type in kernel_list:
+        #     svm_forecast = svm_model(traning_dataset, test_dataset, prediction_dataset, stock_df, kernel_type)
+        #     # print(svm_forecast)
+        #     forecast_df = lr_forecast.join(svm_forecast)
+        #     # forecast_df = forecast_df.join(svm_forecast)
+        #     forecast_df.rename(columns={"Price_svm":f"Price_svm_{kernel_type}"}, inplace=True)
 
 
         # dt_forecast = decision_tree_model(traning_dataset, test_dataset, prediction_dataset, stock_df)
@@ -506,7 +509,8 @@ def predict_price(traning_dataset, test_dataset, prediction_dataset, stock_df):
         # forecast_df = forecast_df.join(dt_forecast)
         nn_forecast = neural_network_model(traning_dataset, test_dataset, prediction_dataset, 70, 60, 50, 40, 100, 1, stock_df)
         # print(nn_forecast)
-        forecast_df = forecast_df.join(nn_forecast)
+        forecast_df = nn_forecast
+        # forecast_df = forecast_df.join(nn_forecast)
         print(forecast_df)
         forecast_df = forecast_df.reset_index()
         return forecast_df
@@ -563,10 +567,13 @@ def plot_graph(stock_data_df, forecast_data_df):
         plt.clf()
         plt.close("all")
 
-    # Show the graph
-    # plt.show()
+
     except FileNotFoundError:
         raise FileNotFoundError("The graph could not be saved. Please check the file name or path.")
+    
+
+    # Show the graph
+    # plt.show()
 
 # Run the main function
 if __name__ == "__main__":
@@ -575,31 +582,31 @@ if __name__ == "__main__":
     stock_symbols_list = stock_symbols_df['Symbol'].tolist()
     stock_symbol = stock_symbols_list[0]
     print(stock_symbol)
-    # Fetch stock data for the imported stock symbols
-    stock_price_data_df = stock_data_fetch.fetch_stock_price_data(stock_symbol)
-    stock_price_data_df = stock_data_fetch.calculate_period_returns(stock_price_data_df)
-    stock_price_data_df = stock_data_fetch.calculate_moving_averages(stock_price_data_df)
-    stock_price_data_df = stock_data_fetch.calculate_standard_diviation_value(stock_price_data_df)
-    # Fetch stock data for the imported stock symbols
-    full_stock_financial_data_df = stock_data_fetch.fetch_stock_financial_data(stock_symbol)
-    # Combine stock data with stock financial data
-    combined_stock_data_df = stock_data_fetch.combine_stock_data(stock_price_data_df, full_stock_financial_data_df)
-    # Calculate ratios
-    combined_stock_data_df = stock_data_fetch.calculate_ratios(combined_stock_data_df)
-    # Create a dictionary of dataframes to export to Excel
-    dataframes = {
-        "Combined Stock Data": combined_stock_data_df
-    }
-    # Export the dataframes to an Excel file
-    stock_data_fetch.export_to_excel(dataframes, 'stock_data_single.xlsx')
-    # Import the stock data from an Excel file
-    dataframes = stock_data_fetch.import_excel("stock_data_single.xlsx")
-    for key, value in dataframes.items():
-        dataframe = value
+    # # Fetch stock data for the imported stock symbols
+    # stock_price_data_df = stock_data_fetch.fetch_stock_price_data(stock_symbol)
+    # stock_price_data_df = stock_data_fetch.calculate_period_returns(stock_price_data_df)
+    # stock_price_data_df = stock_data_fetch.calculate_moving_averages(stock_price_data_df)
+    # stock_price_data_df = stock_data_fetch.calculate_standard_diviation_value(stock_price_data_df)
+    # # Fetch stock data for the imported stock symbols
+    # full_stock_financial_data_df = stock_data_fetch.fetch_stock_financial_data(stock_symbol)
+    # # Combine stock data with stock financial data
+    # combined_stock_data_df = stock_data_fetch.combine_stock_data(stock_price_data_df, full_stock_financial_data_df)
+    # # Calculate ratios
+    # combined_stock_data_df = stock_data_fetch.calculate_ratios(combined_stock_data_df)
+    # # Create a dictionary of dataframes to export to Excel
+    # dataframes = {
+    #     "Combined Stock Data": combined_stock_data_df
+    # }
+    # # Export the dataframes to an Excel file
+    # stock_data_fetch.export_to_excel(dataframes, 'stock_data_single.xlsx')
+    # # Import the stock data from an Excel file
+    # dataframes = stock_data_fetch.import_excel("stock_data_single.xlsx")
+    # for key, value in dataframes.items():
+    #     dataframe = value
 
 
-    # Export the stock data to a CSV file
-    stock_data_fetch.convert_excel_to_csv(dataframe, "stock_data_single")
+    # # Export the stock data to a CSV file
+    # stock_data_fetch.convert_excel_to_csv(dataframe, "stock_data_single")
     stock_data_df = import_csv_file.import_as_df('stock_data_single.csv')
     # Split the dataset into traning, test data and prediction data
     x_training_data, x_test_data, y_training_data, y_test_data, prediction_data = split_dataset.dataset_train_test_split(stock_data_df, 0.20, 1)
@@ -621,3 +628,8 @@ if __name__ == "__main__":
     end_time = time.time()
     execution_time = end_time - start_time
     print(f"Execution time: {execution_time} seconds to build dataset and ML models.")
+    monte_carlo_df = monte_carlo_sim.monte_carlo_analysis_3(0, stock_data_df, forecast_df, 5, 1000)
+    print(monte_carlo_df)
+    print(monte_carlo_df.describe())
+    print(monte_carlo_df.info())
+

@@ -49,6 +49,7 @@ CREATE TABLE `stock_Price_Data` (
 
 CREATE TABLE `stock_Income_Stmt_Data` (
   `date` DATE NOT NULL,
+  `date_published` DATE,
   `ticker` VARCHAR(255) NOT NULL,
   `revenue` FLOAT,
   `revenue_Growth` FLOAT,
@@ -73,6 +74,7 @@ CREATE TABLE `stock_Income_Stmt_Data` (
 
 CREATE TABLE `stock_Balancesheet_Data` (
   `date` DATE NOT NULL,
+  `date_published` DATE,
   `ticker` VARCHAR(255) NOT NULL,
   `total_Assets` FLOAT,
   `total_Assets_Growth` FLOAT,
@@ -106,6 +108,7 @@ CREATE TABLE `stock_Balancesheet_Data` (
 
 CREATE TABLE `stock_Cash_Flow_Data` (
   `date` DATE NOT NULL,
+  `date_published` DATE,
   `ticker` VARCHAR(255) NOT NULL,
   `free_Cash_Flow` FLOAT,
   `free_Cash_Flow_Growth` FLOAT,
