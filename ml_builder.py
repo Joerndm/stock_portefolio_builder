@@ -628,8 +628,4 @@ if __name__ == "__main__":
     end_time = time.time()
     execution_time = end_time - start_time
     print(f"Execution time: {execution_time} seconds to build dataset and ML models.")
-    monte_carlo_df = monte_carlo_sim.monte_carlo_analysis_3(0, stock_data_df, forecast_df, 5, 1000)
-    print(monte_carlo_df)
-    print(monte_carlo_df.describe())
-    print(monte_carlo_df.info())
-
+    monte_carlo_df = monte_carlo_sim.monte_carlo_analysis(0, stock_data_df, forecast_df, 20, 1000)
