@@ -5,7 +5,7 @@ import matplotlib.pyplot as pyplot
 import datetime
 import numpy as np
 import matplotlib
-matplotlib.use('TkAgg')
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.ensemble import RandomForestRegressor
@@ -582,31 +582,31 @@ if __name__ == "__main__":
     stock_symbols_list = stock_symbols_df['Symbol'].tolist()
     stock_symbol = stock_symbols_list[0]
     print(stock_symbol)
-    # # Fetch stock data for the imported stock symbols
-    # stock_price_data_df = stock_data_fetch.fetch_stock_price_data(stock_symbol)
-    # stock_price_data_df = stock_data_fetch.calculate_period_returns(stock_price_data_df)
-    # stock_price_data_df = stock_data_fetch.calculate_moving_averages(stock_price_data_df)
-    # stock_price_data_df = stock_data_fetch.calculate_standard_diviation_value(stock_price_data_df)
-    # # Fetch stock data for the imported stock symbols
-    # full_stock_financial_data_df = stock_data_fetch.fetch_stock_financial_data(stock_symbol)
-    # # Combine stock data with stock financial data
-    # combined_stock_data_df = stock_data_fetch.combine_stock_data(stock_price_data_df, full_stock_financial_data_df)
-    # # Calculate ratios
-    # combined_stock_data_df = stock_data_fetch.calculate_ratios(combined_stock_data_df)
-    # # Create a dictionary of dataframes to export to Excel
-    # dataframes = {
-    #     "Combined Stock Data": combined_stock_data_df
-    # }
-    # # Export the dataframes to an Excel file
-    # stock_data_fetch.export_to_excel(dataframes, 'stock_data_single.xlsx')
-    # # Import the stock data from an Excel file
-    # dataframes = stock_data_fetch.import_excel("stock_data_single.xlsx")
-    # for key, value in dataframes.items():
-    #     dataframe = value
+    # Fetch stock data for the imported stock symbols
+    stock_price_data_df = stock_data_fetch.fetch_stock_price_data(stock_symbol)
+    stock_price_data_df = stock_data_fetch.calculate_period_returns(stock_price_data_df)
+    stock_price_data_df = stock_data_fetch.calculate_moving_averages(stock_price_data_df)
+    stock_price_data_df = stock_data_fetch.calculate_standard_diviation_value(stock_price_data_df)
+    # Fetch stock data for the imported stock symbols
+    full_stock_financial_data_df = stock_data_fetch.fetch_stock_financial_data(stock_symbol)
+    # Combine stock data with stock financial data
+    combined_stock_data_df = stock_data_fetch.combine_stock_data(stock_price_data_df, full_stock_financial_data_df)
+    # Calculate ratios
+    combined_stock_data_df = stock_data_fetch.calculate_ratios(combined_stock_data_df)
+    # Create a dictionary of dataframes to export to Excel
+    dataframes = {
+        "Combined Stock Data": combined_stock_data_df
+    }
+    # Export the dataframes to an Excel file
+    stock_data_fetch.export_to_excel(dataframes, 'stock_data_single.xlsx')
+    # Import the stock data from an Excel file
+    dataframes = stock_data_fetch.import_excel("stock_data_single.xlsx")
+    for key, value in dataframes.items():
+        dataframe = value
 
 
-    # # Export the stock data to a CSV file
-    # stock_data_fetch.convert_excel_to_csv(dataframe, "stock_data_single")
+    # Export the stock data to a CSV file
+    stock_data_fetch.convert_excel_to_csv(dataframe, "stock_data_single")
     stock_data_df = import_csv_file.import_as_df('stock_data_single.csv')
     # Split the dataset into traning, test data and prediction data
     x_training_data, x_test_data, y_training_data, y_test_data, prediction_data = split_dataset.dataset_train_test_split(stock_data_df, 0.20, 1)

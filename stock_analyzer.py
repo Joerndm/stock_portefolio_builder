@@ -7,6 +7,7 @@ import import_csv_file
 import split_dataset
 import dimension_reduction
 import ml_builder
+import monte_carlo_sim
 
 # Import stock symbols from a CSV file
 def import_symbols(csv_file):
@@ -101,3 +102,4 @@ if __name__ == "__main__":
         end_time = time.time()
         execution_time = end_time - start_time
         print(f"Execution time: {execution_time} seconds to build dataset and ML models.")
+        monte_carlo_df = monte_carlo_sim.monte_carlo_analysis(0, stock_data_df, forecast_df, 20, 1000)

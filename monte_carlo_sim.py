@@ -11,7 +11,7 @@ def monte_carlo_analysis(seed_number, stock_data_df, forecast_df, years, sim_amo
   print(forecast_df)
   # calculate amopunt of days into x future of years
   days = years * 252
-  returns = np.log(1 + stock_data_df[stock_data_df.columns[1]].pct_change().dropna())
+  returns = np.log(1 + forecast_df[forecast_df.columns[1]].pct_change().dropna())
   stat, p = stats.shapiro(returns)
   # print(stat, p)
   alphe = 0.05
@@ -23,7 +23,6 @@ def monte_carlo_analysis(seed_number, stock_data_df, forecast_df, years, sim_amo
     print("Sample does not look Gaussian (reject H0)")
 
 
-  mu = returns.mean()
   sigma = returns.std()
   dt = years / days
   drift = (mu - (0.5 * sigma**2)) * dt
@@ -65,10 +64,9 @@ def monte_carlo_analysis(seed_number, stock_data_df, forecast_df, years, sim_amo
     index=year
   )
   print(monte_carlo_df)
-  legend_list = ["95th Percentile", "84th Percentile", "Mean", "16th Percentile", "5th Percentile"]
   plt.figure(figsize=(18, 8))
   plt.plot(monte_carlo_df)
-  plt.legend(legend_list, loc="best")
+  plt.legend(monte_carlo_df, loc="best")
   plt.xlabel("Year")
   plt.ylabel("Price")
   plt.title("Monte Carlo Analysis for Stock Price")
