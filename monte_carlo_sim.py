@@ -7,8 +7,6 @@ from scipy import stats
 def monte_carlo_analysis(seed_number, stock_data_df, forecast_df, years, sim_amount):
   np.random.seed(seed=seed_number)
   price_df = pd.DataFrame()
-  print("Forecast Data")
-  print(forecast_df)
   # calculate amopunt of days into x future of years
   days = years * 252
   returns = np.log(1 + forecast_df[forecast_df.columns[1]].pct_change().dropna())

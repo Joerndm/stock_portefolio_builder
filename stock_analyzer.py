@@ -3,7 +3,7 @@ import pandas as pd
 import time
 
 import stock_data_fetch
-import import_csv_file
+import import_stock_data
 import split_dataset
 import dimension_reduction
 import ml_builder
@@ -61,45 +61,51 @@ if __name__ == "__main__":
         stock_price_data_df = stock_data_fetch.calculate_period_returns(stock_price_data_df)
         stock_price_data_df = stock_data_fetch.calculate_moving_averages(stock_price_data_df)
         stock_price_data_df = stock_data_fetch.calculate_standard_diviation_value(stock_price_data_df)
+        stock_price_data_df = stock_data_fetch.calculate_bollinger_bands(stock_price_data_df)
         # Fetch stock data for the imported stock symbols
         full_stock_financial_data_df = stock_data_fetch.fetch_stock_financial_data(stock)
         # Combine stock data with stock financial data
         combined_stock_data_df = stock_data_fetch.combine_stock_data(stock_price_data_df, full_stock_financial_data_df)
         # Calculate ratios
         combined_stock_data_df = stock_data_fetch.calculate_ratios(combined_stock_data_df)
+        combined_stock_data_df = stock_data_fetch.calculate_momentum(combined_stock_data_df)
+        combined_stock_data_df = stock_data_fetch.drop_nan_values(combined_stock_data_df)
         # Create a dictionary of dataframes to export to Excel
         dataframes = {
             "Combined Stock Data": combined_stock_data_df
         }
         # Export the dataframes to an Excel file
-        stock_data_fetch.export_to_excel(dataframes, 'stock_data_single_v2.xlsx')
+        stock_data_fetch.export_to_excel(dataframes, 'stock_data_single.xlsx')
         # Import the stock data from an Excel file
-        dataframes = stock_data_fetch.import_excel("stock_data_single_v2.xlsx")
+        dataframes = stock_data_fetch.import_excel("stock_data_single.xlsx")
         for key, value in dataframes.items():
             dataframe = value
 
 
         # Export the stock data to a CSV file
-        stock_data_fetch.convert_excel_to_csv(dataframe, "stock_data_single_v2")
-        stock_data_df = import_csv_file.import_as_df('stock_data_single_v2.csv')
+        stock_data_fetch.convert_excel_to_csv(dataframe, "stock_data_single")
+        stock_data_df = import_stock_data.import_as_df_from_csv('stock_data_single.csv')
         # Split the dataset into traning, test data and prediction data
-        x_training_data, x_test_data, y_training_data, y_test_data, prediction_data = split_dataset.dataset_train_test_split(stock_data_df, 0.20, 1)
-        # Reduce the dataset dimensions with PCA
-        x_training_dataset, x_test_dataset, x_prediction_dataset, selected_features_list = dimension_reduction.feature_selection(15, x_training_data, x_test_data, y_training_data, y_test_data, prediction_data, stock_data_df)
+        scaler, x_training_data, x_test_data, y_training_data, y_test_data, prediction_data = split_dataset.dataset_train_test_split(stock_data_df, 0.20, 1)
+        # Feature selection
+        x_training_dataset, x_test_dataset, x_prediction_dataset, selected_features_model, selected_features_list = dimension_reduction.feature_selection(15, x_training_data, x_test_data, y_training_data, y_test_data, prediction_data, stock_data_df)
         # Combine the reduced dataset with the stock price
         x_training_dataset_df = pd.DataFrame(x_training_dataset, columns=selected_features_list)
-        y_training_data_df = pd.DataFrame(y_training_data, columns=["Price"])
+        y_training_data_df = pd.DataFrame(y_training_data, columns=["Prediction"])
         traning_dataset_df = x_training_dataset_df.join(y_training_data_df)
         x_test_dataset_df = pd.DataFrame(x_test_dataset, columns=selected_features_list)
-        y_test_data_df = pd.DataFrame(y_test_data, columns=["Price"])
+        y_test_data_df = pd.DataFrame(y_test_data, columns=["Prediction"])
         test_dataset_df = x_test_dataset_df.join(y_test_data_df)
         x_prediction_dataset_df = pd.DataFrame(x_prediction_dataset, columns=selected_features_list)
         # Predict the stock price
-        forecast_df = ml_builder.predict_price(traning_dataset_df, test_dataset_df, x_prediction_dataset_df, stock_data_df)
+        nn_model = ml_builder.neural_network_model(traning_dataset_df, test_dataset_df, x_prediction_dataset_df, selected_features_list, 70, 60, 50, 40, 100, 1, stock_data_df)
+        forecast = ml_builder.predict_future_price_changes(scaler, nn_model, x_prediction_dataset_df, selected_features_list, stock_data_df)
+        forecast_df = ml_builder.predict_price(forecast, stock_data_df)
         # Plot the graph
         ml_builder.plot_graph(stock_data_df, forecast_df)
+        # Run a Monte Carlo simulation
+        monte_carlo_df = monte_carlo_sim.monte_carlo_analysis(0, stock_data_df, forecast_df, 20, 1000)
         # Calculate the execution time
         end_time = time.time()
         execution_time = end_time - start_time
         print(f"Execution time: {execution_time} seconds to build dataset and ML models.")
-        monte_carlo_df = monte_carlo_sim.monte_carlo_analysis(0, stock_data_df, forecast_df, 20, 1000)

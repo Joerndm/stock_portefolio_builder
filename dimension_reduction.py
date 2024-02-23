@@ -4,7 +4,7 @@ from sklearn.feature_selection import SelectKBest
 from sklearn.feature_selection import r_regression
 from sklearn.decomposition import PCA
 
-import import_csv_file
+import import_stock_data
 import split_dataset
 
 # Create a function to reduce the dataset dimensions with SelectKBest
@@ -36,10 +36,10 @@ def feature_selection(dimensions, x_traning_data, x_test_data, y_traning_data, y
     # Create a SelectKBest object to select features with two best ANOVA F-Values
     selector = SelectKBest(r_regression, k=dimensions)
     # Combince numpy arrays x_traning_data and x_test_data
-    x_fitting_data = np.concatenate((x_traning_data, x_test_data), axis=0)
-    # print(x_fitting_data.shape)
-    y_fitting_data = np.concatenate((y_traning_data, y_test_data), axis=0)
-    # print(y_fitting_data.shape)
+    x_fitting_data = pd.concat([x_traning_data, x_test_data])
+    x_fitting_data = x_fitting_data.sort_index()
+    y_fitting_data = pd.concat([y_traning_data, y_test_data])
+    y_fitting_data = y_fitting_data.sort_index()
     # Apply the SelectKBest object to the features and target
     selected_features = selector.fit(x_fitting_data, y_fitting_data)
     reduced_traning_dataset = selected_features.transform(x_traning_data)
@@ -55,7 +55,7 @@ def feature_selection(dimensions, x_traning_data, x_test_data, y_traning_data, y
     print(f"Shape of prediction dataset after feature selection: {reduced_prediction_dataset.shape}")
     # Check the selected features
     dataset_column_list = dataset_df.columns
-    drop_colum_list = ["Date", "Name", "Ticker", "Currency"]
+    drop_colum_list = ["Date", "Price", "Name", "Ticker", "Currency", "1D"]
     for column in drop_colum_list:
         if column in dataset_column_list:
             dataset_column_list = dataset_column_list.drop([column])
@@ -74,7 +74,7 @@ def feature_selection(dimensions, x_traning_data, x_test_data, y_traning_data, y
     # # Check the p-values
     # print("P-Values: ")
     # print(selected_features.pvalues_)
-    return reduced_traning_dataset, reduced_test_dataset, reduced_prediction_dataset, selected_features_list
+    return reduced_traning_dataset, reduced_test_dataset, reduced_prediction_dataset, selected_features, selected_features_list
 
 # Create a function to reduce the dataset dimensions with PCA
 def  pca_dataset_transformation(x_traning_data, x_test_data, prediction_data, component_amount):
@@ -134,13 +134,18 @@ def  pca_dataset_transformation(x_traning_data, x_test_data, prediction_data, co
 
 # Run the main function
 if __name__ == "__main__":
-    stock_data_df = import_csv_file.import_as_df('stock_data_single.csv')
-    x_training_data, x_test_data, y_training_data, y_test_data, prediction_data = split_dataset.dataset_train_test_split(stock_data_df, 0.20, 1)
-    x_training_dataset, x_test_dataset, x_prediction_dataset, selected_features_list = feature_selection(15, x_training_data, x_test_data, y_training_data, y_test_data, prediction_data, stock_data_df)
+    stock_data_df = import_stock_data.import_as_df_from_csv('stock_data_single.csv')
+    scaler, x_training_data, x_test_data, y_training_data, y_test_data, prediction_data = split_dataset.dataset_train_test_split(stock_data_df, 0.20, 1)
+    x_training_dataset_df = pd.DataFrame(x_training_data)
+    y_training_data_df = pd.DataFrame(y_training_data)
+    traning_dataset_df = x_training_dataset_df.join(y_training_data_df)
+    print(traning_dataset_df.info())
+    x_training_dataset, x_test_dataset, x_prediction_dataset, selected_features, selected_features_list = feature_selection(15, x_training_data, x_test_data, y_training_data, y_test_data, prediction_data, stock_data_df)
     # x_training_dataset, x_test_dataset, x_prediction_dataset = pca_dataset_transformation(x_training_data, x_test_data, prediction_data, 10)
-    x_training_dataset_df = pd.DataFrame(x_training_dataset)
-    x_test_dataset_df = pd.DataFrame(x_test_dataset)
-    x_prediction_dataset_df = pd.DataFrame(x_prediction_dataset)
-    # print(x_training_dataset_df)
-    # print(x_test_dataset_df)
-    # print(x_prediction_dataset_df)
+    x_training_dataset_df = pd.DataFrame(x_training_dataset, columns=selected_features_list)
+    x_test_dataset_df = pd.DataFrame(x_test_dataset, columns=selected_features_list)
+    x_prediction_dataset_df = pd.DataFrame(x_prediction_dataset, columns=selected_features_list)
+    print(x_training_dataset_df)
+    print(x_test_dataset_df)
+    print(x_prediction_dataset_df)
+

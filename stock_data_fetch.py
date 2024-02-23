@@ -59,7 +59,6 @@ def fetch_stock_price_data(stock_symbol):
     - ValueError: If the stock_symbols parameter is empty.
     - KeyError: If any of the stock symbols are invalid or not found.
     """
-
     # Check if the stock_symbols parameter is empty
     if len(stock_symbol) == "":
         raise ValueError("The stock_symbols parameter cannot be empty.")
@@ -72,7 +71,7 @@ def fetch_stock_price_data(stock_symbol):
         symbol = stock_symbol
         # Fetch the stock data for the symbol
         stock_price_data = yf.download(
-            symbol, period="8y"
+            symbol, period="10y"
         )
         # Reset the index of the DataFrame
         stock_price_data_df = pd.DataFrame(
@@ -112,7 +111,7 @@ def fetch_stock_price_data(stock_symbol):
         raise KeyError(f"Stock symbol '{stock_symbol}' is invalid or not found.")
 
 # Calculate the period returns for the given stock data    
-def calculate_period_returns(stock_price_data_df):
+def calculate_period_returns_ori(stock_price_data_df):
     """
     Calculates the period returns for the given stock data and returns a pandas DataFrame.
 
@@ -127,14 +126,14 @@ def calculate_period_returns(stock_price_data_df):
     Raises:
     - ValueError: If the stock_price_data_df parameter is empty.
     """
-
     # Check if the stock_price_data_df parameter is empty
     if stock_price_data_df.empty:
         raise ValueError("The stock_price_data_df parameter cannot be empty.")
         
 
     try:
-        # Create a new columns in stock_price_data_df called 1M, 3M, 6M, 9M, 1Y, 2Y, 3Y, 4Y, and 5Y
+        # Create a new columns in stock_price_data_df called 1D, 1M, 3M, 6M, 9M, 1Y, 2Y, 3Y, 4Y, and 5Y
+        stock_price_data_df["1D"] = 0.0
         stock_price_data_df["1M"] = 0.0
         stock_price_data_df["3M"] = 0.0
         stock_price_data_df["6M"] = 0.0
@@ -418,6 +417,49 @@ def calculate_period_returns(stock_price_data_df):
 
     except KeyError:
         raise KeyError(f"Stock symbol '{stock_symbol}' is invalid or not found.")
+
+
+def calculate_period_returns(stock_price_data_df):
+    """
+    Calculates the period returns for the given stock data and returns a pandas DataFrame.
+
+    The DataFrame will contain the date, stock name, stock symbol, and the period returns.
+
+    Parameters:
+    - stock_price_data_df (pandas.DataFrame): A DataFrame containing the stock data.
+
+    Returns:
+    pandas.DataFrame: A DataFrame containing the period returns.
+
+    Raises:
+    - ValueError: If the stock_price_data_df parameter is empty.
+    """
+
+    # Check if the stock_price_data_df parameter is empty
+    if stock_price_data_df.empty:
+        raise ValueError("The stock_price_data_df parameter cannot be empty.")
+        
+
+    try:
+        # Create a new columns in stock_price_data_df called 1D, 1M, 3M, 6M, 9M, 1Y, 2Y, 3Y, 4Y, and 5Y
+        stock_price_data_df["1D"] = stock_price_data_df["Price"].pct_change(1)
+        stock_price_data_df["1M"] = stock_price_data_df["Price"].pct_change(21)
+        stock_price_data_df["3M"] = stock_price_data_df["Price"].pct_change(63)
+        stock_price_data_df["6M"] = stock_price_data_df["Price"].pct_change(126)
+        stock_price_data_df["9M"] = stock_price_data_df["Price"].pct_change(189)
+        stock_price_data_df["1Y"] = stock_price_data_df["Price"].pct_change(252)
+        stock_price_data_df["2Y"] = stock_price_data_df["Price"].pct_change(504)
+        stock_price_data_df["3Y"] = stock_price_data_df["Price"].pct_change(756)
+        stock_price_data_df["4Y"] = stock_price_data_df["Price"].pct_change(1008)
+        stock_price_data_df["5Y"] = stock_price_data_df["Price"].pct_change(1260)
+        # Shift the rows by 1
+        stock_price_data_df[["1M", "3M", "6M", "9M", "1Y", "2Y", "3Y", "4Y", "5Y"]] = stock_price_data_df[["1M", "3M", "6M", "9M", "1Y", "2Y", "3Y", "4Y", "5Y"]].shift(periods=1)
+        # Return the stock_price_data_df DataFrame        
+        return stock_price_data_df
+    
+
+    except KeyError:
+        raise KeyError(f"Stock symbol '{stock_symbol}' is invalid or not found.")
     
 # Calculate the moving averages for the given stock data
 def calculate_moving_averages(stock_price_data_df):
@@ -504,6 +546,7 @@ def calculate_moving_averages(stock_price_data_df):
                 print(f"Processed {index} rows, out of {len(stock_price_data_df)} rows.")
 
 
+        stock_price_data_df[["SMA_40", "SMA_120", "EMA_40", "EMA_120"]] = stock_price_data_df[["SMA_40", "SMA_120", "EMA_40", "EMA_120"]].shift(1)
         print("Moving averages calculated successfully.")
         # Return the stock_price_data_df DataFrame
         return stock_price_data_df
@@ -567,7 +610,8 @@ def calculate_standard_diviation_value(stock_price_data_df):
 
 
         print("Standard deviation of the stock price calculated successfully.")
-        # Return the stock_price_data_df DataFrame        
+        # Return the stock_price_data_df DataFrame
+        stock_price_data_df[["STD_Div_40", "STD_Div_120"]] = stock_price_data_df[["STD_Div_40", "STD_Div_120"]].shift(1)
         return stock_price_data_df
         
 
@@ -590,7 +634,6 @@ def calculate_bollinger_bands(stock_price_data_df):
     Raises:
     - ValueError: If the stock_price_data_df parameter is empty.
     """
-
     # Checking if the stock_price_data_df parameter is empty
     if stock_price_data_df.empty:
         raise ValueError("No stock data provided.")
@@ -599,29 +642,35 @@ def calculate_bollinger_bands(stock_price_data_df):
     try:
         # Calculate the Bollinger Bands for the given stock data
         # Create a new columns in stock_price_data_df called Bollinger_Bands_40, Bollinger_Bands_120
-        stock_price_data_df["Bollinger_Band_40_Upper"] = 0.0
-        stock_price_data_df["Bollinger_Band_40_Lower"] = 0.0
-        stock_price_data_df["Bollinger_Band_120_Upper"] = 0.0
-        stock_price_data_df["Bollinger_Band_120_Lower"] = 0.0
+        # stock_price_data_df["Bollinger_Band_40_Upper"] = 0.0
+        # stock_price_data_df["Bollinger_Band_40_Lower"] = 0.0
+        stock_price_data_df["Bollinger_Band_40"] = 0.0
+        # stock_price_data_df["Bollinger_Band_120_Upper"] = 0.0
+        # stock_price_data_df["Bollinger_Band_120_Lower"] = 0.0
+        stock_price_data_df["Bollinger_Band_120"] = 0.0
         # Loop through each row in stock_price_data_df
         for index, row in stock_price_data_df.iterrows():
             # Calculate Bollinger_Bands_40 for every row
             bollinger_Band_40_Upper = (stock_price_data_df.iloc[index]["SMA_40"] + (stock_price_data_df.iloc[index]["STD_Div_40"] * 2))
             bollinger_Band_40_Lower = (stock_price_data_df.iloc[index]["SMA_40"] - (stock_price_data_df.iloc[index]["STD_Div_40"] * 2))
             # Update the Bollinger_Bands_40 column with the calculated value
-            stock_price_data_df.loc[index, "Bollinger_Band_40_Upper"] = bollinger_Band_40_Upper
-            stock_price_data_df.loc[index, "Bollinger_Band_40_Lower"] = bollinger_Band_40_Lower
+            # stock_price_data_df.loc[index, "Bollinger_Band_40_Upper"] = bollinger_Band_40_Upper
+            # stock_price_data_df.loc[index, "Bollinger_Band_40_Lower"] = bollinger_Band_40_Lower
+            stock_price_data_df.loc[index, "Bollinger_Band_40"] = bollinger_Band_40_Upper - bollinger_Band_40_Lower
             bollinger_Band_120_Upper = (stock_price_data_df.iloc[index]["SMA_120"] + (stock_price_data_df.iloc[index]["STD_Div_120"] * 2))
             bollinger_Band_120_Lower = (stock_price_data_df.iloc[index]["SMA_120"] - (stock_price_data_df.iloc[index]["STD_Div_120"] * 2))
             # Update the Bollinger_Bands_120 column with the calculated value
-            stock_price_data_df.loc[index, "Bollinger_Band_120_Upper"] = bollinger_Band_120_Upper
-            stock_price_data_df.loc[index, "Bollinger_Band_120_Lower"] = bollinger_Band_120_Lower
+            # stock_price_data_df.loc[index, "Bollinger_Band_120_Upper"] = bollinger_Band_120_Upper
+            # stock_price_data_df.loc[index, "Bollinger_Band_120_Lower"] = bollinger_Band_120_Lower
+            stock_price_data_df.loc[index, "Bollinger_Band_120"] = (bollinger_Band_120_Upper - bollinger_Band_120_Lower)
             # Create print statement per 250 index processed
             if index % 250 == 0:
                 print(f"Processed {index} rows, out of {len(stock_price_data_df)} rows.")
 
         print("Bollinger Bands calculated successfully.")
         # Return the stock_price_data_df DataFrame
+        # stock_price_data_df[["Bollinger_Band_40_Upper", "Bollinger_Band_40_Lower", "Bollinger_Band_120_Upper", "Bollinger_Band_120_Lower"]] = stock_price_data_df[["Bollinger_Band_40_Upper", "Bollinger_Band_40_Lower", "Bollinger_Band_120_Upper", "Bollinger_Band_120_Lower"]].shift(1)
+        stock_price_data_df[["Bollinger_Band_40", "Bollinger_Band_120"]] = stock_price_data_df[["Bollinger_Band_40", "Bollinger_Band_120"]].shift(1)
         return stock_price_data_df
     
 
@@ -685,6 +734,7 @@ def calculate_momentum(stock_price_data_df):
 
         print("Momentum calculated successfully.")
         # Return the stock_price_data_df DataFrame
+        stock_price_data_df["Momentum"] = stock_price_data_df["Momentum"].shift(1)
         return stock_price_data_df
     
 
@@ -1428,9 +1478,6 @@ def combine_stock_data(stock_price_data_df, full_stock_financial_data_df):
             combined_stock_data_df.loc[combined_stock_data_df["Date"] >= full_stock_financial_data_df.iloc[year]["Date"], column_names] = full_stock_financial_data_df.iloc[year].values[2:]
 
 
-        # Drop rows with NaN values in combined_stock_data_df
-        combined_stock_data_df = combined_stock_data_df.dropna()
-        combined_stock_data_df = combined_stock_data_df.reset_index(drop=True)
         print("Stock data and financial stock data combined successfully.")
         return combined_stock_data_df
     
@@ -1468,6 +1515,31 @@ def calculate_ratios(combined_stock_data_df):
     # Calculate the P/FCF ratio
     combined_stock_data_df["P/FCF"] = combined_stock_data_df["Price"] / combined_stock_data_df["Free Cash Flow per share growth"]
     print("Ratios have been calculated successfully, and added to the dataframe.")
+    combined_stock_data_df[["P/S", "P/E", "P/B", "P/FCF"]] = combined_stock_data_df[["P/S", "P/E", "P/B", "P/FCF"]].shift(1)
+    return combined_stock_data_df
+
+# Drop rows with NaN values in combined_stock_data_df
+def drop_nan_values(combined_stock_data_df):
+    """
+    Drops rows with NaN values in the given DataFrame.
+
+    Parameters:
+    - combined_stock_data_df (pd.DataFrame): A DataFrame with combined stock data.
+
+    Returns:
+    - combined_stock_data_df (pd.DataFrame): A DataFrame with the NaN values dropped.
+
+    Raises:
+    - ValueError: If the combined_stock_data_df parameter is empty.
+    """
+
+    # Checking if the combined_stock_data_df parameter is empty
+    if combined_stock_data_df.empty:
+        raise ValueError("No combined stock data provided.")
+
+    # Drop rows with NaN values in combined_stock_data_df
+    combined_stock_data_df = combined_stock_data_df.dropna()
+    combined_stock_data_df = combined_stock_data_df.reset_index(drop=True)
     return combined_stock_data_df
 
 # Create a function that exports the dataframes to an Excel file
@@ -1608,6 +1680,7 @@ if __name__ == "__main__":
     combined_stock_data_df = calculate_ratios(combined_stock_data_df)
     # print(combined_stock_data_df)
     combined_stock_data_df = calculate_momentum(combined_stock_data_df)
+    combined_stock_data_df = drop_nan_values(combined_stock_data_df)
     # Create a dictionary of dataframes to export to Excel
     dataframes = {
         # "Stock Price Data": stock_price_data_df,
