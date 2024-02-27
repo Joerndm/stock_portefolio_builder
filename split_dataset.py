@@ -1,6 +1,4 @@
 from sklearn.model_selection import train_test_split
-import pandas as pd
-import numpy as np
 import math
 
 import import_stock_data
@@ -28,13 +26,13 @@ def dataset_train_test_split(dataset_dataframe, ts, rs):
     """
     try:    
         # Drop the columns that are not needed
-        drop_colum_list = ["Date", "Name", "Ticker", "Currency"]
+        drop_colum_list = ["Date", "Name", "Ticker", "Currency", "Trade volume", "Amount of stocks"]
         for column in drop_colum_list:
             if column in dataset_dataframe.columns:
                 dataset_dataframe = dataset_dataframe.drop([column], axis=1)
         
 
-        train_data_df = dataset_dataframe
+        train_data_df = dataset_dataframe.copy()
         forecast_out = int(math.ceil(0.05 * len(train_data_df)))
         train_data_df["Prediction"] = train_data_df.iloc[0:-forecast_out]["1D"]
         scaler = data_scalers.data_preprocessing_minmax_scaler_fit(train_data_df.drop(["Price", "1D", "Prediction"], axis=1))

@@ -63,10 +63,7 @@ def fetch_stock_price_data(stock_symbol):
     if len(stock_symbol) == "":
         raise ValueError("The stock_symbols parameter cannot be empty.")
 
-    # Create a DataFrame to store the fetched stock data
-    stock_data_df = pd.DataFrame(columns=[
-            "Date", "Name", "Ticker", "Price", "Currency", "Trade volume"
-        ])
+
     try:
         symbol = stock_symbol
         # Fetch the stock data for the symbol
@@ -150,9 +147,7 @@ def calculate_period_returns_ori(stock_price_data_df):
             date_1_month_ago = date - relativedelta(months=1)
             if date_1_month_ago.weekday() == 5:
                 date_1_month_ago = date_1_month_ago - datetime.timedelta(days=1)
-
-
-            if date_1_month_ago.weekday() == 6:
+            elif date_1_month_ago.weekday() == 6:
                 date_1_month_ago = date_1_month_ago - datetime.timedelta(days=2)
 
 
@@ -1683,8 +1678,8 @@ if __name__ == "__main__":
     combined_stock_data_df = drop_nan_values(combined_stock_data_df)
     # Create a dictionary of dataframes to export to Excel
     dataframes = {
-        # "Stock Price Data": stock_price_data_df,
-        # "Full Stock Financial Data": full_stock_financial_data_df,
+        "Stock Price Data": stock_price_data_df,
+        "Full Stock Financial Data": full_stock_financial_data_df,
         "Combined Stock Data": combined_stock_data_df
     }
     # Export the dataframes to an Excel file

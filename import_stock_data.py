@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 
+# Create a function to import stock symbols from a CSV file
 def import_as_df_from_csv(csv_file):
     """
     Imports stock symbols from a CSV file and returns a pandas DataFrame.

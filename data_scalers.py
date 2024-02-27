@@ -1,4 +1,3 @@
-import numpy as np
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 
 # Create a function to fits the scaler for the dataset with MinMaxScaler
@@ -49,6 +48,7 @@ def data_preprocessing_minmax_scaler_transform(scaler, data):
     except ValueError:
         raise ValueError("The specified component amount is greater than the number of features in the dataset.")
 
+# Create a function to fits the scaler for the dataset with StandardScaler
 def data_preprocessing_std_scaler(data):
     """
     Fits the scaler for the dataset with StandardScaler.

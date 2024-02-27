@@ -55,7 +55,7 @@ def feature_selection(dimensions, x_traning_data, x_test_data, y_traning_data, y
     print(f"Shape of prediction dataset after feature selection: {reduced_prediction_dataset.shape}")
     # Check the selected features
     dataset_column_list = dataset_df.columns
-    drop_colum_list = ["Date", "Price", "Name", "Ticker", "Currency", "1D"]
+    drop_colum_list = ["Date", "Price", "Name", "Ticker", "Currency", "1D", "Trade volume", "Amount of stocks"]
     for column in drop_colum_list:
         if column in dataset_column_list:
             dataset_column_list = dataset_column_list.drop([column])

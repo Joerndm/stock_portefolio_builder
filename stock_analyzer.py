@@ -86,25 +86,31 @@ if __name__ == "__main__":
         stock_data_fetch.convert_excel_to_csv(dataframe, "stock_data_single")
         stock_data_df = import_stock_data.import_as_df_from_csv('stock_data_single.csv')
         # Split the dataset into traning, test data and prediction data
-        scaler, x_training_data, x_test_data, y_training_data, y_test_data, prediction_data = split_dataset.dataset_train_test_split(stock_data_df, 0.20, 1)
+        test_size = 0.20
+        scaler, x_training_data, x_test_data, y_training_data_df, y_test_data_df, prediction_data = split_dataset.dataset_train_test_split(stock_data_df, test_size, 1)
         # Feature selection
-        x_training_dataset, x_test_dataset, x_prediction_dataset, selected_features_model, selected_features_list = dimension_reduction.feature_selection(15, x_training_data, x_test_data, y_training_data, y_test_data, prediction_data, stock_data_df)
+        feature_amount = 30
+        x_training_dataset, x_test_dataset, x_prediction_dataset, selected_features_model, selected_features_list = dimension_reduction.feature_selection(feature_amount, x_training_data, x_test_data, y_training_data_df, y_test_data_df, prediction_data, stock_data_df)
         # Combine the reduced dataset with the stock price
         x_training_dataset_df = pd.DataFrame(x_training_dataset, columns=selected_features_list)
-        y_training_data_df = pd.DataFrame(y_training_data, columns=["Prediction"])
+        y_training_data_df = y_training_data_df.reset_index(drop=True)
         traning_dataset_df = x_training_dataset_df.join(y_training_data_df)
         x_test_dataset_df = pd.DataFrame(x_test_dataset, columns=selected_features_list)
-        y_test_data_df = pd.DataFrame(y_test_data, columns=["Prediction"])
+        y_test_data_df = y_test_data_df.reset_index(drop=True)
         test_dataset_df = x_test_dataset_df.join(y_test_data_df)
         x_prediction_dataset_df = pd.DataFrame(x_prediction_dataset, columns=selected_features_list)
         # Predict the stock price
-        nn_model = ml_builder.neural_network_model(traning_dataset_df, test_dataset_df, x_prediction_dataset_df, selected_features_list, 70, 60, 50, 40, 100, 1, stock_data_df)
-        forecast = ml_builder.predict_future_price_changes(scaler, nn_model, x_prediction_dataset_df, selected_features_list, stock_data_df)
-        forecast_df = ml_builder.predict_price(forecast, stock_data_df)
+        iterations = 7500
+        nn_model = ml_builder.neural_network_model(traning_dataset_df, test_dataset_df, feature_amount*16, feature_amount*12, feature_amount*20, feature_amount*16, iterations, 1)
+        amount_of_days = 63
+        forecast_df = ml_builder.predict_future_price_changes(stock, scaler, nn_model, selected_features_list, stock_data_df, amount_of_days)
+        ml_builder.calculate_predicted_profit(forecast_df, amount_of_days)
         # Plot the graph
         ml_builder.plot_graph(stock_data_df, forecast_df)
         # Run a Monte Carlo simulation
-        monte_carlo_df = monte_carlo_sim.monte_carlo_analysis(0, stock_data_df, forecast_df, 20, 1000)
+        year_amount = 20
+        sim_amount = 1000
+        monte_carlo_df = monte_carlo_sim.monte_carlo_analysis(0, stock_data_df, forecast_df, year_amount, sim_amount)
         # Calculate the execution time
         end_time = time.time()
         execution_time = end_time - start_time
