@@ -82,7 +82,6 @@ def monte_carlo_analysis(seed_number, stock_data_df, forecast_df, years, sim_amo
 
   except FileNotFoundError:
         raise FileNotFoundError("The graph could not be saved. Please check the file name or path.")
-      
 
-  monte_carlo_df
-  return monte_carlo_df
+
+  return price_df, monte_carlo_df

@@ -2,12 +2,16 @@ import os
 import pandas as pd
 import time
 
+import numpy as np
+import matplotlib.pyplot as plt
+
 import stock_data_fetch
 import import_stock_data
 import split_dataset
 import dimension_reduction
 import ml_builder
 import monte_carlo_sim
+import efficient_frontier
 
 # Import stock symbols from a CSV file
 def import_symbols(csv_file):
@@ -52,10 +56,12 @@ if __name__ == "__main__":
     stock_symbols_list = stock_symbols_df['Symbol'].tolist()
     print(stock_symbols_df)
     # Fetch stock data for the imported stock symbols
+    pf_prices = pd.DataFrame()
     for index, row in stock_symbols_df.iterrows():
         start_time = time.time()
         stock = row["Symbol"]
-        print(stock)
+        print(f"Analyzing stock number: {index+1}")
+        print(f"Stock ticker: {stock}")
         # Fetch stock data for the imported stock symbols
         stock_price_data_df = stock_data_fetch.fetch_stock_price_data(stock)
         stock_price_data_df = stock_data_fetch.calculate_period_returns(stock_price_data_df)
@@ -102,16 +108,33 @@ if __name__ == "__main__":
         # Predict the stock price
         iterations = 7500
         nn_model = ml_builder.neural_network_model(traning_dataset_df, test_dataset_df, feature_amount*16, feature_amount*12, feature_amount*20, feature_amount*16, iterations, 1)
-        amount_of_days = 63
+        amount_of_days = 252
         forecast_df = ml_builder.predict_future_price_changes(stock, scaler, nn_model, selected_features_list, stock_data_df, amount_of_days)
+        print("Forecasted stock prices: ")
+        print(forecast_df)
         ml_builder.calculate_predicted_profit(forecast_df, amount_of_days)
         # Plot the graph
         ml_builder.plot_graph(stock_data_df, forecast_df)
         # Run a Monte Carlo simulation
         year_amount = 20
-        sim_amount = 1000
-        monte_carlo_df = monte_carlo_sim.monte_carlo_analysis(0, stock_data_df, forecast_df, year_amount, sim_amount)
+        sim_amount = 1500
+        # monte_carlo_day_df, monte_carlo_year_df = monte_carlo_sim.monte_carlo_analysis(0, stock_data_df, forecast_df, year_amount, sim_amount)
+        pf_prices = pd.concat([pf_prices, forecast_df.set_index("Date")["Price"]], axis=1)
+        pf_prices = pf_prices.rename(columns={"Price": stock})
+        print("Combined df of past and future prices: ")
+        print(pf_prices)
+
         # Calculate the execution time
         end_time = time.time()
         execution_time = end_time - start_time
         print(f"Execution time: {execution_time} seconds to build dataset and ML models.")
+
+
+    print("Combined df of past and future prices: ")
+    print(pf_prices)
+    pf_prices = pf_prices.dropna()
+    print(pf_prices)
+    portefolio_df = efficient_frontier.efficient_frontier_sim(pf_prices)
+    print(portefolio_df)
+    
+    
