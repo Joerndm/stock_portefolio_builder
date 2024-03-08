@@ -1,11 +1,15 @@
-CREATE DATABASE 'stock_portefolio_builder';
+DROP DATABASE IF EXISTS `stock_portefolio_builder`;
+
+CREATE DATABASE IF NOT EXISTS `stock_portefolio_builder`;
+
+USE `stock_portefolio_builder`;
 
 CREATE TABLE `stock_Info_Data` (
   `ticker` VARCHAR(255) NOT NULL,
   `company_Name` VARCHAR(255),
   `industry` VARCHAR(255),
   PRIMARY KEY (`ticker`),
-  UNIQUE ('ticker')
+  UNIQUE (`ticker`)
 );
 
 CREATE TABLE `stock_Prediction` (
@@ -43,7 +47,7 @@ CREATE TABLE `stock_Price_Data` (
   `ema_120` FLOAT,
   `beta` FLOAT,
   `rsi` FLOAT,
-  CONSTRAINT 'PK_Stock_Price' PRIMARY KEY ('date', 'ticker'),
+  CONSTRAINT `PK_Stock_Price` PRIMARY KEY (`date`, `ticker`),
   FOREIGN KEY (`ticker`) REFERENCES `stock_Info_Data`(`ticker`)
 );
 
@@ -68,7 +72,7 @@ CREATE TABLE `stock_Income_Stmt_Data` (
   `eps` FLOAT,
   `eps_Growth` FLOAT,
   `average_shares` FLOAT,
-  CONSTRAINT 'PK_Stock_Income_STMT' PRIMARY KEY ('date', 'ticker'),
+  CONSTRAINT `PK_Stock_Income_STMT` PRIMARY KEY (`date`, `ticker`),
   FOREIGN KEY (`ticker`) REFERENCES `stock_Info_Data`(`ticker`)
 );
 
@@ -102,7 +106,7 @@ CREATE TABLE `stock_Balancesheet_Data` (
   `quick_Ratio_Growth` FLOAT,
   `debt_To_Equity` FLOAT,
   `debt_To_Equity_Growth` FLOAT,
-  CONSTRAINT 'PK_Stock_Balancesheet' PRIMARY KEY ('date', 'ticker'),
+  CONSTRAINT `PK_Stock_Balancesheet` PRIMARY KEY (`date`, `ticker`),
   FOREIGN KEY (`ticker`) REFERENCES `stock_Info_Data`(`ticker`)
 );
 
@@ -114,7 +118,7 @@ CREATE TABLE `stock_Cash_Flow_Data` (
   `free_Cash_Flow_Growth` FLOAT,
   `free_Cash_Flow_Per_Share` FLOAT,
   `free_Cash_Flow_Per_Share_Growth` FLOAT,
-  CONSTRAINT 'PK_Stock_Cash_Flow' PRIMARY KEY ('date', 'ticker'),
+  CONSTRAINT `PK_Stock_Cash_Flow` PRIMARY KEY (`date`, `ticker`),
   FOREIGN KEY (`ticker`) REFERENCES `stock_Info_Data`(`ticker`)
 );
 

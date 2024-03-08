@@ -681,7 +681,6 @@ def predict_future_price_changes(ticker, scaler, model, selected_features_list, 
                                 future_df["Momentum"] = momentum
                     
 
-            print(future_df)
             # Concat the pandas series as new line to the stock_mod_df
             prediction_df = pd.concat([stock_mod_df.iloc[-1].to_frame().transpose(), future_df], axis=0).reset_index(drop=True)
             prediction_df = prediction_df.drop(["Date", "Name", "Ticker", "Currency", "Price", "1D", "Trade volume", "Amount of stocks"], axis=1)
@@ -689,7 +688,6 @@ def predict_future_price_changes(ticker, scaler, model, selected_features_list, 
             stock_mod_df = pd.concat([stock_mod_df, future_df], axis=0).reset_index(drop=True)
             # Scale the prediction_df
             scaled_prediction_df = scaler.transform(prediction_df)
-            print(scaled_prediction_df)
             scaled_prediction_df = np.array(scaled_prediction_df[selected_features_list])
             # Predict the future stock price
             forecast = model.predict(scaled_prediction_df)
@@ -701,11 +699,12 @@ def predict_future_price_changes(ticker, scaler, model, selected_features_list, 
 
 
         stock_mod_df = stock_mod_df[features_list]
-        print(stock_mod_df)
         return stock_mod_df
 
 
     except ValueError:
+        print(future_df)
+        print(prediction_df)
         raise ValueError("The prediction could not be completed. Please check the input data.")
     
 # Combines the predicted stock prices from different models
@@ -727,9 +726,7 @@ def calculate_predicted_profit(forecast_df, prediction_days):
     """
     try:
         predicted_return_df = forecast_df.loc[len(forecast_df)-prediction_days:, "Price"]
-        print(predicted_return_df)
         predicted_return = ((predicted_return_df.iloc[-1] / predicted_return_df.iloc[0]) - 1) * 100
-        print(predicted_return)
         if predicted_return > 0:
             print(f"The prediction expects a profitable return on: {round(predicted_return, 2)}%, over the next {prediction_days} days.")
         elif predicted_return < 0:
@@ -799,34 +796,34 @@ if __name__ == "__main__":
     stock_symbols_list = stock_symbols_df["Symbol"].tolist()
     stock_symbol = stock_symbols_list[0]
     print(stock_symbol)
-    # Fetch stock data for the imported stock symbols
-    stock_price_data_df = stock_data_fetch.fetch_stock_price_data(stock_symbol)
-    stock_price_data_df = stock_data_fetch.calculate_period_returns(stock_price_data_df)
-    stock_price_data_df = stock_data_fetch.calculate_moving_averages(stock_price_data_df)
-    stock_price_data_df = stock_data_fetch.calculate_standard_diviation_value(stock_price_data_df)
-    stock_price_data_df = stock_data_fetch.calculate_bollinger_bands(stock_price_data_df)
-    # Fetch stock data for the imported stock symbols
-    full_stock_financial_data_df = stock_data_fetch.fetch_stock_financial_data(stock_symbol)
-    # Combine stock data with stock financial data
-    combined_stock_data_df = stock_data_fetch.combine_stock_data(stock_price_data_df, full_stock_financial_data_df)
-    # Calculate ratios
-    combined_stock_data_df = stock_data_fetch.calculate_ratios(combined_stock_data_df)
-    combined_stock_data_df = stock_data_fetch.calculate_momentum(combined_stock_data_df)
-    combined_stock_data_df = stock_data_fetch.drop_nan_values(combined_stock_data_df)
-    # Create a dictionary of dataframes to export to Excel
-    dataframes = {
-        "Combined Stock Data": combined_stock_data_df
-    }
-    # Export the dataframes to an Excel file
-    stock_data_fetch.export_to_excel(dataframes, 'stock_data_single.xlsx')
-    # Import the stock data from an Excel file
-    dataframes = stock_data_fetch.import_excel("stock_data_single.xlsx")
-    for key, value in dataframes.items():
-        dataframe = value
+    # # Fetch stock data for the imported stock symbols
+    # stock_price_data_df = stock_data_fetch.fetch_stock_price_data(stock_symbol)
+    # stock_price_data_df = stock_data_fetch.calculate_period_returns(stock_price_data_df)
+    # stock_price_data_df = stock_data_fetch.calculate_moving_averages(stock_price_data_df)
+    # stock_price_data_df = stock_data_fetch.calculate_standard_diviation_value(stock_price_data_df)
+    # stock_price_data_df = stock_data_fetch.calculate_bollinger_bands(stock_price_data_df)
+    # # Fetch stock data for the imported stock symbols
+    # full_stock_financial_data_df = stock_data_fetch.fetch_stock_financial_data(stock_symbol)
+    # # Combine stock data with stock financial data
+    # combined_stock_data_df = stock_data_fetch.combine_stock_data(stock_price_data_df, full_stock_financial_data_df)
+    # # Calculate ratios
+    # combined_stock_data_df = stock_data_fetch.calculate_ratios(combined_stock_data_df)
+    # combined_stock_data_df = stock_data_fetch.calculate_momentum(combined_stock_data_df)
+    # combined_stock_data_df = stock_data_fetch.drop_nan_values(combined_stock_data_df)
+    # # Create a dictionary of dataframes to export to Excel
+    # dataframes = {
+    #     "Combined Stock Data": combined_stock_data_df
+    # }
+    # # Export the dataframes to an Excel file
+    # stock_data_fetch.export_to_excel(dataframes, 'stock_data_single.xlsx')
+    # # Import the stock data from an Excel file
+    # dataframes = stock_data_fetch.import_excel("stock_data_single.xlsx")
+    # for key, value in dataframes.items():
+    #     dataframe = value
 
 
-    # Export the stock data to a CSV file
-    stock_data_fetch.convert_excel_to_csv(dataframe, "stock_data_single")
+    # # Export the stock data to a CSV file
+    # stock_data_fetch.convert_excel_to_csv(dataframe, "stock_data_single")
     stock_data_df = import_stock_data.import_as_df_from_csv('stock_data_single.csv')
     # Split the dataset into traning, test data and prediction data
     test_size = 0.20
@@ -852,14 +849,14 @@ if __name__ == "__main__":
         "Forecast Data": forecast_df
     }
     # Export the dataframes to an Excel file
-    stock_data_fetch.export_to_excel(dataframes, "stock_data_mod_single.xlsx")
+    # stock_data_fetch.export_to_excel(dataframes, "stock_data_mod_single.xlsx")
     calculate_predicted_profit(forecast_df, amount_of_days)
     # Plot the graph
     plot_graph(stock_data_df, forecast_df)
     # Run a Monte Carlo simulation
     year_amount = 20
     sim_amount = 1000
-    monte_carlo_df = monte_carlo_sim.monte_carlo_analysis(0, stock_data_df, forecast_df, year_amount, sim_amount)
+    monte_carlo_day_df, monte_carlo_year_df = monte_carlo_sim.monte_carlo_analysis(0, stock_data_df, forecast_df, year_amount, sim_amount)
     # Calculate the execution time
     end_time = time.time()
     execution_time = end_time - start_time
