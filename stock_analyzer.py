@@ -121,9 +121,6 @@ if __name__ == "__main__":
         # monte_carlo_day_df, monte_carlo_year_df = monte_carlo_sim.monte_carlo_analysis(0, stock_data_df, forecast_df, year_amount, sim_amount)
         pf_prices = pd.concat([pf_prices, forecast_df.set_index("Date")["Price"]], axis=1)
         pf_prices = pf_prices.rename(columns={"Price": stock})
-        print("Combined df of past and future prices: ")
-        print(pf_prices)
-
         # Calculate the execution time
         end_time = time.time()
         execution_time = end_time - start_time
