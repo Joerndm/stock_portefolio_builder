@@ -160,4 +160,4 @@ cython_debug/
 #.idea/
 
 # Folders
-genarated_graphs
+genarated_graphs/
