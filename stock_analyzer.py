@@ -127,10 +127,7 @@ if __name__ == "__main__":
         print(f"Execution time: {execution_time} seconds to build dataset and ML models.")
 
 
-    print("Combined df of past and future prices: ")
-    print(pf_prices)
     pf_prices = pf_prices.dropna()
-    print(pf_prices)
     portefolio_df = efficient_frontier.efficient_frontier_sim(pf_prices)
     print(portefolio_df)
     
