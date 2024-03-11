@@ -164,3 +164,6 @@ genarated_graphs/
 
 # Files
 test.py
+
+# File types
+*.png
