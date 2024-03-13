@@ -1,9 +1,8 @@
-import os
-import pandas as pd
-import time
+"""Module to analyze stock data and predict future stock prices."""
 
-import numpy as np
-import matplotlib.pyplot as plt
+import os
+import time
+import pandas as pd
 
 import stock_data_fetch
 import import_stock_data
@@ -118,7 +117,7 @@ if __name__ == "__main__":
         # Run a Monte Carlo simulation
         year_amount = 20
         sim_amount = 1500
-        # monte_carlo_day_df, monte_carlo_year_df = monte_carlo_sim.monte_carlo_analysis(0, stock_data_df, forecast_df, year_amount, sim_amount)
+        monte_carlo_day_df, monte_carlo_year_df = monte_carlo_sim.monte_carlo_analysis(0, stock_data_df, forecast_df, year_amount, sim_amount)
         pf_prices = pd.concat([pf_prices, forecast_df.set_index("Date")["Price"]], axis=1)
         pf_prices = pf_prices.rename(columns={"Price": stock})
         # Calculate the execution time
@@ -130,5 +129,3 @@ if __name__ == "__main__":
     pf_prices = pf_prices.dropna()
     portefolio_df = efficient_frontier.efficient_frontier_sim(pf_prices)
     print(portefolio_df)
-    
-    
