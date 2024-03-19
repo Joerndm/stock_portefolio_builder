@@ -41,13 +41,38 @@ def import_symbols(csv_file):
 
     except FileNotFoundError:
         raise FileNotFoundError(f"CSV file '{csv_file}' does not exist.")
+
+# Fetch company information for given ticker using yfinance
+def fetch_stock_standard_data(stock_symbol):
+
+    if len(stock_symbol) == "":
+        raise ValueError("The stock_symbols parameter cannot be empty.")
     
+    try:
+        # Fetch the stock data for the symbol
+        symbol = stock_symbol
+        stock_info = yf.Ticker(symbol).info
+        stock_info = {
+            "ticker": stock_info["symbol"],
+            "company_Name": stock_info["longName"],
+            "industry": stock_info["industry"]
+        }
+        # Create a DataFrame with the stock data
+        stock_info_df = pd.DataFrame(
+            stock_info,
+            index=[0]
+        )
+        return stock_info_df
+
+    except KeyError as e:
+        raise KeyError(f"Stock symbol '{symbol}' is invalid or not found.") from e
+
 # Import stock data using yfinance and a list of stock symbols
-def fetch_stock_price_data(stock_symbol):
+def fetch_stock_price_data(stock_symbol="", start_date=(datetime.datetime.now() - relativedelta(years=15))):
     """
     Fetches stock data using yfinance for the given stock symbols and returns a pandas DataFrame.
 
-    The DataFrame will contain the date, stock name, stock symbol, opening price, currency, and trade volume.
+    The DataFrame will contain the date, stock name, stock symbol, opening price, currency, and trade_Volume.
 
     Parameters:
     - stock_symbols (list): A list of stock symbols.
@@ -68,7 +93,7 @@ def fetch_stock_price_data(stock_symbol):
         symbol = stock_symbol
         # Fetch the stock data for the symbol
         stock_price_data = yf.download(
-            symbol, period="10y"
+            symbol, start=start_date
         )
         # Reset the index of the DataFrame
         stock_price_data_df = pd.DataFrame(
@@ -82,14 +107,13 @@ def fetch_stock_price_data(stock_symbol):
         # Rename the columns
         stock_price_data_df = stock_price_data_df.rename(
             columns={
-                "Open": "Price", "Volume": "Trade volume"
+                "Date" : "date", "Open" : "open_Price", "Volume" : "trade_Volume"
         })
         # Fetch the stock data for the symbol
         stock_info = yf.Ticker(symbol).info
         stock_info = {
-            "Name": stock_info["longName"],
-            "Ticker": stock_info["symbol"],
-            "Currency": stock_info["currency"]
+            "ticker": stock_info["symbol"],
+            "currency": stock_info["currency"]
         }
         # Create a DataFrame with the stock data
         stock_info_df = pd.DataFrame(
@@ -102,12 +126,11 @@ def fetch_stock_price_data(stock_symbol):
             how="cross"
         )
         return stock_price_data_df
-    
 
     except KeyError:
         raise KeyError(f"Stock symbol '{stock_symbol}' is invalid or not found.")
 
-# Calculate the period returns for the given stock data    
+# Calculate the period returns for the given stock data
 def calculate_period_returns_ori(stock_price_data_df):
     """
     Calculates the period returns for the given stock data and returns a pandas DataFrame.
@@ -162,10 +185,10 @@ def calculate_period_returns_ori(stock_price_data_df):
 
             # Calculate the 1 month change
             if date_1_month_ago != None:
-                one_month_change = (((stock_price_data_df.loc[index, "Price"] / stock_price_data_df.loc[stock_price_data_df["Date"] == date_1_month_ago, "Price"])-1))
+                one_month_change = (((stock_price_data_df.loc[index, "open_Price"] / stock_price_data_df.loc[stock_price_data_df["Date"] == date_1_month_ago, "open_Price"])-1))
                 one_month_change = one_month_change.values[-1]
             else:
-                one_month_change = (((stock_price_data_df.loc[index, "Price"] / stock_price_data_df.loc[0, "Price"])-1))
+                one_month_change = (((stock_price_data_df.loc[index, "open_Price"] / stock_price_data_df.loc[0, "open_Price"])-1))
 
             # Update the 1M Change column with the calculated value
             stock_price_data_df.loc[index, "1M"] = one_month_change
@@ -191,10 +214,10 @@ def calculate_period_returns_ori(stock_price_data_df):
 
             # Calculate the 3 month change
             if date_3_months_ago != None:
-                three_month_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].loc[stock_price_data_df["Date"] == date_3_months_ago])-1))
+                three_month_change = (((stock_price_data_df["open_Price"].loc[index]/stock_price_data_df["open_Price"].loc[stock_price_data_df["Date"] == date_3_months_ago])-1))
                 three_month_change = three_month_change.values[-1]
             else:
-                three_month_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].iloc[0])-1))
+                three_month_change = (((stock_price_data_df["open_Price"].loc[index]/stock_price_data_df["open_Price"].iloc[0])-1))
 
             # Update the 3M Change column with the calculated value
             stock_price_data_df.loc[index, "3M"] = three_month_change
@@ -220,10 +243,10 @@ def calculate_period_returns_ori(stock_price_data_df):
 
             # Calculate the 6 month change
             if date_6_months_ago != None:
-                six_month_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].loc[stock_price_data_df["Date"] == date_6_months_ago])-1))
+                six_month_change = (((stock_price_data_df["open_Price"].loc[index]/stock_price_data_df["open_Price"].loc[stock_price_data_df["Date"] == date_6_months_ago])-1))
                 six_month_change = six_month_change.values[-1]
             else:
-                six_month_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].iloc[0])-1))
+                six_month_change = (((stock_price_data_df["open_Price"].loc[index]/stock_price_data_df["open_Price"].iloc[0])-1))
 
             # Update the 6M Change column with the calculated value
             stock_price_data_df.loc[index, "6M"] = six_month_change
@@ -249,10 +272,10 @@ def calculate_period_returns_ori(stock_price_data_df):
 
             # Calculate the 9 month change
             if date_9_months_ago != None:
-                nine_month_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].loc[stock_price_data_df["Date"] == date_9_months_ago])-1))
+                nine_month_change = (((stock_price_data_df["open_Price"].loc[index]/stock_price_data_df["open_Price"].loc[stock_price_data_df["Date"] == date_9_months_ago])-1))
                 nine_month_change = nine_month_change.values[-1]
             else:
-                nine_month_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].iloc[0])-1))
+                nine_month_change = (((stock_price_data_df["open_Price"].loc[index]/stock_price_data_df["open_Price"].iloc[0])-1))
 
             # Update the 9M Change column with the calculated value
             stock_price_data_df.loc[index, "9M"] = nine_month_change
@@ -278,10 +301,10 @@ def calculate_period_returns_ori(stock_price_data_df):
 
             # Calculate the 1 year change
             if date_1_year_ago != None:
-                one_year_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].loc[stock_price_data_df["Date"] == date_1_year_ago])-1))
+                one_year_change = (((stock_price_data_df["open_Price"].loc[index]/stock_price_data_df["open_Price"].loc[stock_price_data_df["Date"] == date_1_year_ago])-1))
                 one_year_change = one_year_change.values[-1]
             else:
-                one_year_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].iloc[0])-1))
+                one_year_change = (((stock_price_data_df["open_Price"].loc[index]/stock_price_data_df["open_Price"].iloc[0])-1))
 
             # Update the 1Y Change column with the calculated value
             stock_price_data_df.loc[index, "1Y"] = one_year_change
@@ -307,10 +330,10 @@ def calculate_period_returns_ori(stock_price_data_df):
 
             # Calculate the 2 year change
             if date_2_years_ago != None:
-                two_year_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].loc[stock_price_data_df["Date"] == date_2_years_ago])-1))
+                two_year_change = (((stock_price_data_df["open_Price"].loc[index]/stock_price_data_df["open_Price"].loc[stock_price_data_df["Date"] == date_2_years_ago])-1))
                 two_year_change = two_year_change.values[-1]
             else:
-                two_year_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].iloc[0])-1))
+                two_year_change = (((stock_price_data_df["open_Price"].loc[index]/stock_price_data_df["open_Price"].iloc[0])-1))
 
             # Update the 2Y Change column with the calculated value
             stock_price_data_df.loc[index, "2Y"] = two_year_change
@@ -336,10 +359,10 @@ def calculate_period_returns_ori(stock_price_data_df):
 
             # Calculate the 3 year change
             if date_3_years_ago != None:
-                three_year_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].loc[stock_price_data_df["Date"] == date_3_years_ago])-1))
+                three_year_change = (((stock_price_data_df["open_Price"].loc[index]/stock_price_data_df["open_Price"].loc[stock_price_data_df["Date"] == date_3_years_ago])-1))
                 three_year_change = three_year_change.values[-1]
             else:
-                three_year_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].iloc[0])-1))
+                three_year_change = (((stock_price_data_df["open_Price"].loc[index]/stock_price_data_df["open_Price"].iloc[0])-1))
 
             # Update the 3Y Change column with the calculated value
             stock_price_data_df.loc[index, "3Y"] = three_year_change
@@ -365,10 +388,10 @@ def calculate_period_returns_ori(stock_price_data_df):
 
             # Calculate the 4 year change
             if date_4_years_ago != None:
-                four_year_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].loc[stock_price_data_df["Date"] == date_4_years_ago])-1))
+                four_year_change = (((stock_price_data_df["open_Price"].loc[index]/stock_price_data_df["open_Price"].loc[stock_price_data_df["Date"] == date_4_years_ago])-1))
                 four_year_change = four_year_change.values[-1]
             else:
-                four_year_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].iloc[0])-1))
+                four_year_change = (((stock_price_data_df["open_Price"].loc[index]/stock_price_data_df["open_Price"].iloc[0])-1))
 
             # Update the 4Y Change column with the calculated value
             stock_price_data_df.loc[index, "4Y"] = four_year_change
@@ -394,10 +417,10 @@ def calculate_period_returns_ori(stock_price_data_df):
 
             # Calculate the 5 year change
             if date_5_years_ago != None:
-                five_year_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].loc[stock_price_data_df["Date"] == date_5_years_ago])-1))
+                five_year_change = (((stock_price_data_df["open_Price"].loc[index]/stock_price_data_df["open_Price"].loc[stock_price_data_df["Date"] == date_5_years_ago])-1))
                 five_year_change = five_year_change.values[-1]
             else:
-                five_year_change = (((stock_price_data_df["Price"].loc[index]/stock_price_data_df["Price"].iloc[0])-1))
+                five_year_change = (((stock_price_data_df["open_Price"].loc[index]/stock_price_data_df["open_Price"].iloc[0])-1))
 
             # Update the 5Y Change column with the calculated value
             stock_price_data_df.loc[index, "5Y"] = five_year_change
@@ -410,10 +433,10 @@ def calculate_period_returns_ori(stock_price_data_df):
         return stock_price_data_df
     
 
-    except KeyError:
-        raise KeyError(f"Stock symbol '{stock_symbol}' is invalid or not found.")
+    except KeyError as e:
+        raise KeyError(f"") from e
 
-
+# Calculate the period returns for the given stock data
 def calculate_period_returns(stock_price_data_df):
     """
     Calculates the period returns for the given stock data and returns a pandas DataFrame.
@@ -437,25 +460,25 @@ def calculate_period_returns(stock_price_data_df):
 
     try:
         # Create a new columns in stock_price_data_df called 1D, 1M, 3M, 6M, 9M, 1Y, 2Y, 3Y, 4Y, and 5Y
-        stock_price_data_df["1D"] = stock_price_data_df["Price"].pct_change(1)
-        stock_price_data_df["1M"] = stock_price_data_df["Price"].pct_change(21)
-        stock_price_data_df["3M"] = stock_price_data_df["Price"].pct_change(63)
-        stock_price_data_df["6M"] = stock_price_data_df["Price"].pct_change(126)
-        stock_price_data_df["9M"] = stock_price_data_df["Price"].pct_change(189)
-        stock_price_data_df["1Y"] = stock_price_data_df["Price"].pct_change(252)
-        stock_price_data_df["2Y"] = stock_price_data_df["Price"].pct_change(504)
-        stock_price_data_df["3Y"] = stock_price_data_df["Price"].pct_change(756)
-        stock_price_data_df["4Y"] = stock_price_data_df["Price"].pct_change(1008)
-        stock_price_data_df["5Y"] = stock_price_data_df["Price"].pct_change(1260)
+        stock_price_data_df["1D"] = stock_price_data_df["open_Price"].pct_change(1)
+        stock_price_data_df["1M"] = stock_price_data_df["open_Price"].pct_change(21)
+        stock_price_data_df["3M"] = stock_price_data_df["open_Price"].pct_change(63)
+        stock_price_data_df["6M"] = stock_price_data_df["open_Price"].pct_change(126)
+        stock_price_data_df["9M"] = stock_price_data_df["open_Price"].pct_change(189)
+        stock_price_data_df["1Y"] = stock_price_data_df["open_Price"].pct_change(252)
+        stock_price_data_df["2Y"] = stock_price_data_df["open_Price"].pct_change(504)
+        stock_price_data_df["3Y"] = stock_price_data_df["open_Price"].pct_change(756)
+        stock_price_data_df["4Y"] = stock_price_data_df["open_Price"].pct_change(1008)
+        stock_price_data_df["5Y"] = stock_price_data_df["open_Price"].pct_change(1260)
         # Shift the rows by 1
         stock_price_data_df[["1M", "3M", "6M", "9M", "1Y", "2Y", "3Y", "4Y", "5Y"]] = stock_price_data_df[["1M", "3M", "6M", "9M", "1Y", "2Y", "3Y", "4Y", "5Y"]].shift(periods=1)
         # Return the stock_price_data_df DataFrame        
         return stock_price_data_df
     
 
-    except KeyError:
-        raise KeyError(f"Stock symbol '{stock_symbol}' is invalid or not found.")
-    
+    except KeyError as e:
+        raise KeyError(f"") from e
+
 # Calculate the moving averages for the given stock data
 def calculate_moving_averages(stock_price_data_df):
     """
@@ -479,76 +502,76 @@ def calculate_moving_averages(stock_price_data_df):
     
 
     try:
-        # Create a new columns in stock_price_data_df called SMA_40, SMA_120, EMA_40, and EMA_120
-        stock_price_data_df["SMA_40"] = 0.0
-        stock_price_data_df["SMA_120"] = 0.0
-        stock_price_data_df["EMA_40"] = 0.0
-        stock_price_data_df["EMA_120"] = 0.0
+        # Create a new columns in stock_price_data_df called sma_40, sma_120, ema_40, and ema_120
+        stock_price_data_df["sma_40"] = 0.0
+        stock_price_data_df["sma_120"] = 0.0
+        stock_price_data_df["ema_40"] = 0.0
+        stock_price_data_df["ema_120"] = 0.0
         # Loop through each row in stock_price_data_df
         for index, row in stock_price_data_df.iterrows():
-            # Calculate SMA_40 for every row
+            # Calculate sma_40 for every row
             if index == 0:
-                sma_40 = stock_price_data_df.iloc[index]["Price"]
+                sma_40 = stock_price_data_df.iloc[index]["open_Price"]
             elif index >= 40:
-                sma_40 = stock_price_data_df.iloc[index-39:index+1]["Price"].mean()
+                sma_40 = stock_price_data_df.iloc[index-39:index+1]["open_Price"].mean()
             else:
-                sma_40 = stock_price_data_df.iloc[0:index+1]["Price"].mean()
+                sma_40 = stock_price_data_df.iloc[0:index+1]["open_Price"].mean()
 
-            # Update the SMA_40 column with the calculated value
-            stock_price_data_df.loc[index, "SMA_40"] = sma_40
-            # Calculate SMA_120 for every row
+            # Update the sma_40 column with the calculated value
+            stock_price_data_df.loc[index, "sma_40"] = sma_40
+            # Calculate sma_120 for every row
             if index == 0:
-                sma_120 = stock_price_data_df.iloc[index]["Price"]
+                sma_120 = stock_price_data_df.iloc[index]["open_Price"]
             elif index >= 120:
-                sma_120 = stock_price_data_df.iloc[index-119:index+1]["Price"].mean()
+                sma_120 = stock_price_data_df.iloc[index-119:index+1]["open_Price"].mean()
             else:
-                sma_120 = stock_price_data_df.iloc[0:index+1]["Price"].mean()
+                sma_120 = stock_price_data_df.iloc[0:index+1]["open_Price"].mean()
 
-            # Update the SMA_120 column with the calculated value
-            stock_price_data_df.loc[index, "SMA_120"] = sma_120
-            # Calculate EMA_40 for every row
+            # Update the sma_120 column with the calculated value
+            stock_price_data_df.loc[index, "sma_120"] = sma_120
+            # Calculate ema_40 for every row
             if index == 0:
-                ema_40 = stock_price_data_df.iloc[index]["Price"]
+                ema_40 = stock_price_data_df.iloc[index]["open_Price"]
             elif index >= 40:
-                ema_40 = stock_price_data_df.iloc[index-39:index+1]["Price"].ewm(span=40).mean()
+                ema_40 = stock_price_data_df.iloc[index-39:index+1]["open_Price"].ewm(span=40).mean()
                 ema_40 = ema_40.values[-1]
             else:
-                ema_40 = stock_price_data_df.iloc[0:index+1]["Price"].ewm(span=40).mean()
+                ema_40 = stock_price_data_df.iloc[0:index+1]["open_Price"].ewm(span=40).mean()
                 if ema_40.empty:
                     ema_40 = 0.0
                 else:
                     ema_40 = ema_40.values[-1]
 
-            # Update the EMA_40 column with the calculated value
-            stock_price_data_df.loc[index, "EMA_40"] = ema_40
-            # Calculate EMA_120 for every row
+            # Update the ema_40 column with the calculated value
+            stock_price_data_df.loc[index, "ema_40"] = ema_40
+            # Calculate ema_120 for every row
             if index == 0:
-                ema_120 = stock_price_data_df.iloc[index]["Price"]
+                ema_120 = stock_price_data_df.iloc[index]["open_Price"]
             elif index >= 120:
-                ema_120 = stock_price_data_df.iloc[index-119:index+1]["Price"].ewm(span=120).mean()
+                ema_120 = stock_price_data_df.iloc[index-119:index+1]["open_Price"].ewm(span=120).mean()
                 ema_120 = ema_120.values[-1]
             else:
-                ema_120 = stock_price_data_df.iloc[0:index+1]["Price"].ewm(span=120).mean()
+                ema_120 = stock_price_data_df.iloc[0:index+1]["open_Price"].ewm(span=120).mean()
                 if ema_120.empty:
                     ema_120 = 0.0
                 else:
                     ema_120 = ema_120.values[-1]
 
-            # Update the EMA_120 column with the calculated value
-            stock_price_data_df.loc[index, "EMA_120"] = ema_120
+            # Update the ema_120 column with the calculated value
+            stock_price_data_df.loc[index, "ema_120"] = ema_120
             # Create print statement per 250 index processed
             if index % 250 == 0:
                 print(f"Processed {index} rows, out of {len(stock_price_data_df)} rows.")
 
 
-        stock_price_data_df[["SMA_40", "SMA_120", "EMA_40", "EMA_120"]] = stock_price_data_df[["SMA_40", "SMA_120", "EMA_40", "EMA_120"]].shift(1)
+        stock_price_data_df[["sma_40", "sma_120", "ema_40", "ema_120"]] = stock_price_data_df[["sma_40", "sma_120", "ema_40", "ema_120"]].shift(1)
         print("Moving averages calculated successfully.")
         # Return the stock_price_data_df DataFrame
         return stock_price_data_df
 
 
-    except KeyError:
-        raise KeyError(f"Stock symbol '{stock_symbol}' is invalid or not found.")
+    except KeyError as e:
+        raise KeyError(f"") from e
 
 # Calculate the standard deviation of the stock price
 def calculate_standard_diviation_value(stock_price_data_df):
@@ -574,31 +597,31 @@ def calculate_standard_diviation_value(stock_price_data_df):
 
     try:
         # Calculate the standard deviation of the stock price
-        # Create a new columns in stock_price_data_df called STD_Div_40, STD_Div_120
-        stock_price_data_df["STD_Div_40"] = 0.0
-        stock_price_data_df["STD_Div_120"] = 0.0
+        # Create a new columns in stock_price_data_df called std_Div_40, std_Div_120
+        stock_price_data_df["std_Div_40"] = 0.0
+        stock_price_data_df["std_Div_120"] = 0.0
         # Loop through each row in stock_price_data_df
         for index, row in stock_price_data_df.iterrows():
-            # Calculate std_div_40 for every row
+            # Calculate std_Div_40 for every row
             if index == 0:
-                std_div_40 = 0.0            
+                std_Div_40 = 0.0            
             elif index >= 40:
-                std_div_40 = stock_price_data_df.iloc[index-39:index+1]["Price"].std()
+                std_Div_40 = stock_price_data_df.iloc[index-39:index+1]["open_Price"].std()
             else:
-                std_div_40 = stock_price_data_df.iloc[0:index+1]["Price"].std()
+                std_Div_40 = stock_price_data_df.iloc[0:index+1]["open_Price"].std()
 
-            # Update the STD_Div_40 column with the calculated value
-            stock_price_data_df.loc[index, "STD_Div_40"] = std_div_40
-            # Calculate std_div_120 for every row
+            # Update the std_Div_40 column with the calculated value
+            stock_price_data_df.loc[index, "std_Div_40"] = std_Div_40
+            # Calculate std_Div_120 for every row
             if index == 0:
-                std_div_120 = 0.0
+                std_Div_120 = 0.0
             elif index >= 120:
-                std_div_120 = stock_price_data_df.iloc[index-119:index+1]["Price"].std()
+                std_Div_120 = stock_price_data_df.iloc[index-119:index+1]["open_Price"].std()
             else:
-                std_div_120 = stock_price_data_df.iloc[0:index+1]["Price"].std()
+                std_Div_120 = stock_price_data_df.iloc[0:index+1]["open_Price"].std()
 
-            # Update the STD_Div_120 column with the calculated value
-            stock_price_data_df.loc[index, "STD_Div_120"] = std_div_120
+            # Update the std_Div_120 column with the calculated value
+            stock_price_data_df.loc[index, "std_Div_120"] = std_Div_120
             # Create print statement per 250 index processed
             if index % 250 == 0:
                 print(f"Processed {index} rows, out of {len(stock_price_data_df)} rows.")
@@ -606,12 +629,12 @@ def calculate_standard_diviation_value(stock_price_data_df):
 
         print("Standard deviation of the stock price calculated successfully.")
         # Return the stock_price_data_df DataFrame
-        stock_price_data_df[["STD_Div_40", "STD_Div_120"]] = stock_price_data_df[["STD_Div_40", "STD_Div_120"]].shift(1)
+        stock_price_data_df[["std_Div_40", "std_Div_120"]] = stock_price_data_df[["std_Div_40", "std_Div_120"]].shift(1)
         return stock_price_data_df
         
 
-    except KeyError:
-        raise KeyError(f"Stock symbol '{stock_symbol}' is invalid or not found.")
+    except KeyError as e:
+        raise KeyError(f"") from e
 
 # Calculate the stock price momentum
 def calculate_bollinger_bands(stock_price_data_df):
@@ -637,40 +660,31 @@ def calculate_bollinger_bands(stock_price_data_df):
     try:
         # Calculate the Bollinger Bands for the given stock data
         # Create a new columns in stock_price_data_df called Bollinger_Bands_40, Bollinger_Bands_120
-        # stock_price_data_df["Bollinger_Band_40_Upper"] = 0.0
-        # stock_price_data_df["Bollinger_Band_40_Lower"] = 0.0
-        stock_price_data_df["Bollinger_Band_40"] = 0.0
-        # stock_price_data_df["Bollinger_Band_120_Upper"] = 0.0
-        # stock_price_data_df["Bollinger_Band_120_Lower"] = 0.0
-        stock_price_data_df["Bollinger_Band_120"] = 0.0
+        stock_price_data_df["bollinger_Band_40_2STD"] = 0.0
+        stock_price_data_df["bollinger_Band_120_2STD"] = 0.0
         # Loop through each row in stock_price_data_df
         for index, row in stock_price_data_df.iterrows():
             # Calculate Bollinger_Bands_40 for every row
-            bollinger_Band_40_Upper = (stock_price_data_df.iloc[index]["SMA_40"] + (stock_price_data_df.iloc[index]["STD_Div_40"] * 2))
-            bollinger_Band_40_Lower = (stock_price_data_df.iloc[index]["SMA_40"] - (stock_price_data_df.iloc[index]["STD_Div_40"] * 2))
+            bollinger_Band_40_Upper = (stock_price_data_df.iloc[index]["sma_40"] + (stock_price_data_df.iloc[index]["std_Div_40"] * 2))
+            bollinger_Band_40_Lower = (stock_price_data_df.iloc[index]["sma_40"] - (stock_price_data_df.iloc[index]["std_Div_40"] * 2))
             # Update the Bollinger_Bands_40 column with the calculated value
-            # stock_price_data_df.loc[index, "Bollinger_Band_40_Upper"] = bollinger_Band_40_Upper
-            # stock_price_data_df.loc[index, "Bollinger_Band_40_Lower"] = bollinger_Band_40_Lower
-            stock_price_data_df.loc[index, "Bollinger_Band_40"] = bollinger_Band_40_Upper - bollinger_Band_40_Lower
-            bollinger_Band_120_Upper = (stock_price_data_df.iloc[index]["SMA_120"] + (stock_price_data_df.iloc[index]["STD_Div_120"] * 2))
-            bollinger_Band_120_Lower = (stock_price_data_df.iloc[index]["SMA_120"] - (stock_price_data_df.iloc[index]["STD_Div_120"] * 2))
+            stock_price_data_df.loc[index, "bollinger_Band_40_2STD"] = bollinger_Band_40_Upper - bollinger_Band_40_Lower
+            bollinger_Band_120_Upper = (stock_price_data_df.iloc[index]["sma_120"] + (stock_price_data_df.iloc[index]["std_Div_120"] * 2))
+            bollinger_Band_120_Lower = (stock_price_data_df.iloc[index]["sma_120"] - (stock_price_data_df.iloc[index]["std_Div_120"] * 2))
             # Update the Bollinger_Bands_120 column with the calculated value
-            # stock_price_data_df.loc[index, "Bollinger_Band_120_Upper"] = bollinger_Band_120_Upper
-            # stock_price_data_df.loc[index, "Bollinger_Band_120_Lower"] = bollinger_Band_120_Lower
-            stock_price_data_df.loc[index, "Bollinger_Band_120"] = (bollinger_Band_120_Upper - bollinger_Band_120_Lower)
+            stock_price_data_df.loc[index, "bollinger_Band_120_2STD"] = (bollinger_Band_120_Upper - bollinger_Band_120_Lower)
             # Create print statement per 250 index processed
             if index % 250 == 0:
                 print(f"Processed {index} rows, out of {len(stock_price_data_df)} rows.")
 
         print("Bollinger Bands calculated successfully.")
         # Return the stock_price_data_df DataFrame
-        # stock_price_data_df[["Bollinger_Band_40_Upper", "Bollinger_Band_40_Lower", "Bollinger_Band_120_Upper", "Bollinger_Band_120_Lower"]] = stock_price_data_df[["Bollinger_Band_40_Upper", "Bollinger_Band_40_Lower", "Bollinger_Band_120_Upper", "Bollinger_Band_120_Lower"]].shift(1)
-        stock_price_data_df[["Bollinger_Band_40", "Bollinger_Band_120"]] = stock_price_data_df[["Bollinger_Band_40", "Bollinger_Band_120"]].shift(1)
+        stock_price_data_df[["bollinger_Band_40_2STD", "bollinger_Band_120_2STD"]] = stock_price_data_df[["bollinger_Band_40_2STD", "bollinger_Band_120_2STD"]].shift(1)
         return stock_price_data_df
     
 
-    except KeyError:
-        raise KeyError(f"Stock symbol '{stock_symbol}' is invalid or not found.")
+    except KeyError as e:
+        raise KeyError(f"") from e
 
 # Calculate the stock price momentum
 def calculate_momentum(stock_price_data_df):
@@ -693,35 +707,33 @@ def calculate_momentum(stock_price_data_df):
     # Checking if the stock_price_data_df parameter is empty
     if stock_price_data_df.empty:
         raise ValueError("No stock data provided.")
-    
 
     try:
         # Calculate the momentum for the given stock data
-        # Create a new columns in stock_price_data_df called Momentum
-        stock_price_data_df["Momentum"] = 0.0
+        # Create a new columns in stock_price_data_df called momentum
+        stock_price_data_df["momentum"] = 0.0
         for index, row in stock_price_data_df.iterrows():
-            # Calculate STD_Div_40 for every row
+            # Calculate std_Div_40 for every row
             if index == 0:
                 momentum = 0.0    
-            elif stock_price_data_df.iloc[index]["Price"] >= stock_price_data_df.iloc[index-1]["Price"]:
-                if stock_price_data_df.loc[index-1, "Momentum"] <= 0:
+            elif stock_price_data_df.iloc[index]["open_Price"] >= stock_price_data_df.iloc[index-1]["open_Price"]:
+                if stock_price_data_df.loc[index-1, "momentum"] <= 0:
                     momentum = 1
-                    # Update the Momentum column with the calculated value
-                    stock_price_data_df.loc[index, "Momentum"] = momentum
-                elif stock_price_data_df.loc[index-1, "Momentum"] > 0:
-                    momentum = stock_price_data_df.loc[index-1, "Momentum"] + 1
-                    # Update the Momentum column with the calculated value
-                    stock_price_data_df.loc[index, "Momentum"] = momentum
-            elif stock_price_data_df.iloc[index]["Price"] < stock_price_data_df.iloc[index-1]["Price"]:
-                if stock_price_data_df.loc[index-1, "Momentum"] >= 0:
+                    # Update the momentum column with the calculated value
+                    stock_price_data_df.loc[index, "momentum"] = momentum
+                elif stock_price_data_df.loc[index-1, "momentum"] > 0:
+                    momentum = stock_price_data_df.loc[index-1, "momentum"] + 1
+                    # Update the momentum column with the calculated value
+                    stock_price_data_df.loc[index, "momentum"] = momentum
+            elif stock_price_data_df.iloc[index]["open_Price"] < stock_price_data_df.iloc[index-1]["open_Price"]:
+                if stock_price_data_df.loc[index-1, "momentum"] >= 0:
                     momentum = -1
-                    # Update the Momentum column with the calculated value
-                    stock_price_data_df.loc[index, "Momentum"] = momentum
-                elif stock_price_data_df.loc[index-1, "Momentum"] < 0:
-                    momentum = stock_price_data_df.loc[index-1, "Momentum"] - 1
-                    # Update the Momentum column with the calculated value
-                    stock_price_data_df.loc[index, "Momentum"] = momentum
-
+                    # Update the momentum column with the calculated value
+                    stock_price_data_df.loc[index, "momentum"] = momentum
+                elif stock_price_data_df.loc[index-1, "momentum"] < 0:
+                    momentum = stock_price_data_df.loc[index-1, "momentum"] - 1
+                    # Update the momentum column with the calculated value
+                    stock_price_data_df.loc[index, "momentum"] = momentum
 
             # Create print statement per 250 index processed
             if index % 250 == 0:
@@ -729,12 +741,11 @@ def calculate_momentum(stock_price_data_df):
 
         print("Momentum calculated successfully.")
         # Return the stock_price_data_df DataFrame
-        stock_price_data_df["Momentum"] = stock_price_data_df["Momentum"].shift(1)
+        stock_price_data_df["momentum"] = stock_price_data_df["momentum"].shift(1)
         return stock_price_data_df
-    
 
-    except KeyError:
-        raise KeyError(f"Stock symbol '{stock_symbol}' is invalid or not found.")                
+    except KeyError as e:
+        raise KeyError(f"") from e               
 
 # Import financial stock data using yfinance and a list of stock symbols
 def fetch_stock_financial_data(stock_symbol):
@@ -1502,13 +1513,13 @@ def calculate_ratios(combined_stock_data_df):
         raise ValueError("No combined stock data provided.")
 
     # Calculate the P/S ratio
-    combined_stock_data_df["P/S"] = combined_stock_data_df["Price"] / (combined_stock_data_df["Revenue"] / combined_stock_data_df["Amount of stocks"])
+    combined_stock_data_df["P/S"] = combined_stock_data_df["open_Price"] / (combined_stock_data_df["Revenue"] / combined_stock_data_df["Amount of stocks"])
     # Calculate the P/E ratio
-    combined_stock_data_df["P/E"] = combined_stock_data_df["Price"] / combined_stock_data_df["EPS"]
+    combined_stock_data_df["P/E"] = combined_stock_data_df["open_Price"] / combined_stock_data_df["EPS"]
     # Calculate the P/B ratio
-    combined_stock_data_df["P/B"] = combined_stock_data_df["Price"] / combined_stock_data_df["Book Value per share"]
+    combined_stock_data_df["P/B"] = combined_stock_data_df["open_Price"] / combined_stock_data_df["Book Value per share"]
     # Calculate the P/FCF ratio
-    combined_stock_data_df["P/FCF"] = combined_stock_data_df["Price"] / combined_stock_data_df["Free Cash Flow per share growth"]
+    combined_stock_data_df["P/FCF"] = combined_stock_data_df["open_Price"] / combined_stock_data_df["Free Cash Flow per share growth"]
     print("Ratios have been calculated successfully, and added to the dataframe.")
     combined_stock_data_df[["P/S", "P/E", "P/B", "P/FCF"]] = combined_stock_data_df[["P/S", "P/E", "P/B", "P/FCF"]].shift(1)
     return combined_stock_data_df
@@ -1654,44 +1665,90 @@ def convert_excel_to_csv(dataframe, file_name):
 # Run the main function
 if __name__ == "__main__":
     start_time = time.time()
-    # Import stock symbols from a CSV file
-    stock_symbols_df = import_symbols("index_symbol_list_single_stock.csv")
-    stock_symbols_list = stock_symbols_df["Symbol"].tolist()
-    stock_symbol = stock_symbols_list[0]
-    print(stock_symbol)
-    # Fetch stock data for the imported stock symbols
-    stock_price_data_df = fetch_stock_price_data(stock_symbol)
-    stock_price_data_df = calculate_period_returns(stock_price_data_df)
-    stock_price_data_df = calculate_moving_averages(stock_price_data_df)
-    stock_price_data_df = calculate_standard_diviation_value(stock_price_data_df)
-    stock_price_data_df = calculate_bollinger_bands(stock_price_data_df)
-    # Fetch stock data for the imported stock symbols
-    full_stock_financial_data_df = fetch_stock_financial_data(stock_symbol)
-    # print(full_stock_financial_data_df)
-    # Combine stock data with stock financial data
-    combined_stock_data_df = combine_stock_data(stock_price_data_df, full_stock_financial_data_df)
-    # print(combined_stock_data_df)
-    # Calculate ratios
-    combined_stock_data_df = calculate_ratios(combined_stock_data_df)
-    # print(combined_stock_data_df)
-    combined_stock_data_df = calculate_momentum(combined_stock_data_df)
-    combined_stock_data_df = drop_nan_values(combined_stock_data_df)
-    # Create a dictionary of dataframes to export to Excel
-    dataframes = {
-        "Stock Price Data": stock_price_data_df,
-        "Full Stock Financial Data": full_stock_financial_data_df,
-        "Combined Stock Data": combined_stock_data_df
-    }
-    # Export the dataframes to an Excel file
-    export_to_excel(dataframes, "stock_data_single.xlsx")
-    # Import the stock data from an Excel file
-    dataframes = import_excel("stock_data_single.xlsx")
-    for key, value in dataframes.items():
-        dataframe = value
+    # stock_symbols_df = import_symbols("index_symbol_list_single_stock.csv")
+    # stock_symbols_list = stock_symbols_df["Symbol"].tolist()
+    # stock_symbol = stock_symbols_list[0]
+    # print(stock_symbol)
+    # stock_info_data_df = fetch_stock_standard_data(ticker)
+    import db_interactions
+    ticker_list = db_interactions.import_ticker_list()
+    for ticker in ticker_list:
+        print(ticker)
+        if db_interactions.control_if_stock_exists(ticker) == False:
+            print("Stock does not exist")
+            # Fetch stock data for the imported stock symbols
+            stock_price_data_df = fetch_stock_price_data(ticker)
+            stock_price_data_df = calculate_period_returns(stock_price_data_df)
+            stock_price_data_df = calculate_moving_averages(stock_price_data_df)
+            stock_price_data_df = calculate_standard_diviation_value(stock_price_data_df)
+            stock_price_data_df = calculate_bollinger_bands(stock_price_data_df)
+            stock_price_data_df = calculate_momentum(stock_price_data_df)
+            stock_price_data_df = stock_price_data_df[['date', 'ticker', 'currency', 'trade_Volume',
+                                    'open_Price', '1D', '1M', '3M', '6M', '9M', '1Y', '2Y', '3Y', '4Y', '5Y',
+                                    'sma_40', 'sma_120', 'ema_40', 'ema_120', 'std_Div_40', 'std_Div_120',
+                                    'bollinger_Band_40_2STD', 'bollinger_Band_120_2STD', 'momentum'
+                                    ]]
+            stock_price_data_df = stock_price_data_df.dropna()
+            db_interactions.export_to_stock_price_data(stock_price_data_df)
+        elif db_interactions.control_if_stock_exists(ticker) == True:
+            print("Stock exists")
+            stock_price_data_df = db_interactions.import_from_stock_price_data()
+            date = stock_price_data_df.iloc[0]["date"]
+            if str(date) == datetime.datetime.now().strftime("%Y-%m-%d"):
+                print(f"Today's data is already fetched for {ticker}")
+            else:
+                new_date = date + relativedelta(days=1)
+                if new_date.weekday() == 5:
+                    new_date = new_date + datetime.timedelta(days=1)
+                elif new_date.weekday() == 6:
+                    new_date = new_date + datetime.timedelta(days=2)
+
+                stock_price_data_df = db_interactions.import_from_stock_price_data(252*5)
+                stock_price_data_df["date"] = pd.to_datetime(stock_price_data_df["date"])
+                print(f"New date is: {new_date}")
+                new_stock_price_data_df = fetch_stock_price_data(ticker, new_date)
+                # change the date column to object type
+                stock_price_data_df = pd.concat([stock_price_data_df, new_stock_price_data_df], axis=0, ignore_index=True)
+                stock_price_data_df = calculate_period_returns(stock_price_data_df)
+                stock_price_data_df = calculate_moving_averages(stock_price_data_df)
+                stock_price_data_df = calculate_standard_diviation_value(stock_price_data_df)
+                stock_price_data_df = calculate_bollinger_bands(stock_price_data_df)
+                stock_price_data_df = calculate_momentum(stock_price_data_df)
+                stock_price_data_df = stock_price_data_df.loc[stock_price_data_df["date"] >= new_stock_price_data_df.loc[0, "date"]]
+                stock_price_data_df = stock_price_data_df[['date', 'ticker', 'currency', 'trade_Volume',
+                                    'open_Price', '1D', '1M', '3M', '6M', '9M', '1Y', '2Y', '3Y', '4Y', '5Y',
+                                    'sma_40', 'sma_120', 'ema_40', 'ema_120', 'std_Div_40', 'std_Div_120',
+                                    'bollinger_Band_40_2STD', 'bollinger_Band_120_2STD', 'momentum'
+                                    ]]
+                db_interactions.export_to_stock_price_data(stock_price_data_df)
 
 
-    # Export the stock data to a CSV file
-    convert_excel_to_csv(dataframe, "stock_data_single")
+
+
+    # # Combine stock data with stock financial data
+    # combined_stock_data_df = combine_stock_data(stock_price_data_df, full_stock_financial_data_df)
+    # # print(combined_stock_data_df)
+    # # Calculate ratios
+    # combined_stock_data_df = calculate_ratios(combined_stock_data_df)
+    # # print(combined_stock_data_df)
+    # combined_stock_data_df = calculate_momentum(combined_stock_data_df)
+    # combined_stock_data_df = drop_nan_values(combined_stock_data_df)
+    # # Create a dictionary of dataframes to export to Excel
+    # dataframes = {
+    #     "Stock Price Data": stock_price_data_df,
+    #     "Full Stock Financial Data": full_stock_financial_data_df,
+    #     "Combined Stock Data": combined_stock_data_df
+    # }
+    # # Export the dataframes to an Excel file
+    # export_to_excel(dataframes, "stock_data_single.xlsx")
+    # # Import the stock data from an Excel file
+    # dataframes = import_excel("stock_data_single.xlsx")
+    # for key, value in dataframes.items():
+    #     dataframe = value
+
+
+    # # Export the stock data to a CSV file
+    # convert_excel_to_csv(dataframe, "stock_data_single")
     # Calculate the execution time
     end_time = time.time()
     execution_time = end_time - start_time

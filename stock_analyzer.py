@@ -1,5 +1,4 @@
 """Module to analyze stock data and predict future stock prices."""
-
 import os
 import time
 import pandas as pd
@@ -45,9 +44,8 @@ def import_symbols(csv_file):
         # Return the DataFrame with stock symbols
         return df[['Symbol']]
 
-    except FileNotFoundError:
-        raise FileNotFoundError(f"CSV file '{csv_file}' does not exist.")
-
+    except FileNotFoundError as e:
+        raise FileNotFoundError(f"The specified CSV file '{csv_file}' does not exist.") from e
 
 if __name__ == "__main__":
     # Import stock symbols from a CSV file
