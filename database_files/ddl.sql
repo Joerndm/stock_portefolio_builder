@@ -12,17 +12,6 @@ CREATE TABLE `stock_info_data` (
   UNIQUE (`ticker`)
 );
 
-CREATE TABLE `stock_prediction` (
-  `ticker` VARCHAR(255) NOT NULL,
-  `model_Type` VARCHAR(255),
-  `model_Equation` VARCHAR(255),
-  `prediction_30_Days` FLOAT,
-  `prediction_60_Days` FLOAT,
-  `prediction_90_Days` FLOAT,
-  PRIMARY KEY (`ticker`),
-  FOREIGN KEY (`ticker`) REFERENCES `stock_info_data`(`ticker`)
-);
-
 CREATE TABLE `stock_price_data` (
   `date` DATE NOT NULL,
   `ticker` VARCHAR(255) NOT NULL ,
@@ -123,3 +112,13 @@ CREATE TABLE `stock_cash_flow_data` (
   FOREIGN KEY (`ticker`) REFERENCES `stock_info_data`(`ticker`)
 );
 
+CREATE TABLE `stock_prediction_data` (
+  `ticker` VARCHAR(255) NOT NULL,
+  `model_Type` VARCHAR(255),
+  `model_Equation` VARCHAR(255),
+  `prediction_30_Days` FLOAT,
+  `prediction_60_Days` FLOAT,
+  `prediction_90_Days` FLOAT,
+  PRIMARY KEY (`ticker`),
+  FOREIGN KEY (`ticker`) REFERENCES `stock_info_data`(`ticker`)
+);

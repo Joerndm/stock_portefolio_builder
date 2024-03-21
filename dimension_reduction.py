@@ -60,12 +60,10 @@ def feature_selection(dimensions, x_traning_data, x_test_data, y_traning_data, y
         if column in dataset_column_list:
             dataset_column_list = dataset_column_list.drop([column])
 
-
     selected_features_list = []
     for i in range(len(selected_features.get_support())):
         if selected_features.get_support()[i]:
             selected_features_list.append(dataset_column_list[i])
-
 
     # print(selected_features_list)
     # # Check the ANOVA F-Values
