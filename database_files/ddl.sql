@@ -42,7 +42,7 @@ CREATE TABLE `stock_price_data` (
 );
 
 CREATE TABLE `stock_income_stmt_data` (
-  `date` DATE NOT NULL,
+  `financial_Statement_Date` DATE NOT NULL,
   `date_published` DATE,
   `ticker` VARCHAR(255) NOT NULL,
   `revenue` FLOAT,
@@ -62,13 +62,13 @@ CREATE TABLE `stock_income_stmt_data` (
   `eps` FLOAT,
   `eps_Growth` FLOAT,
   `average_shares` FLOAT,
-  CONSTRAINT `PK_Stock_income_stmt` PRIMARY KEY (`date`, `ticker`),
+  CONSTRAINT `PK_Stock_income_stmt` PRIMARY KEY (`financial_Statement_Date`, `ticker`),
   FOREIGN KEY (`ticker`) REFERENCES `stock_info_data`(`ticker`)
 );
 
 CREATE TABLE `stock_balancesheet_data` (
-  `date` DATE NOT NULL,
-  `date_published` DATE,
+  `financial_Statement_Date` DATE NOT NULL,
+  `date_Published` DATE,
   `ticker` VARCHAR(255) NOT NULL,
   `total_Assets` FLOAT,
   `total_Assets_Growth` FLOAT,
@@ -96,19 +96,30 @@ CREATE TABLE `stock_balancesheet_data` (
   `quick_Ratio_Growth` FLOAT,
   `debt_To_Equity` FLOAT,
   `debt_To_Equity_Growth` FLOAT,
-  CONSTRAINT `PK_dtock_balancesheet` PRIMARY KEY (`date`, `ticker`),
+  CONSTRAINT `PK_dtock_balancesheet` PRIMARY KEY (`financial_Statement_Date`, `ticker`),
   FOREIGN KEY (`ticker`) REFERENCES `stock_info_data`(`ticker`)
 );
 
 CREATE TABLE `stock_cash_flow_data` (
-  `date` DATE NOT NULL,
+  `financial_Statement_Date` DATE NOT NULL,
   `date_published` DATE,
   `ticker` VARCHAR(255) NOT NULL,
   `free_Cash_Flow` FLOAT,
   `free_Cash_Flow_Growth` FLOAT,
   `free_Cash_Flow_Per_Share` FLOAT,
   `free_Cash_Flow_Per_Share_Growth` FLOAT,
-  CONSTRAINT `PK_stock_cash_flow` PRIMARY KEY (`date`, `ticker`),
+  CONSTRAINT `PK_stock_cash_flow` PRIMARY KEY (`financial_Statement_Date`, `ticker`),
+  FOREIGN KEY (`ticker`) REFERENCES `stock_info_data`(`ticker`)
+);
+
+CREATE TABLE `stock_ratio_data` (
+  `date` DATE NOT NULL,
+  `ticker` VARCHAR(255) NOT NULL,
+  `p_s` FLOAT,
+  `p_e` FLOAT,
+  `p_b` FLOAT,
+  `p_fcf` FLOAT,
+  CONSTRAINT `PK_stock_ratio_data` PRIMARY KEY (`date`, `ticker`),
   FOREIGN KEY (`ticker`) REFERENCES `stock_info_data`(`ticker`)
 );
 

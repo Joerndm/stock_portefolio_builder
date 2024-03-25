@@ -119,10 +119,9 @@ def fetch_stock_price_data(stock_ticker="", start_date=(datetime.datetime.now() 
         raise ValueError("The start_date parameter cannot be empty.")
 
     try:
-        ticker = stock_ticker
         # Fetch the stock data for the ticker
         stock_price_data = yf.download(
-            ticker, start=start_date
+            stock_ticker, start=start_date
         )
 
     except KeyError as e:
@@ -130,17 +129,13 @@ def fetch_stock_price_data(stock_ticker="", start_date=(datetime.datetime.now() 
 
     try:
         # Create a DataFrame with the stock data
-        stock_price_data_df = pd.DataFrame(
-            stock_price_data
-        )
+        stock_price_data_df = pd.DataFrame(stock_price_data)
         # Reset the index of the DataFrame
         stock_price_data_df = stock_price_data_df.reset_index()
         stock_price_data_df = stock_price_data_df[["Date", "Open", "Volume"]]
         # Rename the columns
         stock_price_data_df = stock_price_data_df.rename(
-            columns={
-                "Date" : "date", "Open" : "open_Price", "Volume" : "trade_Volume"
-        })
+            columns={"Date" : "date", "Open" : "open_Price", "Volume" : "trade_Volume"})
 
     except KeyError as e:
         raise KeyError("Could not transform stock_price_data to a pandas dataframe") from e
@@ -1299,8 +1294,8 @@ def combine_stock_data(stock_price_data_df, full_stock_financial_data_df):
         # Create a copy of stock_price_data_df
         combined_stock_data_df = stock_price_data_df.copy()
         # Add columns from full_stock_financial_data_df to stock_price_data_df
-        for year in range(len(full_stock_financial_data_df["Date"])):
-            combined_stock_data_df.loc[combined_stock_data_df["Date"] >= full_stock_financial_data_df.iloc[year]["Date"], column_names] = full_stock_financial_data_df.iloc[year].values[2:]
+        for year in range(len(full_stock_financial_data_df["date"])):
+            combined_stock_data_df.loc[combined_stock_data_df["date"] >= full_stock_financial_data_df.iloc[year]["date"], column_names] = full_stock_financial_data_df.iloc[year].values[2:]
 
         print("Stock data and financial stock data combined successfully.")
         return combined_stock_data_df
@@ -1322,22 +1317,28 @@ def calculate_ratios(combined_stock_data_df):
 
     Raises:
     - ValueError: If the combined_stock_data_df parameter is empty.
+    - ValueError: Error calculating ratios.
     """
     # Checking if the combined_stock_data_df parameter is empty
     if combined_stock_data_df.empty:
-        raise ValueError("No combined stock data provided.")
+        raise ValueError("No stock data provided.")
 
-    # Calculate the P/S ratio
-    combined_stock_data_df["P/S"] = combined_stock_data_df["open_Price"] / (combined_stock_data_df["Revenue"] / combined_stock_data_df["Amount of stocks"])
-    # Calculate the P/E ratio
-    combined_stock_data_df["P/E"] = combined_stock_data_df["open_Price"] / combined_stock_data_df["EPS"]
-    # Calculate the P/B ratio
-    combined_stock_data_df["P/B"] = combined_stock_data_df["open_Price"] / combined_stock_data_df["Book Value per share"]
-    # Calculate the P/FCF ratio
-    combined_stock_data_df["P/FCF"] = combined_stock_data_df["open_Price"] / combined_stock_data_df["Free Cash Flow per share growth"]
-    print("Ratios have been calculated successfully, and added to the dataframe.")
-    combined_stock_data_df[["P/S", "P/E", "P/B", "P/FCF"]] = combined_stock_data_df[["P/S", "P/E", "P/B", "P/FCF"]].shift(1)
-    return combined_stock_data_df
+    try:
+        # Calculate the P/S ratio
+        combined_stock_data_df["P/S"] = combined_stock_data_df["open_Price"] / (combined_stock_data_df["revenue"] / combined_stock_data_df["average_shares"])
+        # Calculate the P/E ratio
+        combined_stock_data_df["P/E"] = combined_stock_data_df["open_Price"] / combined_stock_data_df["eps"]
+        # Calculate the P/B ratio
+        combined_stock_data_df["P/B"] = combined_stock_data_df["open_Price"] / combined_stock_data_df["book_Value_Per_Share"]
+        # Calculate the P/FCF ratio
+        combined_stock_data_df["P/FCF"] = combined_stock_data_df["open_Price"] / combined_stock_data_df["free_Cash_Flow_Per_Share"]
+        print("Ratios have been calculated successfully, and added to the dataframe.")
+        combined_stock_data_df[["P/S", "P/E", "P/B", "P/FCF"]] = combined_stock_data_df[["P/S", "P/E", "P/B", "P/FCF"]].shift(1)
+        return combined_stock_data_df
+
+    except ValueError as e:
+        raise ValueError(f"Error calculating ratios: {e}") from e
+
 # Drop rows with NaN values in combined_stock_data_df
 def drop_nan_values(combined_stock_data_df):
     """
@@ -1468,18 +1469,28 @@ def convert_excel_to_csv(dataframe, file_name):
         raise ValueError(f"Error converting to CSV: {e}") from e
 # Run the main function
 if __name__ == "__main__":
-    start_time = time.time()
-    # stock_tickers_df = import_tickers_from_csv("index_symbol_list_single_stock.csv")
-    # stock_tickers_list = stock_tickers_df["Symbol"].tolist()
-    # ticker = stock_tickers_list[0]
-    # print(ticker)
-    # stock_info_data_df = fetch_stock_standard_data(ticker)
+    import fetch_secrets
+    import db_connectors
     import db_interactions
+    start_time = time.time()
+    stock_tickers_df = import_tickers_from_csv("index_symbol_list_single_stock.csv")
+    # stock_tickers_df = import_tickers_from_csv('index_symbol_list_multiple_stocks.csv')
+    stock_tickers_list = stock_tickers_df["Symbol"].tolist()
+    for ticker in stock_tickers_list:
+        print(ticker)
+        if db_interactions.does_stock_exists_stock_info_data(ticker) is False:
+            print("Stock info data does not exist")
+            # Fetch stock data for the imported stock symbols
+            stock_info_data_df = fetch_stock_standard_data(ticker)
+            db_interactions.export_stock_info_data(stock_info_data_df)
+        elif db_interactions.does_stock_exists_stock_price_data(ticker) is True:
+            print("Stock info data already exists")
+
     ticker_list = db_interactions.import_ticker_list()
     for ticker in ticker_list:
         print(ticker)
         if db_interactions.does_stock_exists_stock_price_data(ticker) is False:
-            print("Stock does not exist")
+            print("Stock data does not exist")
             # Fetch stock data for the imported stock symbols
             stock_price_data_df = fetch_stock_price_data(ticker)
             stock_price_data_df = calculate_period_returns(stock_price_data_df)
@@ -1488,10 +1499,10 @@ if __name__ == "__main__":
             stock_price_data_df = calculate_bollinger_bands(stock_price_data_df)
             stock_price_data_df = calculate_momentum(stock_price_data_df)
             stock_price_data_df = stock_price_data_df.dropna()
-            db_interactions.export_to_stock_price_data(stock_price_data_df)
+            db_interactions.export_stock_price_data(stock_price_data_df)
         elif db_interactions.does_stock_exists_stock_price_data(ticker) is True:
-            print("Stock exists")
-            stock_price_data_df = db_interactions.import_from_stock_price_data()
+            print("Some stock data already exists")
+            stock_price_data_df = db_interactions.import_stock_price_data(stock_ticker=ticker)
             date = stock_price_data_df.iloc[0]["date"]
             if str(date) == datetime.datetime.now().strftime("%Y-%m-%d"):
                 print(f"Today's price data has already been fetched for {ticker}")
@@ -1502,7 +1513,7 @@ if __name__ == "__main__":
                 elif new_date.weekday() == 6:
                     new_date = new_date + datetime.timedelta(days=2)
 
-                stock_price_data_df = db_interactions.import_from_stock_price_data(252*5+1)
+                stock_price_data_df = db_interactions.import_stock_price_data(amount=252*5+1, stock_ticker=ticker)
                 stock_price_data_df["date"] = pd.to_datetime(stock_price_data_df["date"])
                 print(f"New date is: {new_date}")
                 new_stock_price_data_df = fetch_stock_price_data(ticker, new_date)
@@ -1513,16 +1524,16 @@ if __name__ == "__main__":
                 stock_price_data_df = calculate_bollinger_bands(stock_price_data_df)
                 stock_price_data_df = calculate_momentum(stock_price_data_df)
                 stock_price_data_df = stock_price_data_df.loc[stock_price_data_df["date"] >= new_stock_price_data_df.loc[0, "date"]]
-                db_interactions.export_to_stock_price_data(stock_price_data_df)
+                db_interactions.export_stock_price_data(stock_price_data_df)
 
         if db_interactions.does_stock_exists_stock_income_stmt_data(ticker) is False:
-            print("Stock does not exist")
+            print("Financial stock data does not exist")
             # Fetch stock financial data for the imported stock symbols
             full_stock_financial_data_df = fetch_stock_financial_data(ticker)
             # Export the stock financial data to the database
-            db_interactions.export_to_stock_financial_data(full_stock_financial_data_df)
+            db_interactions.export_stock_financial_data(full_stock_financial_data_df)
         elif db_interactions.does_stock_exists_stock_income_stmt_data(ticker) is True:
-            print("Financial stock data exists")
+            print("Some financial stock data already exists")
             # Import the latest stock financial data from the database for the spicific stock ticker
             full_stock_financial_data_df = db_interactions.import_stock_financial_data(stock_ticker=ticker)
             db_date = full_stock_financial_data_df.iloc[0]["date"]
@@ -1535,30 +1546,46 @@ if __name__ == "__main__":
                 full_stock_financial_data_df = fetch_stock_financial_data(ticker)
                 full_stock_financial_data_df = full_stock_financial_data_df.loc[full_stock_financial_data_df["date"].dt.date > db_date]
                 # Export the stock financial data to the database
-                db_interactions.export_to_stock_financial_data(full_stock_financial_data_df)
+                db_interactions.export_stock_financial_data(full_stock_financial_data_df)
 
-
-    # # Combine stock data with stock financial data
-    # combined_stock_data_df = combine_stock_data(stock_price_data_df, full_stock_financial_data_df)
-    # # print(combined_stock_data_df)
-    # # Calculate ratios
-    # combined_stock_data_df = calculate_ratios(combined_stock_data_df)
-    # combined_stock_data_df = drop_nan_values(combined_stock_data_df)
-    # # Create a dictionary of dataframes to export to Excel
-    # dataframes = {
-    #     "Stock Price Data": stock_price_data_df,
-    #     "Full Stock Financial Data": full_stock_financial_data_df,
-    #     "Combined Stock Data": combined_stock_data_df
-    # }
-    # # Export the dataframes to an Excel file
-    # export_to_excel(dataframes, "stock_data_single.xlsx")
-    # # Import the stock data from an Excel file
-    # dataframes = import_excel("stock_data_single.xlsx")
-    # for key, value in dataframes.items():
-    #     dataframe = value
-
-    # # Export the stock data to a CSV file
-    # convert_excel_to_csv(dataframe, "stock_data_single")
+        if db_interactions.does_stock_exists_stock_ratio_data(ticker) is False:
+            print("Stock ratio data does not exist")
+            db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+            db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+            TABEL_NAME = "stock_income_stmt_data"
+            quary = f"""SELECT COUNT(financial_Statement_Date)
+                        FROM {TABEL_NAME}
+                        WHERE ticker = '{ticker}'
+                        """
+            entry_amount = pd.read_sql(sql=quary, con=db_con)
+            print(entry_amount)
+            print(entry_amount.columns[0])
+            full_stock_financial_data_df = db_interactions.import_stock_financial_data(amount=entry_amount.loc[0, entry_amount.columns[0]], stock_ticker=ticker)
+            full_stock_financial_data_df = full_stock_financial_data_df.dropna(axis=1)
+            date = full_stock_financial_data_df.iloc[0]["date"]
+            print(date)
+            TABEL_NAME = "stock_price_data"
+            quary = f"""SELECT *
+                        FROM {TABEL_NAME}
+                        WHERE ticker = '{ticker}' AND date >= '{date}'
+                        """
+            stock_price_data_df = pd.read_sql(sql=quary, con=db_con)
+            combined_stock_data_df = combine_stock_data(stock_price_data_df, full_stock_financial_data_df)
+            combined_stock_data_df = calculate_ratios(combined_stock_data_df)
+            stock_ratio_data_df = combined_stock_data_df[['date', 'ticker', 'P/S', 'P/E', 'P/B', 'P/FCF']]
+            stock_ratio_data_df = stock_ratio_data_df.rename(columns={"P/S": "p_s", "P/E": "p_e", "P/B": "p_b", "P/FCF": "p_fcf"})
+            stock_ratio_data_df = drop_nan_values(stock_ratio_data_df)
+            print(stock_ratio_data_df)
+            db_interactions.export_stock_ratio_data(stock_ratio_data_df)
+        elif db_interactions.does_stock_exists_stock_ratio_data(ticker) is True:
+            print("Some stock ratio data already exists")
+            stock_price_data_df = db_interactions.import_stock_ratio_data()
+            date = stock_price_data_df.iloc[0]["date"]
+            if str(date) == datetime.datetime.now().strftime("%Y-%m-%d"):
+                print(f"Today's price ratio data has already been calculated for {ticker}")
+            else:
+                new_date = date + relativedelta(days=1)
+                print(f"New date is: {new_date}")
 
     # Calculate the execution time
     end_time = time.time()
