@@ -536,7 +536,8 @@ def import_stock_price_data(amount = 1, stock_ticker=""):
     try:
         if stock_ticker == "":
             quary = f"""SELECT * FROM
-            (SELECT * FROM stock_price_data ORDER BY date DESC LIMIT {amount}) AS temp
+            (SELECT * FROM stock_price_data
+            ORDER BY date DESC LIMIT {amount}) AS temp
             ORDER BY date ASC
             """
             stock_price_data_df = pd.read_sql(sql=quary, con=db_con)
@@ -551,8 +552,9 @@ def import_stock_price_data(amount = 1, stock_ticker=""):
                 raise ValueError("The stock does not exist in the stock_price_data table.")
             elif does_stock_exists_stock_price_data(stock_ticker) is True:
                 quary = f"""SELECT * FROM
-                (SELECT * FROM stock_price_data ORDER BY date DESC LIMIT {amount}) AS temp
+                (SELECT * FROM stock_price_data
                 WHERE ticker = "{stock_ticker}"
+                ORDER BY date DESC LIMIT {amount}) AS temp
                 ORDER BY date ASC
                 """
                 stock_price_data_df = pd.read_sql(sql=quary, con=db_con)
@@ -675,15 +677,18 @@ def import_stock_financial_data(amount = 1, stock_ticker=""):
     try:
         if stock_ticker == "":
             income_stmt_quary = f"""SELECT * FROM
-                (SELECT * FROM stock_income_stmt_data ORDER BY financial_Statement_Date DESC LIMIT {amount}) AS temp
+                (SELECT * FROM stock_income_stmt_data
+                ORDER BY financial_Statement_Date DESC LIMIT {amount}) AS temp
                 ORDER BY financial_Statement_Date ASC
                 """
             balancesheet_quary = f"""SELECT * FROM
-                (SELECT * FROM stock_balancesheet_data ORDER BY financial_Statement_Date DESC LIMIT {amount}) AS temp
+                (SELECT * FROM stock_balancesheet_data
+                ORDER BY financial_Statement_Date DESC LIMIT {amount}) AS temp
                 ORDER BY financial_Statement_Date ASC
                 """
             cash_flow_quary = f"""SELECT * FROM
-                (SELECT * FROM stock_cash_flow_data ORDER BY financial_Statement_Date DESC LIMIT {amount}) AS temp
+                (SELECT * FROM stock_cash_flow_data
+                ORDER BY financial_Statement_Date DESC LIMIT {amount}) AS temp
                 ORDER BY financial_Statement_Date ASC
                 """
             stock_income_stmt_data_df = pd.read_sql(sql=income_stmt_quary, con=db_con)
@@ -704,23 +709,23 @@ def import_stock_financial_data(amount = 1, stock_ticker=""):
             elif does_stock_exists_stock_income_stmt_data(stock_ticker) is True:
                 income_stmt_quary = f"""SELECT * FROM
                     (SELECT * FROM stock_income_stmt_data
+                    WHERE ticker = "{stock_ticker}"
                     ORDER BY financial_Statement_Date DESC LIMIT {amount}
                     ) AS temp
-                    WHERE ticker = "{stock_ticker}"
                     ORDER BY financial_Statement_Date ASC
                     """
                 balancesheet_quary = f"""SELECT * FROM
                     (SELECT * FROM stock_balancesheet_data
+                    WHERE ticker = "{stock_ticker}"
                     ORDER BY financial_Statement_Date DESC LIMIT {amount}
                     ) AS temp
-                    WHERE ticker = "{stock_ticker}"
                     ORDER BY financial_Statement_Date ASC
                     """
                 cash_flow_quary = f"""SELECT * FROM
                     (SELECT * FROM stock_cash_flow_data
+                    WHERE ticker = "{stock_ticker}"
                     ORDER BY financial_Statement_Date DESC LIMIT {amount}
                     ) AS temp
-                    WHERE ticker = "{stock_ticker}"
                     ORDER BY financial_Statement_Date ASC
                     """
                 stock_income_stmt_data_df = pd.read_sql(sql=income_stmt_quary, con=db_con)
@@ -880,7 +885,8 @@ def import_stock_ratio_data(amount = 1, stock_ticker=""):
     try:
         if stock_ticker == "":
             quary = f"""SELECT * FROM
-            (SELECT * FROM stock_ratio_data ORDER BY date DESC LIMIT {amount}) AS temp
+            (SELECT * FROM stock_ratio_data
+            ORDER BY date DESC LIMIT {amount}) AS temp
             ORDER BY date ASC
             """
             stock_ratio_data_df = pd.read_sql(sql=quary, con=db_con)
@@ -895,7 +901,8 @@ def import_stock_ratio_data(amount = 1, stock_ticker=""):
                 raise ValueError("The stock does not exist in the stock_ratio_data table.")
             elif does_stock_exists_stock_ratio_data(stock_ticker) is True:
                 quary = f"""SELECT * FROM
-                (SELECT * FROM stock_ratio_data ORDER BY date DESC LIMIT {amount}) AS temp
+                (SELECT * FROM stock_ratio_data
+                ORDER BY date DESC LIMIT {amount}) AS temp
                 WHERE ticker = "{stock_ticker}"
                 ORDER BY date ASC
                 """
