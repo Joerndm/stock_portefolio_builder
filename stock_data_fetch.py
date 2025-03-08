@@ -46,7 +46,7 @@ def import_tickers_from_csv(csv_file):
     except FileNotFoundError as e:
         raise FileNotFoundError(f"CSV file '{csv_file}' does not exist.") from e
 # Fetch company information for given ticker using yfinance
-def fetch_stock_standard_data(stock_symbol):
+def fetch_stock_standard_data(stock_symbol = ""):
     """
     Fetches company information for the given stock symbols and returns a pandas DataFrame.
     
@@ -64,7 +64,7 @@ def fetch_stock_standard_data(stock_symbol):
     - KeyError: If the stock_info cannot be transformed to a pandas DataFrame.
     """
     # Check if the stock_symbols parameter is empty
-    if len(stock_symbol) == "":
+    if stock_symbol == "":
         raise ValueError("The stock_symbols parameter cannot be empty.")
 
     try:
@@ -112,7 +112,7 @@ def fetch_stock_price_data(stock_ticker="", start_date=(datetime.datetime.now() 
     - KeyError: If the stock_price_data_df cannot be joined with stock_info_df.
     """
     # Check if the stock_tickers parameter is empty
-    if len(stock_ticker) == "":
+    if stock_ticker == "":
         raise ValueError("The stock_tickers parameter cannot be empty.")
 
     # Check if the start_date parameter is empty
@@ -132,11 +132,25 @@ def fetch_stock_price_data(stock_ticker="", start_date=(datetime.datetime.now() 
         # Create a DataFrame with the stock data
         stock_price_data_df = pd.DataFrame(stock_price_data)
         # Reset the index of the DataFrame
+        # print("stock_price_data_df")
+        # print(stock_price_data_df)
+        stock_price_data_df = stock_price_data_df.droplevel(1, axis=1)
+        # print("stock_price_data_df")
+        # print(stock_price_data_df)
         stock_price_data_df = stock_price_data_df.reset_index()
+        # print("stock_price_data_df")
+        # print(stock_price_data_df)
         stock_price_data_df = stock_price_data_df[["Date", "Open", "Volume"]]
+        # print("stock_price_data_df")
+        # print(stock_price_data_df)
         # Rename the columns
         stock_price_data_df = stock_price_data_df.rename(
             columns={"Date" : "date", "Open" : "open_Price", "Volume" : "trade_Volume"})
+        # print("stock_price_data_df")
+        # print(stock_price_data_df)
+        stock_price_data_df = stock_price_data_df.rename_axis(None, axis=1)
+        # print("stock_price_data_df")
+        # print(stock_price_data_df)
 
     except KeyError as e:
         raise KeyError("Could not transform stock_price_data to a pandas dataframe") from e
@@ -164,10 +178,16 @@ def fetch_stock_price_data(stock_ticker="", start_date=(datetime.datetime.now() 
 
     try:
         # Create a temporary DataFrame with the stock data joined with the stock_price_data_df and stock_info_df
+        # print("stock_price_data_df")
+        # print(stock_price_data_df)
+        # print("stock_info_df")
+        # print(stock_info_df)
         stock_price_data_df = stock_price_data_df.join(
             stock_info_df,
             how="cross"
         )
+        # print("stock_price_data_df")
+        # print(stock_price_data_df)
         return stock_price_data_df
 
     except KeyError as e:
@@ -553,7 +573,7 @@ def calculate_momentum(stock_price_data_df):
     except KeyError as e:
         raise KeyError("Could not shift the rows by 1.") from e
 # Import financial stock data using yfinance and a list of stock symbols
-def fetch_stock_financial_data(stock_symbol):
+def fetch_stock_financial_data(stock_symbol = ""):
     """
     Fetches financial stock data using yfinance and a list of stock symbols.
 
@@ -570,7 +590,7 @@ def fetch_stock_financial_data(stock_symbol):
     - KeyError: If any of the stock symbols in the list is invalid.
     """
     # Checking if the stock_symbols parameter is empty
-    if not stock_symbol:
+    if stock_symbol == "":
         raise ValueError("No stock symbols provided.")
 
     try:
@@ -581,8 +601,16 @@ def fetch_stock_financial_data(stock_symbol):
 
         # Fetching the financial stock data using yfinance
         stock_data = yf.Ticker(symbol)
+        print(f"length of income: {len(pd.DataFrame(stock_data.income_stmt).columns)}, length of balance: {len(pd.DataFrame(stock_data.balancesheet).columns)}, length of cashflow: {len(pd.DataFrame(stock_data.cashflow).columns)}")
         income_stmt = stock_data.income_stmt
         income_stmt_df = pd.DataFrame(income_stmt)
+        if len(pd.DataFrame(stock_data.income_stmt).columns) > len(pd.DataFrame(stock_data.balancesheet).columns):
+            column_amount = len(pd.DataFrame(stock_data.income_stmt).columns) - len(pd.DataFrame(stock_data.balancesheet).columns)
+            income_stmt_df = income_stmt_df.drop(columns=income_stmt_df.columns[-column_amount])
+        elif len(pd.DataFrame(stock_data.income_stmt).columns) > len(pd.DataFrame(stock_data.cashflow).columns):
+            column_amount = len(pd.DataFrame(stock_data.income_stmt).columns) - len(pd.DataFrame(stock_data.cashflow).columns)
+            income_stmt_df = income_stmt_df.drop(columns=income_stmt_df.columns[-column_amount])
+
         # Checking if the input DataFrame is empty
         if income_stmt_df.empty:
             raise ValueError("Input DataFrame is empty.")
@@ -803,6 +831,13 @@ def fetch_stock_financial_data(stock_symbol):
 
         balancesheet = stock_data.balancesheet
         balancesheet_df = pd.DataFrame(balancesheet)
+        if len(pd.DataFrame(stock_data.balancesheet).columns) > len(pd.DataFrame(stock_data.income_stmt).columns):
+            column_amount = len(pd.DataFrame(stock_data.balancesheet).columns) - len(pd.DataFrame(stock_data.income_stmt).columns)
+            balancesheet_df = balancesheet_df.drop(columns=balancesheet_df.columns[-column_amount])
+        elif len(pd.DataFrame(stock_data.balancesheet).columns) > len(pd.DataFrame(stock_data.cashflow).columns):
+            column_amount = len(pd.DataFrame(stock_data.balancesheet).columns) - len(pd.DataFrame(stock_data.cashflow).columns)
+            balancesheet_df = balancesheet_df.drop(columns=balancesheet_df.columns[-column_amount])
+
         # Checking if the input DataFrame is empty
         if balancesheet_df.empty:
             raise ValueError("Input DataFrame is empty.")
@@ -1052,6 +1087,14 @@ def fetch_stock_financial_data(stock_symbol):
 
         cashflow = stock_data.cashflow
         cashflow_df = pd.DataFrame(cashflow)
+        if len(pd.DataFrame(stock_data.cashflow).columns) > len(pd.DataFrame(stock_data.income_stmt).columns):
+            column_amount = len(pd.DataFrame(stock_data.cashflow).columns) - len(pd.DataFrame(stock_data.income_stmt).columns)
+            cashflow_df = cashflow_df.drop(columns=cashflow_df.columns[-column_amount])
+        elif len(pd.DataFrame(stock_data.cashflow).columns) > len(pd.DataFrame(stock_data.balancesheet).columns):
+            column_amount = len(pd.DataFrame(stock_data.cashflow).columns) - len(pd.DataFrame(stock_data.balancesheet).columns)
+            cashflow_df = cashflow_df.drop(columns=cashflow_df.columns[-column_amount])
+
+        cashflow_df = cashflow_df.drop(columns=cashflow_df.columns[-1])
         # Checking if the input DataFrame is empty
         if cashflow_df.empty:
             raise ValueError("Input DataFrame is empty.")
@@ -1075,7 +1118,6 @@ def fetch_stock_financial_data(stock_symbol):
             else:
                 cashflow_df.loc[index, "Free Cash Flow growth"] = (cashflow_df.iloc[index]["Free Cash Flow"] / cashflow_df.iloc[index-1]["Free Cash Flow"])-1
                 cashflow_df.loc[index, "Free Cash Flow per share growth"] = (cashflow_df.iloc[index]["Free Cash Flow per share"] / cashflow_df.iloc[index-1]["Free Cash Flow per share"])-1
-
         # Join income_stmt_df, balancesheet_df and cashflow_df dataframes on the Date column
         full_stock_financial_data_df = pd.merge(income_stmt_df, balancesheet_df, on="Date")
         full_stock_financial_data_df = pd.merge(full_stock_financial_data_df, cashflow_df, on="Date")
@@ -1480,7 +1522,7 @@ if __name__ == "__main__":
     stock_tickers_df = import_tickers_from_csv('index_symbol_list_multiple_stocks.csv')
     stock_tickers_list = stock_tickers_df["Symbol"].tolist()
     for ticker in stock_tickers_list:
-        print(ticker)
+        # print(ticker)
         if db_interactions.does_stock_exists_stock_info_data(ticker) is False:
             print("Stock info data does not exist")
             # Fetch stock data for the imported stock symbols
@@ -1489,7 +1531,7 @@ if __name__ == "__main__":
             db_interactions.export_stock_info_data(stock_info_data_df)
             print("Stock info data has been fetched and exported to the database")
         elif db_interactions.does_stock_exists_stock_price_data(ticker) is True:
-            print("Stock info data already exists")
+            print(f"Stock info data already exists for stock ticker: {ticker}")
 
     ticker_list = db_interactions.import_ticker_list()
     for ticker in ticker_list:
@@ -1511,7 +1553,6 @@ if __name__ == "__main__":
             print("Some stock data already exists")
             print(f"Checking if today's price data has already been fetched for {ticker}")
             stock_price_data_df = db_interactions.import_stock_price_data(stock_ticker=ticker)
-            print(stock_price_data_df)
             date = stock_price_data_df.iloc[0]["date"]
             if str(date) == datetime.datetime.now().strftime("%Y-%m-%d"):
                 print(f"Today's price data has already been fetched for {ticker}")
@@ -1519,15 +1560,19 @@ if __name__ == "__main__":
                 print("Fetching stock data")
                 new_date = date + relativedelta(days=1)
                 if new_date.weekday() == 5:
-                    new_date = new_date + datetime.timedelta(days=1)
-                elif new_date.weekday() == 6:
                     new_date = new_date + datetime.timedelta(days=2)
+                elif new_date.weekday() == 6:
+                    new_date = new_date + datetime.timedelta(days=1)
 
                 stock_price_data_df = db_interactions.import_stock_price_data(amount=252*5+1, stock_ticker=ticker)
                 stock_price_data_df["date"] = pd.to_datetime(stock_price_data_df["date"])
                 print(f"New date is: {new_date}")
                 new_stock_price_data_df = fetch_stock_price_data(ticker, new_date)
+                # print("new_stock_price_data_df")
+                # print(new_stock_price_data_df)
                 stock_price_data_df = pd.concat([stock_price_data_df, new_stock_price_data_df], axis=0, ignore_index=True)
+                # print("stock_price_data_df")
+                # print(stock_price_data_df)
                 stock_price_data_df = calculate_period_returns(stock_price_data_df)
                 stock_price_data_df = calculate_moving_averages(stock_price_data_df)
                 stock_price_data_df = calculate_standard_diviation_value(stock_price_data_df)
@@ -1592,7 +1637,7 @@ if __name__ == "__main__":
         elif db_interactions.does_stock_exists_stock_ratio_data(ticker) is True:
             print("Some stock ratio data already exists")
             print(f"Checking if today's price ratio data has already been calculated for {ticker}")
-            stock_ratio_data_df = db_interactions.import_stock_ratio_data()
+            stock_ratio_data_df = db_interactions.import_stock_ratio_data(stock_ticker=ticker)
             date = stock_ratio_data_df.iloc[0]["date"]
             if str(date) == datetime.datetime.now().strftime("%Y-%m-%d"):
                 print(f"Today's price ratio data has already been calculated for {ticker}")

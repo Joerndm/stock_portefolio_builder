@@ -5,11 +5,16 @@ import matplotlib.pyplot as plt
 from scipy import stats
 
 def monte_carlo_analysis(seed_number, stock_data_df, forecast_df, years, sim_amount):
+  # print("seed_number", seed_number)
+  # print("stock_data_df", stock_data_df)
+  # print("forecast_df", forecast_df)
+  # print("years", years)
+  # print("sim_amount", sim_amount)
   np.random.seed(seed=seed_number)
   price_df = pd.DataFrame()
   # calculate amopunt of days into x future of years
   days = years * 252
-  returns = np.log(1 + forecast_df["Price"].pct_change().dropna())
+  returns = np.log(1 + forecast_df["open_Price"].pct_change().dropna())
   stat, p = stats.shapiro(returns)
   # print(stat, p)
   alphe = 0.05
@@ -27,7 +32,7 @@ def monte_carlo_analysis(seed_number, stock_data_df, forecast_df, years, sim_amo
   shock = sigma * np.sqrt(dt)
   for run in range(sim_amount):
     price = np.zeros(days)
-    price[0] = stock_data_df.iloc[-1][stock_data_df.columns[1]]
+    price[0] = stock_data_df.iloc[-1][stock_data_df.columns[4]]
     for day in range(1, days):
       price[day] = price[day - 1] * np.exp(drift + shock * np.random.normal())
 
@@ -61,15 +66,15 @@ def monte_carlo_analysis(seed_number, stock_data_df, forecast_df, years, sim_amo
     "Mean":mean, "84th Percentile":upper_percentile_1st, "95th Percentile":upper_percentile_2nd},
     index=year
   )
-  print(monte_carlo_df)
+  # print(monte_carlo_df)
   plt.figure(figsize=(18, 8))
   plt.plot(monte_carlo_df)
   plt.legend(monte_carlo_df, loc="best")
   plt.xlabel("Year")
-  plt.ylabel("Price")
-  plt.title("Monte Carlo Analysis for Stock Price")
-  stock_data_df = stock_data_df.replace({"Name": [" ", "/"]}, {"Name": "_"}, regex=True)
-  stock_name = stock_data_df.iloc[0]["Name"]
+  plt.ylabel("Opening price")
+  plt.title("Monte Carlo Analysis for Stock opening price")
+  stock_data_df = stock_data_df.replace({"ticker": [" ", "/"]}, {"ticker": "_"}, regex=True)
+  stock_name = stock_data_df.iloc[0]["ticker"]
   graph_name = str(f"Monte_Carlo_Sim_of_{stock_name}.png")
   my_path = os.path.abspath(__file__)
   path = os.path.dirname(my_path)

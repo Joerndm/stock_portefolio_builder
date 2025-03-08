@@ -1,3 +1,4 @@
+""""""
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 
 # Create a function to fits the scaler for the dataset with MinMaxScaler
@@ -14,6 +15,7 @@ def data_preprocessing_minmax_scaler_fit(data):
     Raises:
     - ValueError: If the specified component amount is greater than the number of features in the dataset.
     """
+
     try:
         # Scale data before applying PCA
         scaling = MinMaxScaler()
@@ -21,10 +23,9 @@ def data_preprocessing_minmax_scaler_fit(data):
         scaler = scaling.fit(data)
         return scaler
 
+    except ValueError as e:
+        raise ValueError("The specified component amount is greater than the number of features in the dataset.") from e
 
-    except ValueError:
-        raise ValueError("The specified component amount is greater than the number of features in the dataset.")
-    
 # Create a function to transform the dataset with MinMaxScaler
 def data_preprocessing_minmax_scaler_transform(scaler, data):
     """
@@ -39,14 +40,14 @@ def data_preprocessing_minmax_scaler_transform(scaler, data):
     Raises:
     - ValueError: If the specified component amount is greater than the number of features in the dataset.
     """
+
     try:
         # Transform the data
         Scaled_data = scaler.transform(data)
         return Scaled_data
-    
 
-    except ValueError:
-        raise ValueError("The specified component amount is greater than the number of features in the dataset.")
+    except ValueError as e:
+        raise ValueError("The specified component amount is greater than the number of features in the dataset.") from e
 
 # Create a function to fits the scaler for the dataset with StandardScaler
 def data_preprocessing_std_scaler(data):
@@ -61,8 +62,8 @@ def data_preprocessing_std_scaler(data):
     
     Raises:
     - ValueError: If the specified component amount is greater than the number of features in the dataset.
-    
     """
+
     try:
         # Scale data before applying PCA
         scaling = StandardScaler()
@@ -70,6 +71,5 @@ def data_preprocessing_std_scaler(data):
         Scaled_data = scaling.fit_transform(data)
         return Scaled_data
 
-
-    except ValueError:
-        raise ValueError("The specified component amount is greater than the number of features in the dataset.")
+    except ValueError as e:
+        raise ValueError("The specified component amount is greater than the number of features in the dataset.") from e

@@ -866,6 +866,7 @@ def import_stock_ratio_data(amount = 1, stock_ticker=""):
     - ValueError: If the stock does not exist in the stock_ratio_data table.
     - KeyError: If the stock_ratio_data_df cannot be imported from stock_ratio_data in the database to stock_ratio_data_df with a specific ticker.
     """
+
     if amount < 1:
         raise ValueError("The amount parameter cannot be less than 1.")
 
@@ -902,8 +903,8 @@ def import_stock_ratio_data(amount = 1, stock_ticker=""):
             elif does_stock_exists_stock_ratio_data(stock_ticker) is True:
                 quary = f"""SELECT * FROM
                 (SELECT * FROM stock_ratio_data
-                ORDER BY date DESC LIMIT {amount}) AS temp
                 WHERE ticker = "{stock_ticker}"
+                ORDER BY date DESC LIMIT {amount}) AS temp
                 ORDER BY date ASC
                 """
                 stock_ratio_data_df = pd.read_sql(sql=quary, con=db_con)
@@ -965,6 +966,109 @@ def export_stock_ratio_data(stock_ratio_data_df=""):
 
     except Exception as e:
         raise KeyError(f"Could not export from stock_ratio_data_df to stock_price_data in the database. Error: {e}") from e
+
+def import_stock_dataset(stock_ticker=""):
+    """
+    """
+
+    try:
+        # Fetch the secrets from the secret_import function
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+
+    except Exception as e:
+        raise KeyError(f"Could not fetch the secrets. Error: {e}") from e
+
+    try:
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+
+    except Exception as e:
+        raise KeyError(f"Could not establish connection to the database. Error: {e}") from e
+
+    try:
+        if stock_ticker == "":
+            print("Please input a stock ticker to fetch dataset.")
+
+    except Exception as e:
+        raise KeyError(f"Could not import from stock_ratio_data in the database to stock_ratio_data_df. Error: {e}") from e
+
+    try:
+        if stock_ticker != "":
+            if does_stock_exists_stock_info_data(stock_ticker) is False:
+                raise ValueError("The stock does not exist in the stock_info_data table.")
+
+            elif does_stock_exists_stock_price_data(stock_ticker) is False:
+                raise ValueError("The stock does not exist in the stock_price_data table.")
+
+            elif does_stock_exists_stock_income_stmt_data(stock_ticker) is False:
+                raise ValueError("The stock does not exist in the stock_income_stmt_data table.")
+
+            elif does_stock_exists_stock_balancesheet_data(stock_ticker) is False:
+                raise ValueError("The stock does not exist in the stock_balancesheet_data table.")
+
+            elif does_stock_exists_stock_cash_flow_data is False:
+                raise ValueError("The stock does not exist in the stock_cash_flow_data table.")
+
+            elif does_stock_exists_stock_ratio_data(stock_ticker) is False:
+                raise ValueError("The stock does not exist in the stock_ratio_data table.")
+
+            else:
+                price_quary = f"""SELECT * FROM
+                    (SELECT * FROM stock_price_data
+                    WHERE ticker = "{stock_ticker}"
+                    ORDER BY date DESC) AS temp
+                    ORDER BY date ASC
+                    """
+                stock_price_data_df = pd.read_sql(sql=price_quary, con=db_con)
+                income_stmt_quary = f"""SELECT * FROM
+                    (SELECT * FROM stock_income_stmt_data
+                    WHERE ticker = "{stock_ticker}"
+                    ORDER BY financial_Statement_Date DESC
+                    ) AS temp
+                    ORDER BY financial_Statement_Date ASC
+                    """
+                balancesheet_quary = f"""SELECT * FROM
+                    (SELECT * FROM stock_balancesheet_data
+                    WHERE ticker = "{stock_ticker}"
+                    ORDER BY financial_Statement_Date DESC
+                    ) AS temp
+                    ORDER BY financial_Statement_Date ASC
+                    """
+                cash_flow_quary = f"""SELECT * FROM
+                    (SELECT * FROM stock_cash_flow_data
+                    WHERE ticker = "{stock_ticker}"
+                    ORDER BY financial_Statement_Date DESC
+                    ) AS temp
+                    ORDER BY financial_Statement_Date ASC
+                    """
+                stock_income_stmt_data_df = pd.read_sql(sql=income_stmt_quary, con=db_con)
+                stock_income_stmt_data_df = stock_income_stmt_data_df.drop(columns=stock_income_stmt_data_df.columns[1])
+                stock_balancesheet_data_df = pd.read_sql(sql=balancesheet_quary, con=db_con)
+                stock_balancesheet_data_df = stock_balancesheet_data_df.drop(columns=stock_balancesheet_data_df.columns[1])
+                stock_cash_flow_data_df = pd.read_sql(sql=cash_flow_quary, con=db_con)
+                stock_cash_flow_data_df = stock_cash_flow_data_df.drop(columns=stock_cash_flow_data_df.columns[1])
+                stock_financial_data_df = pd.merge(stock_income_stmt_data_df, stock_balancesheet_data_df, on=["financial_Statement_Date", "ticker"])
+                stock_financial_data_df = pd.merge(stock_financial_data_df, stock_cash_flow_data_df, on=["financial_Statement_Date", "ticker"])
+                stock_financial_data_df = stock_financial_data_df.rename(columns={"financial_Statement_Date": "date"})
+                ratio_quary = f"""SELECT * FROM
+                    (SELECT * FROM stock_ratio_data
+                    WHERE ticker = "{stock_ticker}"
+                    ORDER BY date DESC) AS temp
+                    ORDER BY date ASC
+                    """
+                stock_ratio_data_df = pd.read_sql(sql=ratio_quary, con=db_con)
+                # Create a list of column names to copy from stock_financial_data_df to stock_price_data_df
+                column_names = stock_financial_data_df.columns[2:]
+                # Create a copy of stock_price_data_df
+                combined_stock_data_df = stock_price_data_df.copy()
+                # Add columns from stock_financial_data_df to stock_price_data_df
+                for year in range(len(stock_financial_data_df["date"])):
+                    combined_stock_data_df.loc[combined_stock_data_df["date"] >= stock_financial_data_df.iloc[year]["date"], column_names] = stock_financial_data_df.iloc[year].values[2:]
+
+                combined_stock_data_df = pd.merge(combined_stock_data_df, stock_ratio_data_df, on=["date", "ticker"])
+                return combined_stock_data_df
+
+    except Exception as e:
+        raise KeyError(f"Could not import from stock_ratio_data in the database to stock_ratio_data_df with a specific ticker. Error: {e}") from e
 
 # Run the main function
 if __name__ == "__main__":
