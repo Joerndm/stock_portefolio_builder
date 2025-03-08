@@ -18,6 +18,7 @@ from sklearn.metrics import r2_score
 import time
 
 matplotlib.use('Agg')
+pd.set_option('future.no_silent_downcasting', True)
 
 import stock_data_fetch
 import split_dataset
@@ -532,10 +533,10 @@ def predict_future_price_changes(ticker, scaler, model, selected_features_list, 
                             hist_df = hist_df.loc[hist_df["Date"] < stock_mod_df.iloc[0]["date"]]
                             hist_df = hist_df.rename(columns={ticker: "open_Price", "Date": "date"})
                             hist_df = pd.concat([hist_df, stock_mod_df[["date", "open_Price"]]], axis=0)
-                            return_1Y = hist_df.iloc[-253:]["open_Price"].pct_change(252).iloc[-1]
+                            return_1Y = hist_df.iloc[-253:]["open_Price"].pct_change(252).iloc[-1].infer_objects(copy=False)
                             future_df["1Y"] = return_1Y
                         elif len(stock_mod_df) > 252:
-                            return_1Y = stock_mod_df.iloc[-253:]["open_Price"].pct_change(252).iloc[-1]
+                            return_1Y = stock_mod_df.iloc[-253:]["open_Price"].pct_change(252).iloc[-1].infer_objects(copy=False)
                             future_df["1Y"] = return_1Y
 
                     # Calculate the return for the last 2 years
@@ -557,15 +558,13 @@ def predict_future_price_changes(ticker, scaler, model, selected_features_list, 
                             hist_df = pd.DataFrame(yf.download(ticker, period="6y"))["Open"].reset_index()
                             # print(hist_df)
                             # print(hist_df.info())
-                            # print(stock_mod_df)
-                            # print(stock_mod_df.info())
                             hist_df = hist_df.loc[hist_df["Date"] < stock_mod_df.iloc[0]["date"]]
                             hist_df = hist_df.rename(columns={ticker: "open_Price", "Date": "date"})
                             hist_df = pd.concat([hist_df, stock_mod_df[["date", "open_Price"]]], axis=0)
-                            return_3Y = hist_df.iloc[-757:]["open_Price"].pct_change(756).iloc[-1]
+                            return_3Y = hist_df.iloc[-757:]["open_Price"].pct_change(756).iloc[-1].infer_objects(copy=False)
                             future_df["3Y"] = return_3Y
                         elif len(stock_mod_df) > 756:
-                            return_3Y = stock_mod_df.iloc[-757:]["open_Price"].pct_change(756).iloc[-1]
+                            return_3Y = stock_mod_df.iloc[-757:]["open_Price"].pct_change(756).iloc[-1].infer_objects(copy=False)
                             future_df["3Y"] = return_3Y
 
                     # Calculate the return for the last 4 years
@@ -837,52 +836,28 @@ if __name__ == "__main__":
     stock_data_df = db_interactions.import_stock_dataset(stock_symbol)
     # Change the date column to datetime 64
     stock_data_df["date"] = pd.to_datetime(stock_data_df["date"])
-    print("stock_data_df info")
-    print(stock_data_df.info())
-    print("stock_data_df")
-    print(stock_data_df)
     # Drop the columns that are empty
     stock_data_df = stock_data_df.dropna(axis=0, how="any")
     stock_data_df = stock_data_df.dropna(axis=1, how="any")
-    print("stock_data_df info")
-    print(stock_data_df.info())
-    print("stock_data_df")
-    print(stock_data_df)
     # Split the dataset into traning, test data and prediction data
     test_size = 0.20
     scaler, x_training_data, x_test_data, y_training_data_df, y_test_data_df, prediction_data = split_dataset.dataset_train_test_split(stock_data_df, test_size, 1)
     # Feature selection
     feature_amount = 20
     x_training_dataset, x_test_dataset, x_prediction_dataset, selected_features_model, selected_features_list = dimension_reduction.feature_selection(feature_amount, x_training_data, x_test_data, y_training_data_df, y_test_data_df, prediction_data, stock_data_df)
-    # print("selected_features_list")
-    # print(selected_features_list)
     # Combine the reduced dataset with the stock price
     x_training_dataset_df = pd.DataFrame(x_training_dataset, columns=selected_features_list)
-    # print("x_training_dataset_df")
-    # print(x_training_dataset_df)
     y_training_data_df = y_training_data_df.reset_index(drop=True)
-    # print("y_training_data_df")
-    # print(y_training_data_df)
     traning_dataset_df = x_training_dataset_df.join(y_training_data_df)
-    # print("traning_dataset_df")
-    # print(traning_dataset_df)
     x_test_dataset_df = pd.DataFrame(x_test_dataset, columns=selected_features_list)
-    # print("x_test_dataset_df")
-    # print(x_test_dataset_df)
     y_test_data_df = y_test_data_df.reset_index(drop=True)
-    # print("y_test_data_df")
-    # print(y_test_data_df)
     test_dataset_df = x_test_dataset_df.join(y_test_data_df)
-    # print("test_dataset_df")
-    # print(test_dataset_df)
     x_prediction_dataset_df = pd.DataFrame(x_prediction_dataset, columns=selected_features_list)
     # Predict the stock price
     iterations = 7500
     nn_model = neural_network_model(traning_dataset_df, test_dataset_df, feature_amount*16, feature_amount*12, feature_amount*20, feature_amount*16, iterations, 1)
     amount_of_days = 10
     forecast_df = predict_future_price_changes(stock_symbol, scaler, nn_model, selected_features_list, stock_data_df, amount_of_days)
-    # print("forecast_df")
-    # print(forecast_df)
     # Calculate the predicted profit
     calculate_predicted_profit(forecast_df, amount_of_days)
     # Plot the graph
@@ -890,10 +865,14 @@ if __name__ == "__main__":
     # Run a Monte Carlo simulation
     year_amount = 10
     sim_amount = 1000
+    #list of columns of forecast_df withouyt date column
+    columns = forecast_df.columns.to_list()
+    columns.remove('date')
+    for column in columns:
+        forecast_df[column] = forecast_df[column].astype(float)
+
     monte_carlo_day_df, monte_carlo_year_df = monte_carlo_sim.monte_carlo_analysis(0, stock_data_df, forecast_df, year_amount, sim_amount)
     forecast_df = forecast_df.rename(columns={"open_Price": stock_symbol + "_price"})
-    print("forecast_df")
-    print(forecast_df)
     # Calculate the execution time
     end_time = time.time()
     execution_time = end_time - start_time

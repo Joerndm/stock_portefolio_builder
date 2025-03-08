@@ -87,15 +87,15 @@ if __name__ == "__main__":
         # Run a Monte Carlo simulation
         year_amount = 10
         sim_amount = 1000
+        #list of columns of forecast_df withouyt date column
+        columns = forecast_df.columns.to_list()
+        columns.remove('date')
+        for column in columns:
+            forecast_df[column] = forecast_df[column].astype(float)
+
         monte_carlo_day_df, monte_carlo_year_df = monte_carlo_sim.monte_carlo_analysis(0, stock_data_df, forecast_df, year_amount, sim_amount)
         forecast_df = forecast_df.rename(columns={"open_Price": stock + "_price"})
-        print("forecast_df")
-        print(forecast_df)
-        print("pf_prices")
-        print(pf_prices)
         pf_prices = pd.concat([pf_prices, forecast_df.set_index("date")[stock + "_price"]], axis=1)
-        print("pf_prices")
-        print(pf_prices)
         # Calculate the execution time
         end_time = time.time()
         execution_time = end_time - start_time
