@@ -6,32 +6,35 @@ import matplotlib.pyplot as plt
 import yfinance as yf
 
 def efficient_frontier_sim(price_df):
+    """
+    This function calculates the efficient frontier of a portfolio based on the input price dataframe.
+    The function calculates the log returns of the price dataframe, the mean of log returns, and the covariance matrix of log returns.
+    It then runs 750,000 simulations to generate random weights for the portfolio and calculate the portfolio return and volatility.
+    The function plots the efficient frontier and saves the graph as a PNG file.
+    If there are more than 2 columns in the price dataframe, the function performs additional processing to reduce the efficient frontier.
+    The function returns a dataframe containing the portfolio number, weights, returns, and volatilities.
+
+    :param price_df: A pandas dataframe containing the stock prices.
+    :return: A pandas dataframe containing the portfolio number, weights, returns, and volatilities.
+    """
     # Print the input price dataframe
     print("price_df")
     print(price_df)
     
     # Calculate log returns of the price dataframe
     log_returns_df = np.log(1 + price_df.pct_change(1).dropna())
-    print("log_returns_df")
-    print(log_returns_df)
     
     # Calculate mean of log returns and annualize it
     log_returns_mean = log_returns_df.mean() * 252
     log_returns_mean = log_returns_mean.to_frame()
     log_returns_mean = log_returns_mean.rename(columns={0: "Mean"})
     log_returns_mean = log_returns_mean.transpose()
-    print("log_returns_mean")
-    print(log_returns_mean)
     
     # Ensure log returns dataframe only contains columns present in log_returns_mean
     log_returns_df = log_returns_df[log_returns_mean.columns]
-    print("log_returns_df")
-    print(log_returns_df)
     
     # Calculate covariance matrix of log returns and annualize it
     log_returns_cov = log_returns_df.cov() * 252
-    print("log_returns_cov")
-    print(log_returns_cov)
     
     # Initialize lists to store simulation results
     portefolio_number = []

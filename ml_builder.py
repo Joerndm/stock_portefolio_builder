@@ -15,7 +15,11 @@ from sklearn.neural_network import MLPRegressor
 from sklearn.metrics import mean_absolute_error
 from sklearn.metrics import mean_squared_error
 from sklearn.metrics import r2_score
-import time
+import tensorflow as tf
+import math
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
+from tensorflow.keras.optimizers import Adam
 
 matplotlib.use('Agg')
 pd.set_option('future.no_silent_downcasting', True)
@@ -421,7 +425,61 @@ def neural_network_model(traning_dataset, test_dataset, hiddenLayer_1, hiddenLay
     except ValueError as e:
         raise ValueError("The model could not be generated. Please check the input data.") from e
 
-# Predicts the future stock price
+# Fits an LSTM model to the traning dataset and predicts the stock price
+def lstm_model(traning_dataset, test_dataset, epochs=50, batch_size=32):
+    """
+    Builds and trains an LSTM model.
+
+    Parameters:
+    - traning_dataset (pandas.DataFrame): A DataFrame containing the training dataset.
+    - test_dataset (pandas.DataFrame): A DataFrame containing the test dataset.
+    - epochs (int): The number of epochs to train the model.
+    - batch_size (int): The batch size for training.
+
+    Returns:
+    tensorflow.keras.Model: The trained LSTM model.
+    """
+    # Split the training dataset into features and labels
+    x_train = traning_dataset.drop(["prediction"], axis=1).values
+    y_train = traning_dataset["prediction"].values
+
+    # Split the test dataset into features and labels
+    x_test = test_dataset.drop(["prediction"], axis=1).values
+    y_test = test_dataset["prediction"].values
+
+    # Reshape the data to fit the LSTM input requirements
+    x_train = x_train.reshape((x_train.shape[0], 1, x_train.shape[1]))
+    x_test = x_test.reshape((x_test.shape[0], 1, x_test.shape[1]))
+
+    model = Sequential()
+    model.add(Input(shape=(x_train.shape[1], x_train.shape[2])))
+    model.add(LSTM(units=250, return_sequences=True))
+    model.add(Dropout(0.2))
+    model.add(LSTM(units=250, return_sequences=False))
+    model.add(Dropout(0.2))
+    model.add(Dense(units=1))
+
+    model.compile(optimizer=Adam(learning_rate=0.0001), loss='mean_squared_error')
+
+    model.fit(x_train, y_train, epochs=epochs, batch_size=batch_size, validation_data=(x_test, y_test))
+
+    trainScore = model.evaluate(x_train, y_train, verbose=0)
+    print('Train Score: %.2f MSE (%.2f RMSE)' % (trainScore, math.sqrt(trainScore)))
+    testScore = model.evaluate(x_test, y_test, verbose=0)
+    print('Test Score: %.2f MSE (%.2f RMSE)' % (testScore, math.sqrt(testScore)))
+
+    return model
+
+    # Example usage:
+    # Assuming traning_dataset and test_dataset are already defined and preprocessed
+    # traning_dataset and test_dataset should be pandas DataFrames with a "Price" column for labels
+
+    # traning_dataset, test_dataset = ...  # Your data here
+
+    # lstm_model = build_lstm_model(traning_dataset, test_dataset, epochs=50, batch_size=32)
+
+    # Predicts the future stock price
+
 def predict_future_price_changes(ticker, scaler, model, selected_features_list, stock_df, prediction_days):
     """
     Predicts the future stock price.
@@ -561,10 +619,10 @@ def predict_future_price_changes(ticker, scaler, model, selected_features_list, 
                             hist_df = hist_df.loc[hist_df["Date"] < stock_mod_df.iloc[0]["date"]]
                             hist_df = hist_df.rename(columns={ticker: "open_Price", "Date": "date"})
                             hist_df = pd.concat([hist_df, stock_mod_df[["date", "open_Price"]]], axis=0)
-                            return_3Y = hist_df.iloc[-757:]["open_Price"].pct_change(756).iloc[-1].infer_objects(copy=False)
+                            return_3Y = hist_df.iloc[-757:]["open_Price"].pct_change(756).iloc[-1]
                             future_df["3Y"] = return_3Y
                         elif len(stock_mod_df) > 756:
-                            return_3Y = stock_mod_df.iloc[-757:]["open_Price"].pct_change(756).iloc[-1].infer_objects(copy=False)
+                            return_3Y = stock_mod_df.iloc[-757:]["open_Price"].pct_change(756).iloc[-1]
                             future_df["3Y"] = return_3Y
 
                     # Calculate the return for the last 4 years
@@ -690,40 +748,32 @@ def predict_future_price_changes(ticker, scaler, model, selected_features_list, 
 
             # Change the data type of the date column to datetime
             future_df["date"] = pd.to_datetime(future_df["date"]) 
-            # print("future_df")
-            # print(future_df)
             # Concat the pandas series as new line to the stock_mod_df
             prediction_df = pd.concat([stock_mod_df.iloc[-1].to_frame().transpose(), future_df], axis=0).reset_index(drop=True)
-            # print("prediction_df")
-            # print(prediction_df)
-            # print("prediction_df info")
-            # print(prediction_df.info())
             # prediction_df = prediction_df.drop(["name", "open_Price", "trade_Volume"], axis=1)
             prediction_df = prediction_df.drop(["date", "ticker", "currency", "open_Price", "1D"], axis=1)
-            # print("prediction_df")
-            # print(prediction_df)
-            # print("prediction_df info")
-            # print(prediction_df.info())
             # Concat the future_df to the stock_mod_df
             stock_mod_df = pd.concat([stock_mod_df, future_df], axis=0).reset_index(drop=True)
-            # print("stock_mod_df")
-            # print(stock_mod_df)
-            # print("stock_mod_df info")
-            # print(stock_mod_df.info())
             # Scale the prediction_df
             scaled_prediction_df = scaler.transform(prediction_df)
-            scaled_prediction_df = np.array(scaled_prediction_df[selected_features_list])
+            scaled_prediction = np.array(scaled_prediction_df[selected_features_list])
+            scaled_prediction = scaled_prediction.reshape((scaled_prediction.shape[0], 1, scaled_prediction.shape[1]))
             # Predict the future stock price
-            forecast = model.predict(scaled_prediction_df)
+            forecast = model.predict(scaled_prediction)
             forecast_price_change = forecast[1]
             # Update the 1D column with the calculated value
             stock_mod_df.loc[len(stock_mod_df)-1, "1D"] = forecast_price_change
             # Update the Price column with the calculated value
             stock_mod_df.loc[len(stock_mod_df)-1, "open_Price"] = stock_mod_df.loc[len(stock_mod_df)-2, "open_Price"] * (1 + forecast_price_change)
-            # print("stock_mod_df")
-            # print(stock_mod_df)
-            # print("stock_mod_df info")
-            # print(stock_mod_df.info())
+
+        columns = stock_mod_df.columns.to_list()
+        # Remove the "date", "ticker" and "currency" column from the columns list
+        columns.remove("date")
+        columns.remove("ticker")
+        columns.remove("currency")
+        # Change the data type of the columns to float
+        for column in columns:
+            stock_mod_df[column] = stock_mod_df[column].astype(float)
 
         stock_mod_df = stock_mod_df[features_list]
         return stock_mod_df
@@ -734,6 +784,8 @@ def predict_future_price_changes(ticker, scaler, model, selected_features_list, 
         print(future_df)
         print("prediction_df")
         print(prediction_df)
+        print("stock_mod_df")
+        print(stock_mod_df)
         raise ValueError("The prediction could not be completed. Please check the input data.") from e
 
 # Combines the predicted stock prices from different models
@@ -755,10 +807,6 @@ def calculate_predicted_profit(forecast_df, prediction_days):
     """
 
     try:
-        # print("forecast_df columns")
-        # print(forecast_df.columns)
-        # print("prediction_days")
-        # print(prediction_days)
         predicted_return_df = forecast_df.loc[len(forecast_df)-prediction_days:, "open_Price"]
         predicted_return = ((predicted_return_df.iloc[-1] / predicted_return_df.iloc[0]) - 1) * 100
         if predicted_return > 0:
@@ -818,9 +866,6 @@ def plot_graph(stock_data_df, forecast_data_df):
     except FileNotFoundError as e:
         raise FileNotFoundError("The graph could not be saved. Please check the file name or path.") from e
 
-    # Show the graph
-    # plt.show()
-
 # Run the main function
 if __name__ == "__main__":
     import fetch_secrets
@@ -831,7 +876,7 @@ if __name__ == "__main__":
     stock_symbols_list = db_interactions.import_ticker_list()
     print(stock_symbols_list)
     stock_symbol = stock_symbols_list[0]
-    # stock_symbol = "ORSTED.CO"
+    stock_symbol = "DEMANT.CO"
     print(stock_symbol)
     stock_data_df = db_interactions.import_stock_dataset(stock_symbol)
     # Change the date column to datetime 64
@@ -843,7 +888,7 @@ if __name__ == "__main__":
     test_size = 0.20
     scaler, x_training_data, x_test_data, y_training_data_df, y_test_data_df, prediction_data = split_dataset.dataset_train_test_split(stock_data_df, test_size, 1)
     # Feature selection
-    feature_amount = 20
+    feature_amount = 35
     x_training_dataset, x_test_dataset, x_prediction_dataset, selected_features_model, selected_features_list = dimension_reduction.feature_selection(feature_amount, x_training_data, x_test_data, y_training_data_df, y_test_data_df, prediction_data, stock_data_df)
     # Combine the reduced dataset with the stock price
     x_training_dataset_df = pd.DataFrame(x_training_dataset, columns=selected_features_list)
@@ -854,10 +899,9 @@ if __name__ == "__main__":
     test_dataset_df = x_test_dataset_df.join(y_test_data_df)
     x_prediction_dataset_df = pd.DataFrame(x_prediction_dataset, columns=selected_features_list)
     # Predict the stock price
-    iterations = 7500
-    nn_model = neural_network_model(traning_dataset_df, test_dataset_df, feature_amount*16, feature_amount*12, feature_amount*20, feature_amount*16, iterations, 1)
+    lstm = lstm_model(traning_dataset_df, test_dataset_df)
     amount_of_days = 10
-    forecast_df = predict_future_price_changes(stock_symbol, scaler, nn_model, selected_features_list, stock_data_df, amount_of_days)
+    forecast_df = predict_future_price_changes(stock_symbol, scaler, lstm, selected_features_list, stock_data_df, amount_of_days)
     # Calculate the predicted profit
     calculate_predicted_profit(forecast_df, amount_of_days)
     # Plot the graph
@@ -865,12 +909,6 @@ if __name__ == "__main__":
     # Run a Monte Carlo simulation
     year_amount = 10
     sim_amount = 1000
-    #list of columns of forecast_df withouyt date column
-    columns = forecast_df.columns.to_list()
-    columns.remove('date')
-    for column in columns:
-        forecast_df[column] = forecast_df[column].astype(float)
-
     monte_carlo_day_df, monte_carlo_year_df = monte_carlo_sim.monte_carlo_analysis(0, stock_data_df, forecast_df, year_amount, sim_amount)
     forecast_df = forecast_df.rename(columns={"open_Price": stock_symbol + "_price"})
     # Calculate the execution time
