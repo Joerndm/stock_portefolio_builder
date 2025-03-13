@@ -15,12 +15,16 @@ from sklearn.neural_network import MLPRegressor
 from sklearn.metrics import mean_absolute_error
 from sklearn.metrics import mean_squared_error
 from sklearn.metrics import r2_score
-import time
+import tensorflow as tf
+import math
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
+from tensorflow.keras.optimizers import Adam
 
 matplotlib.use('Agg')
+pd.set_option('future.no_silent_downcasting', True)
 
 import stock_data_fetch
-import import_stock_data
 import split_dataset
 import dimension_reduction
 import monte_carlo_sim
@@ -313,13 +317,13 @@ def decision_tree_model(traning_dataset, test_dataset, prediction_dataset, stock
     Raises:
     None
     """
-    x_training_df = traning_dataset.drop(["Price"], axis=1)
-    y_training_df = traning_dataset["Price"]
+    x_training_df = traning_dataset.drop(["price"], axis=1)
+    y_training_df = traning_dataset["price"]
     # Convert the DataFrame to a numpy array
     x_training = np.array(x_training_df)
     y_training = np.array(y_training_df)
-    x_test_df = test_dataset.drop(["Price"], axis=1)
-    y_test_df = test_dataset["Price"]
+    x_test_df = test_dataset.drop(["price"], axis=1)
+    y_test_df = test_dataset["price"]
     # Convert the DataFrame to a numpy array
     x_test = np.array(x_test_df)
     y_test = np.array(y_test_df)
@@ -340,17 +344,17 @@ def decision_tree_model(traning_dataset, test_dataset, prediction_dataset, stock
     date_list = []
     for i in range(len(x_prediction)):
         x = len(x_prediction) - i
-        date = stock_df["Date"].values[-x]
+        date = stock_df["date"].values[-x]
         date = datetime.datetime.strptime(date, '%Y-%m-%d')
         date_list.append(date)
 
 
-    forecast_dict = {"Date":date_list, "Prediction_dt":forecast_set_dt
+    forecast_dict = {"date":date_list, "prediction_dt":forecast_set_dt
     }
     forecast_df = pd.DataFrame(forecast_dict)
-    forecast_df = forecast_df.set_index("Date")
+    forecast_df = forecast_df.set_index("date")
     # print(forecast_df)
-    predicted_return = ((forecast_df.iloc[-1]["Prediction_dt"] / forecast_df.iloc[0]["Prediction_dt"]) - 1) * 100
+    predicted_return = ((forecast_df.iloc[-1]["prediction_dt"] / forecast_df.iloc[0]["prediction_dt"]) - 1) * 100
     if predicted_return > 0:
         print(f"The prediction expects a profitable return on: {predicted_return}%, over the next {len(forecast_df)} days.")
     elif predicted_return < 0:
@@ -385,13 +389,13 @@ def neural_network_model(traning_dataset, test_dataset, hiddenLayer_1, hiddenLay
     """
 
     try:
-        x_training_df = traning_dataset.drop(["Prediction"], axis=1)
-        y_training_df = traning_dataset["Prediction"]
+        x_training_df = traning_dataset.drop(["prediction"], axis=1)
+        y_training_df = traning_dataset["prediction"]
         # Convert the DataFrame to a numpy array
         x_training = np.array(x_training_df)
         y_training = np.array(y_training_df)
-        x_test_df = test_dataset.drop(["Prediction"], axis=1)
-        y_test_df = test_dataset["Prediction"]
+        x_test_df = test_dataset.drop(["prediction"], axis=1)
+        y_test_df = test_dataset["prediction"]
         # Convert the DataFrame to a numpy array
         x_test = np.array(x_test_df)
         y_test = np.array(y_test_df)
@@ -417,12 +421,65 @@ def neural_network_model(traning_dataset, test_dataset, hiddenLayer_1, hiddenLay
         # print("The equation of the price prediction model is: ")
         # print(model_equation)
         return nn
-    
 
-    except ValueError:
-        raise ValueError("The model could not be generated. Please check the input data.")
+    except ValueError as e:
+        raise ValueError("The model could not be generated. Please check the input data.") from e
 
-# Predicts the future stock price
+# Fits an LSTM model to the traning dataset and predicts the stock price
+def lstm_model(traning_dataset, test_dataset, epochs=50, batch_size=32):
+    """
+    Builds and trains an LSTM model.
+
+    Parameters:
+    - traning_dataset (pandas.DataFrame): A DataFrame containing the training dataset.
+    - test_dataset (pandas.DataFrame): A DataFrame containing the test dataset.
+    - epochs (int): The number of epochs to train the model.
+    - batch_size (int): The batch size for training.
+
+    Returns:
+    tensorflow.keras.Model: The trained LSTM model.
+    """
+    # Split the training dataset into features and labels
+    x_train = traning_dataset.drop(["prediction"], axis=1).values
+    y_train = traning_dataset["prediction"].values
+
+    # Split the test dataset into features and labels
+    x_test = test_dataset.drop(["prediction"], axis=1).values
+    y_test = test_dataset["prediction"].values
+
+    # Reshape the data to fit the LSTM input requirements
+    x_train = x_train.reshape((x_train.shape[0], 1, x_train.shape[1]))
+    x_test = x_test.reshape((x_test.shape[0], 1, x_test.shape[1]))
+
+    model = Sequential()
+    model.add(Input(shape=(x_train.shape[1], x_train.shape[2])))
+    model.add(LSTM(units=250, return_sequences=True))
+    model.add(Dropout(0.2))
+    model.add(LSTM(units=250, return_sequences=False))
+    model.add(Dropout(0.2))
+    model.add(Dense(units=1))
+
+    model.compile(optimizer=Adam(learning_rate=0.0001), loss='mean_squared_error')
+
+    model.fit(x_train, y_train, epochs=epochs, batch_size=batch_size, validation_data=(x_test, y_test))
+
+    trainScore = model.evaluate(x_train, y_train, verbose=0)
+    print('Train Score: %.2f MSE (%.2f RMSE)' % (trainScore, math.sqrt(trainScore)))
+    testScore = model.evaluate(x_test, y_test, verbose=0)
+    print('Test Score: %.2f MSE (%.2f RMSE)' % (testScore, math.sqrt(testScore)))
+
+    return model
+
+    # Example usage:
+    # Assuming traning_dataset and test_dataset are already defined and preprocessed
+    # traning_dataset and test_dataset should be pandas DataFrames with a "Price" column for labels
+
+    # traning_dataset, test_dataset = ...  # Your data here
+
+    # lstm_model = build_lstm_model(traning_dataset, test_dataset, epochs=50, batch_size=32)
+
+    # Predicts the future stock price
+
 def predict_future_price_changes(ticker, scaler, model, selected_features_list, stock_df, prediction_days):
     """
     Predicts the future stock price.
@@ -441,272 +498,296 @@ def predict_future_price_changes(ticker, scaler, model, selected_features_list, 
     Raises:
     - ValueError: If the prediction could not be completed.
     """
+
     try:
-        # Predict the future stock price
+        # Predict the future stock open_Price
         short_term_dynamic_list = [
             '1M', '3M', '6M', '9M', '1Y', '2Y', '3Y', '4Y',
-            '5Y', 'SMA_40', 'SMA_120', 'EMA_40', 'EMA_120',
-            "STD_Div_40", "STD_Div_120", "Bollinger_Band_40",
-            "Bollinger_Band_120", 'P/S', 'P/E', 'P/B',
-            'P/FCF', "Momentum"
+            '5Y', 'sma_40', 'sma_120', 'ema_40', 'ema_120',
+            "std_Div_40", "std_Div_120", "bollinger_Band_40_2STD",
+            "bollinger_Band_120_2STD", 'p_s', 'p_e', 'p_b',
+            'p_fcf', "momentum"
         ]
-        print(f"selected_features_list: {selected_features_list}")
+        # print(f"selected_features_list: {selected_features_list}")
         features_list = selected_features_list.copy()
         # Append "Date" to the selected_features_list in position 0
-        features_list.insert(0, "Date")
-        features_list.insert(1, "Price")
+        features_list.insert(0, "date")
+        features_list.insert(1, "open_Price")
         features_list.insert(2, "1D")
         stock_mod_df = stock_df.copy()
         for run in range(prediction_days):
             future_df = stock_mod_df.iloc[-1].copy().to_frame().transpose()
             for feature in range(len(short_term_dynamic_list)):
                 if short_term_dynamic_list[feature] in features_list:
-                    future_day = pd.to_datetime(stock_mod_df.iloc[-1]["Date"]) + relativedelta(days=1)
+                    future_day = pd.to_datetime(stock_mod_df.iloc[-1]["date"]) + relativedelta(days=1)
                     if future_day.weekday() == 5:
                         future_day = future_day + datetime.timedelta(days=2)
                         future_day = future_day.strftime("%Y-%m-%d")
-                        future_df["Date"] = str(future_day)
+                        future_df["date"] = str(future_day)
                     elif future_day.weekday() == 6:
                         future_day = future_day + datetime.timedelta(days=1)
                         future_day = future_day.strftime("%Y-%m-%d")
-                        future_df["Date"] = str(future_day)
+                        future_df["date"] = str(future_day)
                     else:
                         future_day = future_day.strftime("%Y-%m-%d")
-                        future_df["Date"] = str(future_day)
+                        future_df["date"] = str(future_day)
 
                     # Calculate the return for the last 1 month
                     if short_term_dynamic_list[feature] == "1M":
                         if len(stock_mod_df) <= 21:
                             hist_df = pd.DataFrame(yf.download(ticker, period="6y"))["Open"].reset_index()
-                            hist_df = hist_df.loc[hist_df["Date"] < stock_mod_df.iloc[0]["Date"]]
-                            hist_df = hist_df.rename(columns={"Open": "Price"})
-                            hist_df = pd.concat([hist_df, stock_mod_df[["Date", "Price"]]], axis=0)
+                            hist_df = hist_df.loc[hist_df["Date"] < stock_mod_df.iloc[0]["date"]]
+                            hist_df = hist_df.rename(columns={ticker: "open_Price", "Date": "date"})
+                            hist_df = pd.concat([hist_df, stock_mod_df[["date", "open_Price"]]], axis=0)
                             return_1M = hist_df.iloc[-22:]["Price"].pct_change(21).iloc[-1]
                             future_df["1M"] = return_1M
                         elif len(stock_mod_df) > 21:
-                            return_1M = stock_mod_df.iloc[-22:]["Price"].pct_change(21).iloc[-1]
+                            return_1M = stock_mod_df.iloc[-22:]["open_Price"].pct_change(21).iloc[-1]
                             future_df["1M"] = return_1M
 
                     # Calculate the return for the last 3 months
                     if short_term_dynamic_list[feature] == "3M":
                         if len(stock_mod_df) <= 63:
                             hist_df = pd.DataFrame(yf.download(ticker, period="6y"))["Open"].reset_index()
-                            hist_df = hist_df.loc[hist_df["Date"] < stock_mod_df.iloc[0]["Date"]]
-                            hist_df = hist_df.rename(columns={"Open": "Price"})
-                            hist_df = pd.concat([hist_df, stock_mod_df[["Date", "Price"]]], axis=0)
-                            return_3M = hist_df.iloc[-64:]["Price"].pct_change(63).iloc[-1]
+                            hist_df = hist_df.loc[hist_df["Date"] < stock_mod_df.iloc[0]["date"]]
+                            hist_df = hist_df.rename(columns={ticker: "open_Price", "Date": "date"})
+                            hist_df = pd.concat([hist_df, stock_mod_df[["date", "open_Price"]]], axis=0)
+                            return_3M = hist_df.iloc[-64:]["open_Price"].pct_change(63).iloc[-1]
                             future_df["3M"] = return_3M
                         elif len(stock_mod_df) > 63:
-                            return_3M = stock_mod_df.iloc[-64:]["Price"].pct_change(63).iloc[-1]
+                            return_3M = stock_mod_df.iloc[-64:]["open_Price"].pct_change(63).iloc[-1]
                             future_df["3M"] = return_3M
 
                     # Calculate the return for the last 6 months
                     if short_term_dynamic_list[feature] == "6M":
                         if len(stock_mod_df) <= 126:
                             hist_df = pd.DataFrame(yf.download(ticker, period="6y"))["Open"].reset_index()
-                            hist_df = hist_df.loc[hist_df["Date"] < stock_mod_df.iloc[0]["Date"]]
-                            hist_df = hist_df.rename(columns={"Open": "Price"})
-                            hist_df = pd.concat([hist_df, stock_mod_df[["Date", "Price"]]], axis=0)
-                            return_6M = hist_df.iloc[-127:]["Price"].pct_change(126).iloc[-1]
+                            hist_df = hist_df.loc[hist_df["Date"] < stock_mod_df.iloc[0]["date"]]
+                            hist_df = hist_df.rename(columns={ticker: "open_Price", "Date": "date"})
+                            hist_df = pd.concat([hist_df, stock_mod_df[["date", "open_Price"]]], axis=0)
+                            return_6M = hist_df.iloc[-127:]["open_Price"].pct_change(126).iloc[-1]
                             future_df["6M"] = return_6M
                         elif len(stock_mod_df) > 126:
-                            return_6M = stock_mod_df.iloc[-127:]["Price"].pct_change(126).iloc[-1]
+                            return_6M = stock_mod_df.iloc[-127:]["open_Price"].pct_change(126).iloc[-1]
                             future_df["6M"] = return_6M
 
                     # Calculate the return for the last 9 months
                     if short_term_dynamic_list[feature] == "9M":
                         if len(stock_mod_df) <= 189:
                             hist_df = pd.DataFrame(yf.download(ticker, period="6y"))["Open"].reset_index()
-                            hist_df = hist_df.loc[hist_df["Date"] < stock_mod_df.iloc[0]["Date"]]
-                            hist_df = hist_df.rename(columns={"Open": "Price"})
-                            hist_df = pd.concat([hist_df, stock_mod_df[["Date", "Price"]]], axis=0)
-                            return_9M = hist_df.iloc[-190:]["Price"].pct_change(189).iloc[-1]
+                            hist_df = hist_df.loc[hist_df["Date"] < stock_mod_df.iloc[0]["date"]]
+                            hist_df = hist_df.rename(columns={ticker: "open_Price", "Date": "date"})
+                            hist_df = pd.concat([hist_df, stock_mod_df[["date", "open_Price"]]], axis=0)
+                            return_9M = hist_df.iloc[-190:]["open_Price"].pct_change(189).iloc[-1]
                             future_df["9M"] = return_9M
                         elif len(stock_mod_df) > 189:
-                            return_9M = stock_mod_df.iloc[-190:]["Price"].pct_change(189).iloc[-1]
+                            return_9M = stock_mod_df.iloc[-190:]["open_Price"].pct_change(189).iloc[-1]
                             future_df["9M"] = return_9M
 
                     # Calculate the return for the last 1 year
                     if short_term_dynamic_list[feature] == "1Y":
                         if len(stock_mod_df) <= 252:
                             hist_df = pd.DataFrame(yf.download(ticker, period="6y"))["Open"].reset_index()
-                            hist_df = hist_df.loc[hist_df["Date"] < stock_mod_df.iloc[0]["Date"]]
-                            hist_df = hist_df.rename(columns={"Open": "Price"})
-                            hist_df = pd.concat([hist_df, stock_mod_df[["Date", "Price"]]], axis=0)
-                            return_1Y = hist_df.iloc[-253:]["Price"].pct_change(252).iloc[-1]
+                            hist_df = hist_df.loc[hist_df["Date"] < stock_mod_df.iloc[0]["date"]]
+                            hist_df = hist_df.rename(columns={ticker: "open_Price", "Date": "date"})
+                            hist_df = pd.concat([hist_df, stock_mod_df[["date", "open_Price"]]], axis=0)
+                            return_1Y = hist_df.iloc[-253:]["open_Price"].pct_change(252).iloc[-1].infer_objects(copy=False)
                             future_df["1Y"] = return_1Y
                         elif len(stock_mod_df) > 252:
-                            return_1Y = stock_mod_df.iloc[-253:]["Price"].pct_change(252).iloc[-1]
+                            return_1Y = stock_mod_df.iloc[-253:]["open_Price"].pct_change(252).iloc[-1].infer_objects(copy=False)
                             future_df["1Y"] = return_1Y
 
                     # Calculate the return for the last 2 years
                     if short_term_dynamic_list[feature] == "2Y":
                         if len(stock_mod_df) <= 504:
                             hist_df = pd.DataFrame(yf.download(ticker, period="6y"))["Open"].reset_index()
-                            hist_df = hist_df.loc[hist_df["Date"] < stock_mod_df.iloc[0]["Date"]]
-                            hist_df = hist_df.rename(columns={"Open": "Price"})
-                            hist_df = pd.concat([hist_df, stock_mod_df[["Date", "Price"]]], axis=0)
-                            return_2Y = hist_df.iloc[-505:]["Price"].pct_change(504).iloc[-1]
+                            hist_df = hist_df.loc[hist_df["Date"] < stock_mod_df.iloc[0]["date"]]
+                            hist_df = hist_df.rename(columns={ticker: "open_Price", "Date": "date"})
+                            hist_df = pd.concat([hist_df, stock_mod_df[["date", "open_Price"]]], axis=0)
+                            return_2Y = hist_df.iloc[-505:]["open_Price"].pct_change(504).iloc[-1]
                             future_df["2Y"] = return_2Y
                         elif len(stock_mod_df) > 504:
-                            return_2Y = stock_mod_df.iloc[-505:]["Price"].pct_change(504).iloc[-1]
+                            return_2Y = stock_mod_df.iloc[-505:]["open_Price"].pct_change(504).iloc[-1]
                             future_df["2Y"] = return_2Y
 
                     # Calculate the return for the last 3 years
                     if short_term_dynamic_list[feature] == "3Y":
                         if len(stock_mod_df) <= 756:
                             hist_df = pd.DataFrame(yf.download(ticker, period="6y"))["Open"].reset_index()
-                            hist_df = hist_df.loc[hist_df["Date"] < stock_mod_df.iloc[0]["Date"]]
-                            hist_df = hist_df.rename(columns={"Open": "Price"})
-                            hist_df = pd.concat([hist_df, stock_mod_df[["Date", "Price"]]], axis=0)
-                            return_3Y = hist_df.iloc[-757:]["Price"].pct_change(756).iloc[-1]
+                            # print(hist_df)
+                            # print(hist_df.info())
+                            hist_df = hist_df.loc[hist_df["Date"] < stock_mod_df.iloc[0]["date"]]
+                            hist_df = hist_df.rename(columns={ticker: "open_Price", "Date": "date"})
+                            hist_df = pd.concat([hist_df, stock_mod_df[["date", "open_Price"]]], axis=0)
+                            return_3Y = hist_df.iloc[-757:]["open_Price"].pct_change(756).iloc[-1]
                             future_df["3Y"] = return_3Y
                         elif len(stock_mod_df) > 756:
-                            return_3Y = stock_mod_df.iloc[-757:]["Price"].pct_change(756).iloc[-1]
+                            return_3Y = stock_mod_df.iloc[-757:]["open_Price"].pct_change(756).iloc[-1]
                             future_df["3Y"] = return_3Y
 
                     # Calculate the return for the last 4 years
                     if short_term_dynamic_list[feature] == "4Y":
                         if len(stock_mod_df) <= 1008:
                             hist_df = pd.DataFrame(yf.download(ticker, period="6y"))["Open"].reset_index()
-                            hist_df = hist_df.loc[hist_df["Date"] < stock_mod_df.iloc[0]["Date"]]
-                            hist_df = hist_df.rename(columns={"Open": "Price"})
-                            hist_df = pd.concat([hist_df, stock_mod_df[["Date", "Price"]]], axis=0)
-                            return_4Y = hist_df.iloc[-1009:]["Price"].pct_change(1008).iloc[-1]
+                            hist_df = hist_df.loc[hist_df["Date"] < stock_mod_df.iloc[0]["date"]]
+                            hist_df = hist_df.rename(columns={ticker: "open_Price", "Date": "date"})
+                            hist_df = pd.concat([hist_df, stock_mod_df[["date", "open_Price"]]], axis=0)
+                            return_4Y = hist_df.iloc[-1009:]["open_Price"].pct_change(1008).iloc[-1]
                             future_df["4Y"] = return_4Y
                         elif len(stock_mod_df) > 1008:
-                            return_4Y = stock_mod_df.iloc[-1009:]["Price"].pct_change(1008).iloc[-1]
+                            return_4Y = stock_mod_df.iloc[-1009:]["open_Price"].pct_change(1008).iloc[-1]
                             future_df["4Y"] = return_4Y
 
                     # Calculate the return for the last 5 years
                     if short_term_dynamic_list[feature] == "5Y":
                         if len(stock_mod_df) <= 1260:
+                            # print(stock_mod_df)
                             hist_df = pd.DataFrame(yf.download(ticker, period="6y"))["Open"].reset_index()
-                            hist_df = hist_df.loc[hist_df["Date"] < stock_mod_df.iloc[0]["Date"]]
-                            hist_df = hist_df.rename(columns={"Open": "Price"})
-                            hist_df = pd.concat([hist_df, stock_mod_df[["Date", "Price"]]], axis=0)
-                            return_5Y = hist_df.iloc[-1261:]["Price"].pct_change(1260).iloc[-1]
+                            hist_df = hist_df.loc[hist_df["Date"] < stock_mod_df.iloc[0]["date"]]
+                            hist_df = hist_df.rename(columns={ticker: "open_Price", "Date": "date"})
+                            hist_df = pd.concat([hist_df, stock_mod_df[["date", "open_Price"]]], axis=0)
+                            # print("hist_df")
+                            # print(hist_df)
+                            return_5Y = hist_df.iloc[-1261:]["open_Price"].pct_change(1260).iloc[-1]
+                            # print(return_5Y)
                             future_df["5Y"] = return_5Y
                         elif len(stock_mod_df) > 1260:
-                            return_5Y = stock_mod_df.iloc[-1261:]["Price"].pct_change(1260).iloc[-1]
+                            # print(stock_mod_df)
+                            return_5Y = stock_mod_df.iloc[-1261:]["open_Price"].pct_change(1260).iloc[-1]
+                            # print(return_5Y)
                             future_df["5Y"] = return_5Y
 
                     # Calculate the 40 days simple moving average
-                    if short_term_dynamic_list[feature] == "SMA_40":
-                        sma_40 = stock_mod_df.iloc[-40:]["Price"].mean()
-                        future_df["SMA_40"] = sma_40
+                    if short_term_dynamic_list[feature] == "sma_40":
+                        sma_40 = stock_mod_df.iloc[-40:]["open_Price"].mean()
+                        future_df["sma_40"] = sma_40
 
                     # Calculate the 120 days simple moving average
-                    if short_term_dynamic_list[feature] == "SMA_120":
-                        sma_120 = stock_mod_df.iloc[-120:]["Price"].mean()
-                        future_df["SMA_120"] = sma_120
+                    if short_term_dynamic_list[feature] == "sma_120":
+                        sma_120 = stock_mod_df.iloc[-120:]["open_Price"].mean()
+                        future_df["sma_120"] = sma_120
 
                     # Calculate the 40 days exponential moving average
-                    if short_term_dynamic_list[feature] == "EMA_40":
-                        ema_40 = stock_mod_df.iloc[-40:]["Price"].ewm(span=40).mean().iloc[-1]
-                        future_df["EMA_40"] = ema_40
+                    if short_term_dynamic_list[feature] == "ema_40":
+                        ema_40 = stock_mod_df.iloc[-40:]["open_Price"].ewm(span=40).mean().iloc[-1]
+                        future_df["ema_40"] = ema_40
 
                     # Calculate the 120 days exponential moving average
-                    if short_term_dynamic_list[feature] == "EMA_120":
-                        ema_120 = stock_mod_df.iloc[-120:]["Price"].ewm(span=120).mean().iloc[-1]
-                        future_df["EMA_120"] = ema_120
+                    if short_term_dynamic_list[feature] == "ema_120":
+                        ema_120 = stock_mod_df.iloc[-120:]["open_Price"].ewm(span=120).mean().iloc[-1]
+                        future_df["ema_120"] = ema_120
 
                     # Calculate the 40 days standard deviation
-                    if short_term_dynamic_list[feature] == "STD_Div_40":
-                        std_div_40 = stock_mod_df.iloc[-40:]["Price"].std()
-                        future_df["STD_Div_40"] = std_div_40
+                    if short_term_dynamic_list[feature] == "std_Div_40":
+                        std_div_40 = stock_mod_df.iloc[-40:]["open_Price"].std()
+                        future_df["std_Div_40"] = std_div_40
 
                     # Calculate the 120 days standard deviation
-                    if short_term_dynamic_list[feature] == "STD_Div_120":
-                        std_div_120 = stock_mod_df.iloc[-120:]["Price"].std()
-                        future_df["STD_Div_120"] = std_div_120
+                    if short_term_dynamic_list[feature] == "std_Div_120":
+                        std_div_120 = stock_mod_df.iloc[-120:]["open_Price"].std()
+                        future_df["std_Div_120"] = std_div_120
 
                     # Calculate the Bollinger Band for the last 40 days
-                    if short_term_dynamic_list[feature] == "Bollinger_Band_40":
-                        std_div_40 = stock_mod_df.iloc[-40:]["Price"].std()
-                        sma_40 = stock_mod_df.iloc[-40:]["Price"].mean()
+                    if short_term_dynamic_list[feature] == "bollinger_Band_40_2STD":
+                        std_div_40 = stock_mod_df.iloc[-40:]["open_Price"].std()
+                        sma_40 = stock_mod_df.iloc[-40:]["open_Price"].mean()
                         bollinger_Band_40_Upper = (sma_40 + (std_div_40 * 2))
                         bollinger_Band_40_Lower = (sma_40 - (std_div_40 * 2))
                         bollinger_band_40 = bollinger_Band_40_Upper - bollinger_Band_40_Lower
-                        future_df["Bollinger_Band_40"] = bollinger_band_40
+                        future_df["bollinger_Band_40_2STD"] = bollinger_band_40
 
                     # Calculate the Bollinger Band for the last 120 days
-                    if short_term_dynamic_list[feature] == "Bollinger_Band_120":
-                        std_div_120 = stock_mod_df.iloc[-120:]["Price"].std()
-                        sma_120 = stock_mod_df.iloc[-120:]["Price"].mean()
+                    if short_term_dynamic_list[feature] == "bollinger_Band_120_2STD":
+                        std_div_120 = stock_mod_df.iloc[-120:]["open_Price"].std()
+                        sma_120 = stock_mod_df.iloc[-120:]["open_Price"].mean()
                         bollinger_Band_120_Upper = (sma_120 + (std_div_120 * 2))
                         bollinger_Band_120_Lower = (sma_120 - (std_div_120 * 2))
                         bollinger_band_120 = bollinger_Band_120_Upper - bollinger_Band_120_Lower
-                        future_df["Bollinger_Band_120"] = bollinger_band_120
+                        future_df["bollinger_Band_120_2STD"] = bollinger_band_120
                         
-                    # Calculate the P/S ratio
-                    if short_term_dynamic_list[feature] == "P/S":
-                        p_s = stock_mod_df.iloc[-1]["Price"] / (stock_mod_df.iloc[-1]["Revenue"] / stock_mod_df.iloc[-1]["Amount of stocks"])
-                        future_df["P/S"] = p_s
+                    # Calculate the p_s ratio
+                    if short_term_dynamic_list[feature] == "p_s":
+                        p_s = stock_mod_df.iloc[-1]["open_Price"] / (stock_mod_df.iloc[-1]["revenue"] / stock_mod_df.iloc[-1]["average_shares"])
+                        future_df["p_s"] = p_s
 
-                    # Calculate the P/E ratio
-                    if short_term_dynamic_list[feature] == "P/E":
-                        p_e = stock_mod_df.iloc[-1]["Price"] / stock_mod_df.iloc[-1]["EPS"]
-                        future_df["P/E"] = p_e
+                    # Calculate the p_e ratio
+                    if short_term_dynamic_list[feature] == "p_e":
+                        p_e = stock_mod_df.iloc[-1]["open_Price"] / stock_mod_df.iloc[-1]["eps"]
+                        future_df["p_e"] = p_e
 
-                    # Calculate the P/B ratio
-                    if short_term_dynamic_list[feature] == "P/B":
-                        p_b = stock_mod_df.iloc[-1]["Price"] / stock_mod_df.iloc[-1]["Book Value per share"]
-                        future_df["P/B"] = p_b
+                    # Calculate the p_b ratio
+                    if short_term_dynamic_list[feature] == "p_b":
+                        p_b = stock_mod_df.iloc[-1]["open_Price"] / stock_mod_df.iloc[-1]["book_Value_Per_Share"]
+                        future_df["p_b"] = p_b
 
-                    # Calculate the P/FCF ratio
-                    if short_term_dynamic_list[feature] == "P/FCF":
-                        p_fcf = stock_mod_df.iloc[-1]["Price"] / stock_mod_df.iloc[-1]["Free Cash Flow per share growth"]
-                        future_df["P/FCF"] = p_fcf
+                    # Calculate the p_fcf ratio
+                    if short_term_dynamic_list[feature] == "p_fcf":
+                        p_fcf = stock_mod_df.iloc[-1]["open_Price"] / stock_mod_df.iloc[-1]["free_Cash_Flow_Per_Share_Growth"]
+                        future_df["p_fcf"] = p_fcf
 
-                    # Calculate the Momentum
-                    if short_term_dynamic_list[feature] == "Momentum":
-                        if stock_mod_df.iloc[-1]["Price"] >= stock_mod_df.iloc[-2]["Price"]:
-                            if stock_mod_df.iloc[-1]["Momentum"] <= 0:
+                    # Calculate the momentum
+                    if short_term_dynamic_list[feature] == "momentum":
+                        if stock_mod_df.iloc[-1]["open_Price"] >= stock_mod_df.iloc[-2]["open_Price"]:
+                            if stock_mod_df.iloc[-1]["momentum"] <= 0:
                                 momentum = 1
-                                # Update the Momentum column with the calculated value
-                                future_df["Momentum"] = momentum
-                            elif stock_mod_df.iloc[-1]["Momentum"] > 0:
-                                momentum = stock_mod_df.iloc[-1]["Momentum"] + 1
-                                # Update the Momentum column with the calculated value
-                                future_df["Momentum"] = momentum
-                        elif stock_mod_df.iloc[-1]["Price"] < stock_mod_df.iloc[-2]["Price"]:
-                            if stock_mod_df.iloc[-1]["Momentum"] >= 0:
+                                # Update the momentum column with the calculated value
+                                future_df["momentum"] = momentum
+                            elif stock_mod_df.iloc[-1]["momentum"] > 0:
+                                momentum = stock_mod_df.iloc[-1]["momentum"] + 1
+                                # Update the momentum column with the calculated value
+                                future_df["momentum"] = momentum
+                        elif stock_mod_df.iloc[-1]["open_Price"] < stock_mod_df.iloc[-2]["open_Price"]:
+                            if stock_mod_df.iloc[-1]["momentum"] >= 0:
                                 momentum = -1
-                                # Update the Momentum column with the calculated value
-                                future_df["Momentum"] = momentum
-                            elif stock_mod_df.iloc[-1]["Momentum"] < 0:
-                                momentum = stock_mod_df.iloc[-1]["Momentum"] - 1
-                                # Update the Momentum column with the calculated value
-                                future_df["Momentum"] = momentum
-                    
+                                # Update the momentum column with the calculated value
+                                future_df["momentum"] = momentum
+                            elif stock_mod_df.iloc[-1]["momentum"] < 0:
+                                momentum = stock_mod_df.iloc[-1]["momentum"] - 1
+                                # Update the momentum column with the calculated value
+                                future_df["momentum"] = momentum
 
+            # Change the data type of the date column to datetime
+            future_df["date"] = pd.to_datetime(future_df["date"]) 
             # Concat the pandas series as new line to the stock_mod_df
             prediction_df = pd.concat([stock_mod_df.iloc[-1].to_frame().transpose(), future_df], axis=0).reset_index(drop=True)
-            prediction_df = prediction_df.drop(["Date", "Name", "Ticker", "Currency", "Price", "1D", "Trade volume", "Amount of stocks"], axis=1)
+            # prediction_df = prediction_df.drop(["name", "open_Price", "trade_Volume"], axis=1)
+            prediction_df = prediction_df.drop(["date", "ticker", "currency", "open_Price", "1D"], axis=1)
             # Concat the future_df to the stock_mod_df
             stock_mod_df = pd.concat([stock_mod_df, future_df], axis=0).reset_index(drop=True)
             # Scale the prediction_df
             scaled_prediction_df = scaler.transform(prediction_df)
-            scaled_prediction_df = np.array(scaled_prediction_df[selected_features_list])
+            scaled_prediction = np.array(scaled_prediction_df[selected_features_list])
+            scaled_prediction = scaled_prediction.reshape((scaled_prediction.shape[0], 1, scaled_prediction.shape[1]))
             # Predict the future stock price
-            forecast = model.predict(scaled_prediction_df)
+            forecast = model.predict(scaled_prediction)
             forecast_price_change = forecast[1]
             # Update the 1D column with the calculated value
             stock_mod_df.loc[len(stock_mod_df)-1, "1D"] = forecast_price_change
             # Update the Price column with the calculated value
-            stock_mod_df.loc[len(stock_mod_df)-1, "Price"] = stock_mod_df.loc[len(stock_mod_df)-2, "Price"] * (1 + forecast_price_change)
+            stock_mod_df.loc[len(stock_mod_df)-1, "open_Price"] = stock_mod_df.loc[len(stock_mod_df)-2, "open_Price"] * (1 + forecast_price_change)
 
+        columns = stock_mod_df.columns.to_list()
+        # Remove the "date", "ticker" and "currency" column from the columns list
+        columns.remove("date")
+        columns.remove("ticker")
+        columns.remove("currency")
+        # Change the data type of the columns to float
+        for column in columns:
+            stock_mod_df[column] = stock_mod_df[column].astype(float)
 
         stock_mod_df = stock_mod_df[features_list]
         return stock_mod_df
 
-
-    except ValueError:
+    except ValueError as e:
+        print("The prediction could not be completed. Please check the input data.")
+        print("future_df")
         print(future_df)
+        print("prediction_df")
         print(prediction_df)
-        raise ValueError("The prediction could not be completed. Please check the input data.")
-    
+        print("stock_mod_df")
+        print(stock_mod_df)
+        raise ValueError("The prediction could not be completed. Please check the input data.") from e
+
 # Combines the predicted stock prices from different models
 def calculate_predicted_profit(forecast_df, prediction_days):
     """
@@ -724,8 +805,9 @@ def calculate_predicted_profit(forecast_df, prediction_days):
     Raises:
     ValueError: If the prediction could not be completed.
     """
+
     try:
-        predicted_return_df = forecast_df.loc[len(forecast_df)-prediction_days:, "Price"]
+        predicted_return_df = forecast_df.loc[len(forecast_df)-prediction_days:, "open_Price"]
         predicted_return = ((predicted_return_df.iloc[-1] / predicted_return_df.iloc[0]) - 1) * 100
         if predicted_return > 0:
             print(f"The prediction expects a profitable return on: {round(predicted_return, 2)}%, over the next {prediction_days} days.")
@@ -754,23 +836,23 @@ def plot_graph(stock_data_df, forecast_data_df):
     """
     # Plot the graph
     plt.figure(figsize=(18, 8))
-    stock_data_df["Date"] = stock_data_df["Date"].astype('datetime64[ns]')
-    forecast_data_df["Date"] = forecast_data_df["Date"].astype('datetime64[ns]')
-    forecast_data_df = forecast_data_df.loc[forecast_data_df["Date"] >= stock_data_df.iloc[-1]["Date"]]
-    stock_data_df = stock_data_df.set_index("Date")
-    forecast_data_df = forecast_data_df.set_index("Date")
-    stock_data_df["Price"].plot()
-    forecast_data_df["Price"].plot()
+    stock_data_df["date"] = stock_data_df["date"].astype('datetime64[ns]')
+    forecast_data_df["date"] = forecast_data_df["date"].astype('datetime64[ns]')
+    forecast_data_df = forecast_data_df.loc[forecast_data_df["date"] >= stock_data_df.iloc[-1]["date"]]
+    stock_data_df = stock_data_df.set_index("date")
+    forecast_data_df = forecast_data_df.set_index("date")
+    stock_data_df["open_Price"].plot()
+    forecast_data_df["open_Price"].plot()
     legend_list = ["Stock Price", "Predicted Stock Price"]
     plt.legend(legend_list,
         loc="best"
     )
     plt.xlabel("Date")
-    plt.ylabel("Price")
-    plt.title(f"Stock Price Prediction of {stock_data_df.iloc[0]["Name"]}")
+    plt.ylabel("Opening price")
+    plt.title(f"Stock Price Prediction of {stock_data_df.iloc[0]["ticker"]}")
     # Change " " in stock_data_df.iloc[0]["Name"] to "_" to avoid error when saving the graph
-    stock_data_df = stock_data_df.replace({"Name": [" ", "/"]}, {"Name": "_"}, regex=True)
-    stock_name = stock_data_df.iloc[0]["Name"]
+    stock_data_df = stock_data_df.replace({"ticker": [" ", "/"]}, {"ticker": "_"}, regex=True)
+    stock_name = stock_data_df.iloc[0]["ticker"]
     graph_name = str(f"stock_prediction_of_{stock_name}.png")
     my_path = os.path.abspath(__file__)
     path = os.path.dirname(my_path)
@@ -781,55 +863,32 @@ def plot_graph(stock_data_df, forecast_data_df):
         plt.close("all")
 
 
-    except FileNotFoundError:
-        raise FileNotFoundError("The graph could not be saved. Please check the file name or path.")
-    
-
-    # Show the graph
-    # plt.show()
+    except FileNotFoundError as e:
+        raise FileNotFoundError("The graph could not be saved. Please check the file name or path.") from e
 
 # Run the main function
 if __name__ == "__main__":
+    import fetch_secrets
+    import db_connectors
+    import db_interactions
     start_time = time.time()
-    # Import stock symbols from a CSV file
-    stock_symbols_df = stock_data_fetch.import_symbols("index_symbol_list_single_stock.csv")
-    stock_symbols_list = stock_symbols_df["Symbol"].tolist()
+    # Import stock symbols from DB
+    stock_symbols_list = db_interactions.import_ticker_list()
+    print(stock_symbols_list)
     stock_symbol = stock_symbols_list[0]
+    stock_symbol = "DEMANT.CO"
     print(stock_symbol)
-    # # Fetch stock data for the imported stock symbols
-    # stock_price_data_df = stock_data_fetch.fetch_stock_price_data(stock_symbol)
-    # stock_price_data_df = stock_data_fetch.calculate_period_returns(stock_price_data_df)
-    # stock_price_data_df = stock_data_fetch.calculate_moving_averages(stock_price_data_df)
-    # stock_price_data_df = stock_data_fetch.calculate_standard_diviation_value(stock_price_data_df)
-    # stock_price_data_df = stock_data_fetch.calculate_bollinger_bands(stock_price_data_df)
-    # # Fetch stock data for the imported stock symbols
-    # full_stock_financial_data_df = stock_data_fetch.fetch_stock_financial_data(stock_symbol)
-    # # Combine stock data with stock financial data
-    # combined_stock_data_df = stock_data_fetch.combine_stock_data(stock_price_data_df, full_stock_financial_data_df)
-    # # Calculate ratios
-    # combined_stock_data_df = stock_data_fetch.calculate_ratios(combined_stock_data_df)
-    # combined_stock_data_df = stock_data_fetch.calculate_momentum(combined_stock_data_df)
-    # combined_stock_data_df = stock_data_fetch.drop_nan_values(combined_stock_data_df)
-    # # Create a dictionary of dataframes to export to Excel
-    # dataframes = {
-    #     "Combined Stock Data": combined_stock_data_df
-    # }
-    # # Export the dataframes to an Excel file
-    # stock_data_fetch.export_to_excel(dataframes, 'stock_data_single.xlsx')
-    # # Import the stock data from an Excel file
-    # dataframes = stock_data_fetch.import_excel("stock_data_single.xlsx")
-    # for key, value in dataframes.items():
-    #     dataframe = value
-
-
-    # # Export the stock data to a CSV file
-    # stock_data_fetch.convert_excel_to_csv(dataframe, "stock_data_single")
-    stock_data_df = import_stock_data.import_as_df_from_csv('stock_data_single.csv')
+    stock_data_df = db_interactions.import_stock_dataset(stock_symbol)
+    # Change the date column to datetime 64
+    stock_data_df["date"] = pd.to_datetime(stock_data_df["date"])
+    # Drop the columns that are empty
+    stock_data_df = stock_data_df.dropna(axis=0, how="any")
+    stock_data_df = stock_data_df.dropna(axis=1, how="any")
     # Split the dataset into traning, test data and prediction data
     test_size = 0.20
     scaler, x_training_data, x_test_data, y_training_data_df, y_test_data_df, prediction_data = split_dataset.dataset_train_test_split(stock_data_df, test_size, 1)
     # Feature selection
-    feature_amount = 30
+    feature_amount = 35
     x_training_dataset, x_test_dataset, x_prediction_dataset, selected_features_model, selected_features_list = dimension_reduction.feature_selection(feature_amount, x_training_data, x_test_data, y_training_data_df, y_test_data_df, prediction_data, stock_data_df)
     # Combine the reduced dataset with the stock price
     x_training_dataset_df = pd.DataFrame(x_training_dataset, columns=selected_features_list)
@@ -840,23 +899,18 @@ if __name__ == "__main__":
     test_dataset_df = x_test_dataset_df.join(y_test_data_df)
     x_prediction_dataset_df = pd.DataFrame(x_prediction_dataset, columns=selected_features_list)
     # Predict the stock price
-    iterations = 7500
-    nn_model = neural_network_model(traning_dataset_df, test_dataset_df, feature_amount*16, feature_amount*12, feature_amount*20, feature_amount*16, iterations, 1)
-    amount_of_days = 25
-    forecast_df = predict_future_price_changes(stock_symbol, scaler, nn_model, selected_features_list, stock_data_df, amount_of_days)
-    # Create a dictionary of dataframes to export to Excel
-    dataframes = {
-        "Forecast Data": forecast_df
-    }
-    # Export the dataframes to an Excel file
-    # stock_data_fetch.export_to_excel(dataframes, "stock_data_mod_single.xlsx")
+    lstm = lstm_model(traning_dataset_df, test_dataset_df)
+    amount_of_days = 10
+    forecast_df = predict_future_price_changes(stock_symbol, scaler, lstm, selected_features_list, stock_data_df, amount_of_days)
+    # Calculate the predicted profit
     calculate_predicted_profit(forecast_df, amount_of_days)
     # Plot the graph
     plot_graph(stock_data_df, forecast_df)
     # Run a Monte Carlo simulation
-    year_amount = 20
+    year_amount = 10
     sim_amount = 1000
     monte_carlo_day_df, monte_carlo_year_df = monte_carlo_sim.monte_carlo_analysis(0, stock_data_df, forecast_df, year_amount, sim_amount)
+    forecast_df = forecast_df.rename(columns={"open_Price": stock_symbol + "_price"})
     # Calculate the execution time
     end_time = time.time()
     execution_time = end_time - start_time

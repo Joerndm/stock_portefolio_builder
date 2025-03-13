@@ -9,3 +9,6 @@ python-dateutil==2.8.2
 timedelta==2020.12.3
 XlsxWriter==3.1.9
 openpyxl==3.1.2
+python-dotenv==1.0.1
+SQLAlchemy==2.0.28
+mysql-connector-python==8.3.0

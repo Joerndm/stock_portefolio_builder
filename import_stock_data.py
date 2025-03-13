@@ -1,3 +1,4 @@
+""""""
 import os
 import pandas as pd
 
@@ -28,12 +29,11 @@ def import_as_df_from_csv(csv_file):
         df = pd.read_csv(import_location)
 
         # Check if the 'Symbol' column exists in the DataFrame
-        if 'Date' not in df.columns:
-            raise KeyError("CSV file does not have a column named 'Date'.")
+        if 'date' not in df.columns:
+            raise KeyError("CSV file does not have a column named 'date'.")
 
         # Return the DataFrame with stock symbols
         return df
 
-    except FileNotFoundError:
-        raise FileNotFoundError(f"CSV file '{csv_file}' does not exist.")
-    
+    except FileNotFoundError as e:
+        raise FileNotFoundError(f"CSV file '{csv_file}' does not exist.") from e
