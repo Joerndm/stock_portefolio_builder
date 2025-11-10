@@ -1019,6 +1019,17 @@ def import_stock_dataset(stock_ticker=""):
                     ORDER BY date ASC
                     """
                 stock_price_data_df = pd.read_sql(sql=price_quary, con=db_con)
+
+                vix_price_quary = f"""SELECT * FROM
+                    (SELECT * FROM stock_price_data
+                    WHERE ticker = "{"^VIX"}"
+                    ORDER BY date DESC) AS temp
+                    ORDER BY date ASC
+                    """
+                vix_price_data_df = pd.read_sql(sql=vix_price_quary, con=db_con)
+                vix_price_data_df = vix_price_data_df.rename(columns={'open_Price': 'VIX_open_Price'})
+                stock_price_data_df = stock_price_data_df.merge(vix_price_data_df[['date', 'VIX_open_Price']], on='date', how='left')
+                stock_price_data_df['VIX_open_Price'] = stock_price_data_df['VIX_open_Price'].ffill()
                 income_stmt_quary = f"""SELECT * FROM
                     (SELECT * FROM stock_income_stmt_data
                     WHERE ticker = "{stock_ticker}"

@@ -1,0 +1,64 @@
+#OPTIMIZED REQUIREMENTS FILE
+#
+#Python Version: 3.12 (Maximum compatibility based on imported libraries)
+#
+#Purpose: To fetch stock data and create additional measurements related to each stock using pandas and yfinance.
+#
+#CORE SCIENTIFIC / DL STACK
+#
+#These versions are guaranteed compatible with Python 3.12.
+#
+pandas>=2.2.0
+numpy>=1.26.5
+matplotlib>=3.8.0
+scipy>=1.12.0
+scikit-learn>=1.4.0
+python-dateutil==2.8.2
+#
+#FINANCIAL / DATA UTILITIES
+#
+yfinance>=0.2.40
+pandas-ta
+#
+#DATABASE / AUTH / ENVIRONMENT
+#
+SQLAlchemy>=2.0.30
+mysql-connector-python>=8.3.0
+python-dotenv>=1.0.1
+oauthlib>=3.3.1
+#
+#DEPENDENCIES (Included to prevent conflicts and resemble a frozen list)
+#
+#absl-py>=2.3.1
+#appdirs>=1.4.4
+#astunparse>=1.6.3
+#cachetools>=6.3.0
+#certifi>=2025.10.5
+#charset-normalizer>=3.5.0
+#cycler>=0.12.1
+#flatbuffers>=25.9.23
+#fonttools>=4.60.1
+#gast>=0.5.0
+#google-auth>=2.24.0
+#google-auth-oauthlib>=1.2.0
+#google-pasta>=0.2.0
+#grpcio>=1.76.0
+#h5py>=3.15.1
+#joblib>=1.5.2
+#kiwisolver>=1.4.9
+#Markdown>=3.5
+#MarkupSafe>=3.0.3
+#Pillow>=12.0.0
+#protobuf>=4.25.1
+#requests>=2.32.5
+#requests-oauthlib>=2.0.0
+#rsa>=4.9.1
+#setuptools>=69.0.1
+#six>=1.17.0
+#termcolor>=3.2.0
+#threadpoolctl>=3.6.0
+#typing_extensions>=4.15.0
+#tzdata>=2025.2
+#urllib3>=2.1.0
+#wheel>=0.45.1
+#wrapt>=2.0.0

@@ -71,11 +71,18 @@ def fetch_stock_standard_data(stock_symbol = ""):
         # Fetch the stock data for the symbol
         symbol = stock_symbol
         stock_info = yf.Ticker(symbol).info
-        stock_info = {
-            "ticker": stock_info["symbol"],
-            "company_Name": stock_info["longName"],
-            "industry": stock_info["industry"]
-        }
+        if stock_info["typeDisp"] == "Index":
+            stock_info = {
+                "ticker": stock_info["symbol"],
+                "company_Name": stock_info["longName"],
+                "industry": "Index"
+            }
+        else:
+            stock_info = {
+                "ticker": stock_info["symbol"],
+                "company_Name": stock_info["longName"],
+                "industry": stock_info["industry"]
+            }
 
     except KeyError as e:
         raise KeyError(f"Stock symbol '{symbol}' is invalid or not found.") from e
@@ -601,64 +608,168 @@ def fetch_stock_financial_data(stock_symbol = ""):
 
         # Fetching the financial stock data using yfinance
         stock_data = yf.Ticker(symbol)
-        print(f"length of income: {len(pd.DataFrame(stock_data.income_stmt).columns)}, length of balance: {len(pd.DataFrame(stock_data.balancesheet).columns)}, length of cashflow: {len(pd.DataFrame(stock_data.cashflow).columns)}")
-        income_stmt = stock_data.income_stmt
-        income_stmt_df = pd.DataFrame(income_stmt)
-        if len(pd.DataFrame(stock_data.income_stmt).columns) > len(pd.DataFrame(stock_data.balancesheet).columns):
-            column_amount = len(pd.DataFrame(stock_data.income_stmt).columns) - len(pd.DataFrame(stock_data.balancesheet).columns)
-            income_stmt_df = income_stmt_df.drop(columns=income_stmt_df.columns[-column_amount])
-        elif len(pd.DataFrame(stock_data.income_stmt).columns) > len(pd.DataFrame(stock_data.cashflow).columns):
-            column_amount = len(pd.DataFrame(stock_data.income_stmt).columns) - len(pd.DataFrame(stock_data.cashflow).columns)
-            income_stmt_df = income_stmt_df.drop(columns=income_stmt_df.columns[-column_amount])
-
-        # Checking if the input DataFrame is empty
-        if income_stmt_df.empty:
-            raise ValueError("Input DataFrame is empty.")
-
-        # Rotate the income_stmt_df dataframe
-        income_stmt_df = income_stmt_df.transpose()
-        income_stmt_df["Revenue growth"] = 0.0
-        income_stmt_df["Gross Profit growth"] = 0.0
-        income_stmt_df["Gross Margin"] = 0.0
-        income_stmt_df["Gross Margin growth"] = 0.0
-        income_stmt_df["Operating Earnings"] = 0.0
-        income_stmt_df["Operating Margin"] = 0.0
-        income_stmt_df["Operating Margin growth"] = 0.0
-        income_stmt_df["Net Income growth"] = 0.0
-        income_stmt_df["Net Income Margin"] = 0.0
-        income_stmt_df["Net Income Margin growth"] = 0.0
-        income_stmt_df["EPS"] = 0.0
-        income_stmt_df["EPS growth"] = 0.0
-        # Invert the rows in income_stmt_df dataframe
-        income_stmt_df = income_stmt_df.iloc[::-1]
-        # Reset the index of the income_stmt_df dataframe
-        income_stmt_df = income_stmt_df.reset_index()
-        # Rename the index column to Date
-        income_stmt_df = income_stmt_df.rename(columns={"index": "Date"})
-        # Fill the NaN values in the income_stmt_df dataframe with values from the previous row
-        income_stmt_df = income_stmt_df.ffill()
-        # Use stock_data to chack if bank is part of the registered industry for the stock
         stock_info = stock_data.info
-        industry = stock_info["industry"]
-        # Check if bank is part of the registered industry for the stock
-        if "banks" in industry.lower():
-            # Check is "Gross Profit" is in the income_stmt_df dataframe
-            if "Gross Profit" not in income_stmt_df.columns:
-                if "Operating Income" not in income_stmt_df.columns:
+        if stock_info["typeDisp"] != "Index":
+            print(f"length of income: {len(pd.DataFrame(stock_data.income_stmt).columns)}, length of balance: {len(pd.DataFrame(stock_data.balancesheet).columns)}, length of cashflow: {len(pd.DataFrame(stock_data.cashflow).columns)}")
+            income_stmt = stock_data.income_stmt
+            income_stmt_df = pd.DataFrame(income_stmt)
+            if len(pd.DataFrame(stock_data.income_stmt).columns) > len(pd.DataFrame(stock_data.balancesheet).columns):
+                column_amount = len(pd.DataFrame(stock_data.income_stmt).columns) - len(pd.DataFrame(stock_data.balancesheet).columns)
+                income_stmt_df = income_stmt_df.drop(columns=income_stmt_df.columns[-column_amount])
+            elif len(pd.DataFrame(stock_data.income_stmt).columns) > len(pd.DataFrame(stock_data.cashflow).columns):
+                column_amount = len(pd.DataFrame(stock_data.income_stmt).columns) - len(pd.DataFrame(stock_data.cashflow).columns)
+                income_stmt_df = income_stmt_df.drop(columns=income_stmt_df.columns[-column_amount])
+
+            # Checking if the input DataFrame is empty
+            if income_stmt_df.empty:
+                raise ValueError("Input DataFrame is empty.")
+
+            # Rotate the income_stmt_df dataframe
+            income_stmt_df = income_stmt_df.transpose()
+            income_stmt_df["Revenue growth"] = 0.0
+            income_stmt_df["Gross Profit growth"] = 0.0
+            income_stmt_df["Gross Margin"] = 0.0
+            income_stmt_df["Gross Margin growth"] = 0.0
+            income_stmt_df["Operating Earnings"] = 0.0
+            income_stmt_df["Operating Margin"] = 0.0
+            income_stmt_df["Operating Margin growth"] = 0.0
+            income_stmt_df["Net Income growth"] = 0.0
+            income_stmt_df["Net Income Margin"] = 0.0
+            income_stmt_df["Net Income Margin growth"] = 0.0
+            income_stmt_df["EPS"] = 0.0
+            income_stmt_df["EPS growth"] = 0.0
+            # Invert the rows in income_stmt_df dataframe
+            income_stmt_df = income_stmt_df.iloc[::-1]
+            # Reset the index of the income_stmt_df dataframe
+            income_stmt_df = income_stmt_df.reset_index()
+            # Rename the index column to Date
+            income_stmt_df = income_stmt_df.rename(columns={"index": "Date"})
+            # Fill the NaN values in the income_stmt_df dataframe with values from the previous row
+            income_stmt_df = income_stmt_df.ffill()
+            # Use stock_data to chack if bank is part of the registered industry for the stock
+            industry = stock_info["industry"]
+            # Check if bank is part of the registered industry for the stock
+            if "banks" in industry.lower():
+                # Check is "Gross Profit" is in the income_stmt_df dataframe
+                if "Gross Profit" not in income_stmt_df.columns:
+                    if "Operating Income" not in income_stmt_df.columns:
+                        for index, row in income_stmt_df.iterrows():
+                            income_stmt_df.loc[index, "Net Income Margin"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / income_stmt_df.loc[index, "Total Revenue"]
+                            income_stmt_df.loc[index, "EPS"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / income_stmt_df.loc[index, "Diluted Average Shares"]
+                            if index == 0:
+                                income_stmt_df.loc[index, "Revenue growth"] = 0.0
+                                income_stmt_df.loc[index, "Net Income growth"] = 0.0
+                                income_stmt_df.loc[index, "Net Income Margin growth"] = 0.0
+                                income_stmt_df.loc[index, "EPS growth"] = 0.0
+                            else:
+                                income_stmt_df.loc[index, "Revenue growth"] = (income_stmt_df.iloc[index]["Total Revenue"] / income_stmt_df.iloc[index-1]["Total Revenue"])-1
+                                income_stmt_df.loc[index, "Net Income growth"] = (income_stmt_df.iloc[index]["Net Income Common Stockholders"] / income_stmt_df.iloc[index-1]["Net Income Common Stockholders"])-1
+                                income_stmt_df.loc[index, "Net Income Margin growth"] = (income_stmt_df.iloc[index]["Net Income Margin"] / income_stmt_df.iloc[index-1]["Net Income Margin"])-1
+                                income_stmt_df.loc[index, "EPS growth"] = (income_stmt_df.iloc[index]["EPS"] / income_stmt_df.iloc[index-1]["EPS"])-1
+                    else:
+                        for index, row in income_stmt_df.iterrows():
+                            income_stmt_df.loc[index, "Operating Margin"] = income_stmt_df.loc[index, "Operating Income"] / income_stmt_df.loc[index, "Total Revenue"]
+                            income_stmt_df.loc[index, "Net Income Margin"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / income_stmt_df.loc[index, "Total Revenue"]
+                            income_stmt_df.loc[index, "EPS"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / income_stmt_df.loc[index, "Diluted Average Shares"]
+                            if index == 0:
+                                income_stmt_df.loc[index, "Revenue growth"] = 0.0
+                                income_stmt_df.loc[index, "Operating Earnings growth"] = 0.0
+                                income_stmt_df.loc[index, "Operating Margin growth"] = 0.0
+                                income_stmt_df.loc[index, "Net Income growth"] = 0.0
+                                income_stmt_df.loc[index, "Net Income Margin growth"] = 0.0
+                                income_stmt_df.loc[index, "EPS growth"] = 0.0
+                            else:
+                                income_stmt_df.loc[index, "Revenue growth"] = (income_stmt_df.iloc[index]["Total Revenue"] / income_stmt_df.iloc[index-1]["Total Revenue"])-1
+                                income_stmt_df.loc[index, "Operating Earnings growth"] = (income_stmt_df.iloc[index]["Operating Income"] / income_stmt_df.iloc[index-1]["Operating Income"])-1
+                                income_stmt_df.loc[index, "Operating Margin growth"] = (income_stmt_df.iloc[index]["Operating Margin"] / income_stmt_df.iloc[index-1]["Operating Margin"])-1
+                                income_stmt_df.loc[index, "Net Income growth"] = (income_stmt_df.iloc[index]["Net Income Common Stockholders"] / income_stmt_df.iloc[index-1]["Net Income Common Stockholders"])-1
+                                income_stmt_df.loc[index, "Net Income Margin growth"] = (income_stmt_df.iloc[index]["Net Income Margin"] / income_stmt_df.iloc[index-1]["Net Income Margin"])-1
+                                income_stmt_df.loc[index, "EPS growth"] = (income_stmt_df.iloc[index]["EPS"] / income_stmt_df.iloc[index-1]["EPS"])-1
+                else:
                     for index, row in income_stmt_df.iterrows():
+                        income_stmt_df.loc[index, "Gross Margin"] = income_stmt_df.loc[index, "Gross Profit"] / income_stmt_df.loc[index, "Total Revenue"]
+                        income_stmt_df.loc[index, "Operating Margin"] = income_stmt_df.loc[index, "Operating Income"] / income_stmt_df.loc[index, "Total Revenue"]
                         income_stmt_df.loc[index, "Net Income Margin"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / income_stmt_df.loc[index, "Total Revenue"]
                         income_stmt_df.loc[index, "EPS"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / income_stmt_df.loc[index, "Diluted Average Shares"]
                         if index == 0:
                             income_stmt_df.loc[index, "Revenue growth"] = 0.0
+                            income_stmt_df.loc[index, "Gross Profit growth"] = 0.0
+                            income_stmt_df.loc[index, "Gross Margin growth"] = 0.0
+                            income_stmt_df.loc[index, "Operating Earnings growth"] = 0.0
+                            income_stmt_df.loc[index, "Operating Margin growth"] = 0.0
+                            income_stmt_df.loc[index, "Net Income growth"] = 0.0
+                            income_stmt_df.loc[index, "Net Income Margin growth"] = 0.0
+                        else:
+                            income_stmt_df.loc[index, "Revenue growth"] = (income_stmt_df.iloc[index]["Total Revenue"] / income_stmt_df.iloc[index-1]["Total Revenue"])-1
+                            income_stmt_df.loc[index, "Gross Profit growth"] = (income_stmt_df.iloc[index]["Gross Profit"] / income_stmt_df.iloc[index-1]["Gross Profit"])-1
+                            income_stmt_df.loc[index, "Gross Margin growth"] = (income_stmt_df.iloc[index]["Gross Margin"] / income_stmt_df.iloc[index-1]["Gross Margin"])-1
+                            income_stmt_df.loc[index, "Operating Earnings growth"] = (income_stmt_df.iloc[index]["Operating Income"] / income_stmt_df.iloc[index-1]["Operating Income"])-1
+                            income_stmt_df.loc[index, "Operating Margin growth"] = (income_stmt_df.iloc[index]["Operating Margin"] / income_stmt_df.iloc[index-1]["Operating Margin"])-1
+                            income_stmt_df.loc[index, "Net Income growth"] = (income_stmt_df.iloc[index]["Net Income Common Stockholders"] / income_stmt_df.iloc[index-1]["Net Income Common Stockholders"])-1
+                            income_stmt_df.loc[index, "Net Income Margin growth"] = (income_stmt_df.iloc[index]["Net Income Margin"] / income_stmt_df.iloc[index-1]["Net Income Margin"])-1
+            elif "insurance" in industry.lower():
+                # Check is "Gross Profit" is in the income_stmt_df dataframe
+                if "Gross Profit" not in income_stmt_df.columns:
+                    if "Operating Income" not in income_stmt_df.columns:
+                        for index, row in income_stmt_df.iterrows():
+                            income_stmt_df.loc[index, "Net Income Margin"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / income_stmt_df.loc[index, "Total Revenue"]
+                            income_stmt_df.loc[index, "EPS"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / income_stmt_df.loc[index, "Diluted Average Shares"]
+                            if index == 0:
+                                income_stmt_df.loc[index, "Revenue growth"] = 0.0
+                                income_stmt_df.loc[index, "Net Income growth"] = 0.0
+                                income_stmt_df.loc[index, "Net Income Margin growth"] = 0.0
+                                income_stmt_df.loc[index, "EPS growth"] = 0.0
+                            else:
+                                income_stmt_df.loc[index, "Revenue growth"] = (income_stmt_df.iloc[index]["Total Revenue"] / income_stmt_df.iloc[index-1]["Total Revenue"])-1
+                                income_stmt_df.loc[index, "Net Income growth"] = (income_stmt_df.iloc[index]["Net Income Common Stockholders"] / income_stmt_df.iloc[index-1]["Net Income Common Stockholders"])-1
+                                income_stmt_df.loc[index, "Net Income Margin growth"] = (income_stmt_df.iloc[index]["Net Income Margin"] / income_stmt_df.iloc[index-1]["Net Income Margin"])-1
+                                income_stmt_df.loc[index, "EPS growth"] = (income_stmt_df.iloc[index]["EPS"] / income_stmt_df.iloc[index-1]["EPS"])-1
+                    else:
+                        for index, row in income_stmt_df.iterrows():
+                            income_stmt_df.loc[index, "Operating Margin"] = income_stmt_df.loc[index, "Operating Income"] / income_stmt_df.loc[index, "Total Revenue"]
+                            income_stmt_df.loc[index, "Net Income Margin"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / income_stmt_df.loc[index, "Total Revenue"]
+                            income_stmt_df.loc[index, "EPS"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / income_stmt_df.loc[index, "Diluted Average Shares"]
+                            if index == 0:
+                                income_stmt_df.loc[index, "Revenue growth"] = 0.0
+                                income_stmt_df.loc[index, "Operating Earnings growth"] = 0.0
+                                income_stmt_df.loc[index, "Operating Margin growth"] = 0.0
+                                income_stmt_df.loc[index, "Net Income growth"] = 0.0
+                                income_stmt_df.loc[index, "Net Income Margin growth"] = 0.0
+                                income_stmt_df.loc[index, "EPS growth"] = 0.0
+                            else:
+                                income_stmt_df.loc[index, "Revenue growth"] = (income_stmt_df.iloc[index]["Total Revenue"] / income_stmt_df.iloc[index-1]["Total Revenue"])-1
+                                income_stmt_df.loc[index, "Operating Earnings growth"] = (income_stmt_df.iloc[index]["Operating Income"] / income_stmt_df.iloc[index-1]["Operating Income"])-1
+                                income_stmt_df.loc[index, "Operating Margin growth"] = (income_stmt_df.iloc[index]["Operating Margin"] / income_stmt_df.iloc[index-1]["Operating Margin"])-1
+                                income_stmt_df.loc[index, "Net Income growth"] = (income_stmt_df.iloc[index]["Net Income Common Stockholders"] / income_stmt_df.iloc[index-1]["Net Income Common Stockholders"])-1
+                                income_stmt_df.loc[index, "Net Income Margin growth"] = (income_stmt_df.iloc[index]["Net Income Margin"] / income_stmt_df.iloc[index-1]["Net Income Margin"])-1
+                                income_stmt_df.loc[index, "EPS growth"] = (income_stmt_df.iloc[index]["EPS"] / income_stmt_df.iloc[index-1]["EPS"])-1
+                else:
+                    for index, row in income_stmt_df.iterrows():
+                        income_stmt_df.loc[index, "Gross Margin"] = income_stmt_df.loc[index, "Gross Profit"] / income_stmt_df.loc[index, "Total Revenue"]
+                        income_stmt_df.loc[index, "Operating Margin"] = income_stmt_df.loc[index, "Operating Income"] / income_stmt_df.loc[index, "Total Revenue"]
+                        income_stmt_df.loc[index, "Net Income Margin"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / income_stmt_df.loc[index, "Total Revenue"]
+                        income_stmt_df.loc[index, "EPS"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / income_stmt_df.loc[index, "Diluted Average Shares"]
+                        if index == 0:
+                            income_stmt_df.loc[index, "Revenue growth"] = 0.0
+                            income_stmt_df.loc[index, "Gross Profit growth"] = 0.0
+                            income_stmt_df.loc[index, "Gross Margin growth"] = 0.0
+                            income_stmt_df.loc[index, "Operating Earnings growth"] = 0.0
+                            income_stmt_df.loc[index, "Operating Margin growth"] = 0.0
                             income_stmt_df.loc[index, "Net Income growth"] = 0.0
                             income_stmt_df.loc[index, "Net Income Margin growth"] = 0.0
                             income_stmt_df.loc[index, "EPS growth"] = 0.0
                         else:
                             income_stmt_df.loc[index, "Revenue growth"] = (income_stmt_df.iloc[index]["Total Revenue"] / income_stmt_df.iloc[index-1]["Total Revenue"])-1
+                            income_stmt_df.loc[index, "Gross Profit growth"] = (income_stmt_df.iloc[index]["Gross Profit"] / income_stmt_df.iloc[index-1]["Gross Profit"])-1
+                            income_stmt_df.loc[index, "Gross Margin growth"] = (income_stmt_df.iloc[index]["Gross Margin"] / income_stmt_df.iloc[index-1]["Gross Margin"])-1
+                            income_stmt_df.loc[index, "Operating Earnings growth"] = (income_stmt_df.iloc[index]["Operating Income"] / income_stmt_df.iloc[index-1]["Operating Income"])-1
+                            income_stmt_df.loc[index, "Operating Margin growth"] = (income_stmt_df.iloc[index]["Operating Margin"] / income_stmt_df.iloc[index-1]["Operating Margin"])-1
                             income_stmt_df.loc[index, "Net Income growth"] = (income_stmt_df.iloc[index]["Net Income Common Stockholders"] / income_stmt_df.iloc[index-1]["Net Income Common Stockholders"])-1
                             income_stmt_df.loc[index, "Net Income Margin growth"] = (income_stmt_df.iloc[index]["Net Income Margin"] / income_stmt_df.iloc[index-1]["Net Income Margin"])-1
                             income_stmt_df.loc[index, "EPS growth"] = (income_stmt_df.iloc[index]["EPS"] / income_stmt_df.iloc[index-1]["EPS"])-1
-                else:
+            elif "biotechnology" in industry.lower():
+                # Check is "Gross Profit" is in the income_stmt_df dataframe
+                if "Gross Profit" not in income_stmt_df.columns:
                     for index, row in income_stmt_df.iterrows():
                         income_stmt_df.loc[index, "Operating Margin"] = income_stmt_df.loc[index, "Operating Income"] / income_stmt_df.loc[index, "Total Revenue"]
                         income_stmt_df.loc[index, "Net Income Margin"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / income_stmt_df.loc[index, "Total Revenue"]
@@ -672,6 +783,30 @@ def fetch_stock_financial_data(stock_symbol = ""):
                             income_stmt_df.loc[index, "EPS growth"] = 0.0
                         else:
                             income_stmt_df.loc[index, "Revenue growth"] = (income_stmt_df.iloc[index]["Total Revenue"] / income_stmt_df.iloc[index-1]["Total Revenue"])-1
+                            income_stmt_df.loc[index, "Operating Earnings growth"] = (income_stmt_df.iloc[index]["Operating Income"] / income_stmt_df.iloc[index-1]["Operating Income"])-1
+                            income_stmt_df.loc[index, "Operating Margin growth"] = (income_stmt_df.iloc[index]["Operating Margin"] / income_stmt_df.iloc[index-1]["Operating Margin"])-1
+                            income_stmt_df.loc[index, "Net Income growth"] = (income_stmt_df.iloc[index]["Net Income Common Stockholders"] / income_stmt_df.iloc[index-1]["Net Income Common Stockholders"])-1
+                            income_stmt_df.loc[index, "Net Income Margin growth"] = (income_stmt_df.iloc[index]["Net Income Margin"] / income_stmt_df.iloc[index-1]["Net Income Margin"])-1
+                            income_stmt_df.loc[index, "EPS growth"] = (income_stmt_df.iloc[index]["EPS"] / income_stmt_df.iloc[index-1]["EPS"])-1
+                else:
+                    for index, row in income_stmt_df.iterrows():
+                        income_stmt_df.loc[index, "Gross Margin"] = income_stmt_df.loc[index, "Gross Profit"] / income_stmt_df.loc[index, "Total Revenue"]
+                        income_stmt_df.loc[index, "Operating Margin"] = income_stmt_df.loc[index, "Operating Income"] / income_stmt_df.loc[index, "Total Revenue"]
+                        income_stmt_df.loc[index, "Net Income Margin"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / income_stmt_df.loc[index, "Total Revenue"]
+                        income_stmt_df.loc[index, "EPS"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / income_stmt_df.loc[index, "Diluted Average Shares"]
+                        if index == 0:
+                            income_stmt_df.loc[index, "Revenue growth"] = 0.0
+                            income_stmt_df.loc[index, "Gross Profit growth"] = 0.0
+                            income_stmt_df.loc[index, "Gross Margin growth"] = 0.0
+                            income_stmt_df.loc[index, "Operating Earnings growth"] = 0.0
+                            income_stmt_df.loc[index, "Operating Margin growth"] = 0.0
+                            income_stmt_df.loc[index, "Net Income growth"] = 0.0
+                            income_stmt_df.loc[index, "Net Income Margin growth"] = 0.0
+                            income_stmt_df.loc[index, "EPS growth"] = 0.0
+                        else:
+                            income_stmt_df.loc[index, "Revenue growth"] = (income_stmt_df.iloc[index]["Total Revenue"] / income_stmt_df.iloc[index-1]["Total Revenue"])-1
+                            income_stmt_df.loc[index, "Gross Profit growth"] = (income_stmt_df.iloc[index]["Gross Profit"] / income_stmt_df.iloc[index-1]["Gross Profit"])-1
+                            income_stmt_df.loc[index, "Gross Margin growth"] = (income_stmt_df.iloc[index]["Gross Margin"] / income_stmt_df.iloc[index-1]["Gross Margin"])-1
                             income_stmt_df.loc[index, "Operating Earnings growth"] = (income_stmt_df.iloc[index]["Operating Income"] / income_stmt_df.iloc[index-1]["Operating Income"])-1
                             income_stmt_df.loc[index, "Operating Margin growth"] = (income_stmt_df.iloc[index]["Operating Margin"] / income_stmt_df.iloc[index-1]["Operating Margin"])-1
                             income_stmt_df.loc[index, "Net Income growth"] = (income_stmt_df.iloc[index]["Net Income Common Stockholders"] / income_stmt_df.iloc[index-1]["Net Income Common Stockholders"])-1
@@ -691,6 +826,7 @@ def fetch_stock_financial_data(stock_symbol = ""):
                         income_stmt_df.loc[index, "Operating Margin growth"] = 0.0
                         income_stmt_df.loc[index, "Net Income growth"] = 0.0
                         income_stmt_df.loc[index, "Net Income Margin growth"] = 0.0
+                        income_stmt_df.loc[index, "EPS growth"] = 0.0
                     else:
                         income_stmt_df.loc[index, "Revenue growth"] = (income_stmt_df.iloc[index]["Total Revenue"] / income_stmt_df.iloc[index-1]["Total Revenue"])-1
                         income_stmt_df.loc[index, "Gross Profit growth"] = (income_stmt_df.iloc[index]["Gross Profit"] / income_stmt_df.iloc[index-1]["Gross Profit"])-1
@@ -699,311 +835,223 @@ def fetch_stock_financial_data(stock_symbol = ""):
                         income_stmt_df.loc[index, "Operating Margin growth"] = (income_stmt_df.iloc[index]["Operating Margin"] / income_stmt_df.iloc[index-1]["Operating Margin"])-1
                         income_stmt_df.loc[index, "Net Income growth"] = (income_stmt_df.iloc[index]["Net Income Common Stockholders"] / income_stmt_df.iloc[index-1]["Net Income Common Stockholders"])-1
                         income_stmt_df.loc[index, "Net Income Margin growth"] = (income_stmt_df.iloc[index]["Net Income Margin"] / income_stmt_df.iloc[index-1]["Net Income Margin"])-1
-        elif "insurance" in industry.lower():
-            # Check is "Gross Profit" is in the income_stmt_df dataframe
-            if "Gross Profit" not in income_stmt_df.columns:
-                if "Operating Income" not in income_stmt_df.columns:
-                    for index, row in income_stmt_df.iterrows():
-                        income_stmt_df.loc[index, "Net Income Margin"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / income_stmt_df.loc[index, "Total Revenue"]
-                        income_stmt_df.loc[index, "EPS"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / income_stmt_df.loc[index, "Diluted Average Shares"]
-                        if index == 0:
-                            income_stmt_df.loc[index, "Revenue growth"] = 0.0
-                            income_stmt_df.loc[index, "Net Income growth"] = 0.0
-                            income_stmt_df.loc[index, "Net Income Margin growth"] = 0.0
-                            income_stmt_df.loc[index, "EPS growth"] = 0.0
+                        income_stmt_df.loc[index, "EPS growth"] = (income_stmt_df.iloc[index]["EPS"] / income_stmt_df.iloc[index-1]["EPS"])-1
+
+            balancesheet = stock_data.balancesheet
+            balancesheet_df = pd.DataFrame(balancesheet)
+            if len(pd.DataFrame(stock_data.balancesheet).columns) > len(pd.DataFrame(stock_data.income_stmt).columns):
+                column_amount = len(pd.DataFrame(stock_data.balancesheet).columns) - len(pd.DataFrame(stock_data.income_stmt).columns)
+                balancesheet_df = balancesheet_df.drop(columns=balancesheet_df.columns[-column_amount])
+            elif len(pd.DataFrame(stock_data.balancesheet).columns) > len(pd.DataFrame(stock_data.cashflow).columns):
+                column_amount = len(pd.DataFrame(stock_data.balancesheet).columns) - len(pd.DataFrame(stock_data.cashflow).columns)
+                balancesheet_df = balancesheet_df.drop(columns=balancesheet_df.columns[-column_amount])
+
+            # Checking if the input DataFrame is empty
+            if balancesheet_df.empty:
+                raise ValueError("Input DataFrame is empty.")
+
+            # Rotate the balancesheet_df dataframe
+            balancesheet_df = balancesheet_df.transpose()
+            balancesheet_df["Total Assets growth"] = 0.0
+            balancesheet_df["Current Assets growth"] = 0.0
+            balancesheet_df["Cash and Cash Equivalents growth"] = 0.0
+            balancesheet_df["Total Liabilities growth"] = 0.0
+            balancesheet_df["Total Equity growth"] = 0.0
+            balancesheet_df["Current Liabilities growth"] = 0.0
+            balancesheet_df["Book Value"] = 0.0
+            balancesheet_df["Book Value growth"] = 0.0
+            balancesheet_df["Book Value per share"] = 0.0
+            balancesheet_df["Book Value per share growth"] = 0.0
+            balancesheet_df["Return on Assets"] = 0.0
+            balancesheet_df["Return on Assets growth"] = 0.0
+            balancesheet_df["Return on Equity"] = 0.0
+            balancesheet_df["Return on Equity growth"] = 0.0
+            balancesheet_df["Return on Invested Capital"] = 0.0
+            balancesheet_df["Return on Invested Capital growth"] = 0.0
+            balancesheet_df["Current Ratio"] = 0.0
+            balancesheet_df["Current Ratio growth"] = 0.0
+            balancesheet_df["Quick Ratio"] = 0.0
+            balancesheet_df["Quick Ratio growth"] = 0.0
+            balancesheet_df["Debt to Equity"] = 0.0
+            balancesheet_df["Debt to Equity growth"] = 0.0
+            # Invert the rows in balancesheet_df dataframe
+            balancesheet_df = balancesheet_df.iloc[::-1]
+            # Reset the index of the balancesheet_df dataframe
+            balancesheet_df = balancesheet_df.reset_index()
+            # Rename the index column to Date
+            balancesheet_df = balancesheet_df.rename(columns={"index": "Date"})
+            if "banks" in industry.lower():
+                if "Current Assets" not in balancesheet_df.columns:
+                    balancesheet_df["Current Assets"] = 0.0
+                    balancesheet_df = balancesheet_df.rename(columns={"Derivative Product Liabilities": "Current Liabilities"})
+                    for index, row in balancesheet_df.iterrows():
+                        if "Trading Securities" not in balancesheet_df.columns:
+                            balancesheet_df.loc[index, "Current Assets"] = balancesheet_df.loc[index, "Cash And Cash Equivalents"] + balancesheet_df.loc[index, "Receivables"] + balancesheet_df.loc[index, "Financial Assets Designatedas Fair Value Through Profitor Loss Total"]
                         else:
-                            income_stmt_df.loc[index, "Revenue growth"] = (income_stmt_df.iloc[index]["Total Revenue"] / income_stmt_df.iloc[index-1]["Total Revenue"])-1
-                            income_stmt_df.loc[index, "Net Income growth"] = (income_stmt_df.iloc[index]["Net Income Common Stockholders"] / income_stmt_df.iloc[index-1]["Net Income Common Stockholders"])-1
-                            income_stmt_df.loc[index, "Net Income Margin growth"] = (income_stmt_df.iloc[index]["Net Income Margin"] / income_stmt_df.iloc[index-1]["Net Income Margin"])-1
-                            income_stmt_df.loc[index, "EPS growth"] = (income_stmt_df.iloc[index]["EPS"] / income_stmt_df.iloc[index-1]["EPS"])-1
-                else:
-                    for index, row in income_stmt_df.iterrows():
-                        income_stmt_df.loc[index, "Operating Margin"] = income_stmt_df.loc[index, "Operating Income"] / income_stmt_df.loc[index, "Total Revenue"]
-                        income_stmt_df.loc[index, "Net Income Margin"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / income_stmt_df.loc[index, "Total Revenue"]
-                        income_stmt_df.loc[index, "EPS"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / income_stmt_df.loc[index, "Diluted Average Shares"]
+                            balancesheet_df.loc[index, "Current Assets"] = balancesheet_df.loc[index, "Cash And Cash Equivalents"] + balancesheet_df.loc[index, "Receivables"] + balancesheet_df.loc[index, "Trading Securities"] + balancesheet_df.loc[index, "Financial Assets Designatedas Fair Value Through Profitor Loss Total"]
+                        balancesheet_df.loc[index, "Book Value"] = balancesheet_df.loc[index, "Total Equity Gross Minority Interest"]
+                        balancesheet_df.loc[index, "Book Value per share"] = balancesheet_df.loc[index, "Total Equity Gross Minority Interest"] / income_stmt_df.loc[index, "Diluted Average Shares"]
+                        balancesheet_df.loc[index, "Return on Assets"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / balancesheet_df.loc[index, "Total Assets"]
+                        balancesheet_df.loc[index, "Return on Equity"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / balancesheet_df.loc[index, "Total Equity Gross Minority Interest"]
+                        balancesheet_df.loc[index, "Return on Invested Capital"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / (balancesheet_df.loc[index, "Total Equity Gross Minority Interest"] + balancesheet_df.loc[index, "Total Liabilities Net Minority Interest"])
+                        balancesheet_df.loc[index, "Current Ratio"] = (balancesheet_df.loc[index, "Current Assets"]) / balancesheet_df.loc[index, "Current Liabilities"]
+                        balancesheet_df.loc[index, "Quick Ratio"] = balancesheet_df.loc[index, "Cash And Cash Equivalents"] / balancesheet_df.loc[index, "Current Liabilities"]
+                        balancesheet_df.loc[index, "Debt to Equity"] = balancesheet_df.loc[index, "Total Liabilities Net Minority Interest"] / balancesheet_df.loc[index, "Total Equity Gross Minority Interest"]
                         if index == 0:
-                            income_stmt_df.loc[index, "Revenue growth"] = 0.0
-                            income_stmt_df.loc[index, "Operating Earnings growth"] = 0.0
-                            income_stmt_df.loc[index, "Operating Margin growth"] = 0.0
-                            income_stmt_df.loc[index, "Net Income growth"] = 0.0
-                            income_stmt_df.loc[index, "Net Income Margin growth"] = 0.0
-                            income_stmt_df.loc[index, "EPS growth"] = 0.0
+                            balancesheet_df.loc[index, "Total Assets growth"] = 0.0
+                            balancesheet_df.loc[index, "Current Assets growth"] = 0.0
+                            balancesheet_df.loc[index, "Cash and Cash Equivalents growth"] = 0.0
+                            balancesheet_df.loc[index, "Total Liabilities growth"] = 0.0
+                            balancesheet_df.loc[index, "Total Equity growth"] = 0.0
+                            balancesheet_df.loc[index, "Current Liabilities growth"] = 0.0
+                            balancesheet_df.loc[index, "Book Value growth"] = 0.0
+                            balancesheet_df.loc[index, "Book Value per share growth"] = 0.0
+                            balancesheet_df.loc[index, "Return on Assets growth"] = 0.0
+                            balancesheet_df.loc[index, "Return on Equity growth"] = 0.0
+                            balancesheet_df.loc[index, "Return on Invested Capital growth"] = 0.0
+                            balancesheet_df.loc[index, "Current Ratio growth"] = 0.0
+                            balancesheet_df.loc[index, "Quick Ratio growth"] = 0.0
+                            balancesheet_df.loc[index, "Debt to Equity growth"] = 0.0
                         else:
-                            income_stmt_df.loc[index, "Revenue growth"] = (income_stmt_df.iloc[index]["Total Revenue"] / income_stmt_df.iloc[index-1]["Total Revenue"])-1
-                            income_stmt_df.loc[index, "Operating Earnings growth"] = (income_stmt_df.iloc[index]["Operating Income"] / income_stmt_df.iloc[index-1]["Operating Income"])-1
-                            income_stmt_df.loc[index, "Operating Margin growth"] = (income_stmt_df.iloc[index]["Operating Margin"] / income_stmt_df.iloc[index-1]["Operating Margin"])-1
-                            income_stmt_df.loc[index, "Net Income growth"] = (income_stmt_df.iloc[index]["Net Income Common Stockholders"] / income_stmt_df.iloc[index-1]["Net Income Common Stockholders"])-1
-                            income_stmt_df.loc[index, "Net Income Margin growth"] = (income_stmt_df.iloc[index]["Net Income Margin"] / income_stmt_df.iloc[index-1]["Net Income Margin"])-1
-                            income_stmt_df.loc[index, "EPS growth"] = (income_stmt_df.iloc[index]["EPS"] / income_stmt_df.iloc[index-1]["EPS"])-1
-            else:
-                for index, row in income_stmt_df.iterrows():
-                    income_stmt_df.loc[index, "Gross Margin"] = income_stmt_df.loc[index, "Gross Profit"] / income_stmt_df.loc[index, "Total Revenue"]
-                    income_stmt_df.loc[index, "Operating Margin"] = income_stmt_df.loc[index, "Operating Income"] / income_stmt_df.loc[index, "Total Revenue"]
-                    income_stmt_df.loc[index, "Net Income Margin"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / income_stmt_df.loc[index, "Total Revenue"]
-                    income_stmt_df.loc[index, "EPS"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / income_stmt_df.loc[index, "Diluted Average Shares"]
-                    if index == 0:
-                        income_stmt_df.loc[index, "Revenue growth"] = 0.0
-                        income_stmt_df.loc[index, "Gross Profit growth"] = 0.0
-                        income_stmt_df.loc[index, "Gross Margin growth"] = 0.0
-                        income_stmt_df.loc[index, "Operating Earnings growth"] = 0.0
-                        income_stmt_df.loc[index, "Operating Margin growth"] = 0.0
-                        income_stmt_df.loc[index, "Net Income growth"] = 0.0
-                        income_stmt_df.loc[index, "Net Income Margin growth"] = 0.0
-                        income_stmt_df.loc[index, "EPS growth"] = 0.0
-                    else:
-                        income_stmt_df.loc[index, "Revenue growth"] = (income_stmt_df.iloc[index]["Total Revenue"] / income_stmt_df.iloc[index-1]["Total Revenue"])-1
-                        income_stmt_df.loc[index, "Gross Profit growth"] = (income_stmt_df.iloc[index]["Gross Profit"] / income_stmt_df.iloc[index-1]["Gross Profit"])-1
-                        income_stmt_df.loc[index, "Gross Margin growth"] = (income_stmt_df.iloc[index]["Gross Margin"] / income_stmt_df.iloc[index-1]["Gross Margin"])-1
-                        income_stmt_df.loc[index, "Operating Earnings growth"] = (income_stmt_df.iloc[index]["Operating Income"] / income_stmt_df.iloc[index-1]["Operating Income"])-1
-                        income_stmt_df.loc[index, "Operating Margin growth"] = (income_stmt_df.iloc[index]["Operating Margin"] / income_stmt_df.iloc[index-1]["Operating Margin"])-1
-                        income_stmt_df.loc[index, "Net Income growth"] = (income_stmt_df.iloc[index]["Net Income Common Stockholders"] / income_stmt_df.iloc[index-1]["Net Income Common Stockholders"])-1
-                        income_stmt_df.loc[index, "Net Income Margin growth"] = (income_stmt_df.iloc[index]["Net Income Margin"] / income_stmt_df.iloc[index-1]["Net Income Margin"])-1
-                        income_stmt_df.loc[index, "EPS growth"] = (income_stmt_df.iloc[index]["EPS"] / income_stmt_df.iloc[index-1]["EPS"])-1
-        elif "biotechnology" in industry.lower():
-            # Check is "Gross Profit" is in the income_stmt_df dataframe
-            if "Gross Profit" not in income_stmt_df.columns:
-                for index, row in income_stmt_df.iterrows():
-                    income_stmt_df.loc[index, "Operating Margin"] = income_stmt_df.loc[index, "Operating Income"] / income_stmt_df.loc[index, "Total Revenue"]
-                    income_stmt_df.loc[index, "Net Income Margin"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / income_stmt_df.loc[index, "Total Revenue"]
-                    income_stmt_df.loc[index, "EPS"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / income_stmt_df.loc[index, "Diluted Average Shares"]
-                    if index == 0:
-                        income_stmt_df.loc[index, "Revenue growth"] = 0.0
-                        income_stmt_df.loc[index, "Operating Earnings growth"] = 0.0
-                        income_stmt_df.loc[index, "Operating Margin growth"] = 0.0
-                        income_stmt_df.loc[index, "Net Income growth"] = 0.0
-                        income_stmt_df.loc[index, "Net Income Margin growth"] = 0.0
-                        income_stmt_df.loc[index, "EPS growth"] = 0.0
-                    else:
-                        income_stmt_df.loc[index, "Revenue growth"] = (income_stmt_df.iloc[index]["Total Revenue"] / income_stmt_df.iloc[index-1]["Total Revenue"])-1
-                        income_stmt_df.loc[index, "Operating Earnings growth"] = (income_stmt_df.iloc[index]["Operating Income"] / income_stmt_df.iloc[index-1]["Operating Income"])-1
-                        income_stmt_df.loc[index, "Operating Margin growth"] = (income_stmt_df.iloc[index]["Operating Margin"] / income_stmt_df.iloc[index-1]["Operating Margin"])-1
-                        income_stmt_df.loc[index, "Net Income growth"] = (income_stmt_df.iloc[index]["Net Income Common Stockholders"] / income_stmt_df.iloc[index-1]["Net Income Common Stockholders"])-1
-                        income_stmt_df.loc[index, "Net Income Margin growth"] = (income_stmt_df.iloc[index]["Net Income Margin"] / income_stmt_df.iloc[index-1]["Net Income Margin"])-1
-                        income_stmt_df.loc[index, "EPS growth"] = (income_stmt_df.iloc[index]["EPS"] / income_stmt_df.iloc[index-1]["EPS"])-1
-            else:
-                for index, row in income_stmt_df.iterrows():
-                    income_stmt_df.loc[index, "Gross Margin"] = income_stmt_df.loc[index, "Gross Profit"] / income_stmt_df.loc[index, "Total Revenue"]
-                    income_stmt_df.loc[index, "Operating Margin"] = income_stmt_df.loc[index, "Operating Income"] / income_stmt_df.loc[index, "Total Revenue"]
-                    income_stmt_df.loc[index, "Net Income Margin"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / income_stmt_df.loc[index, "Total Revenue"]
-                    income_stmt_df.loc[index, "EPS"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / income_stmt_df.loc[index, "Diluted Average Shares"]
-                    if index == 0:
-                        income_stmt_df.loc[index, "Revenue growth"] = 0.0
-                        income_stmt_df.loc[index, "Gross Profit growth"] = 0.0
-                        income_stmt_df.loc[index, "Gross Margin growth"] = 0.0
-                        income_stmt_df.loc[index, "Operating Earnings growth"] = 0.0
-                        income_stmt_df.loc[index, "Operating Margin growth"] = 0.0
-                        income_stmt_df.loc[index, "Net Income growth"] = 0.0
-                        income_stmt_df.loc[index, "Net Income Margin growth"] = 0.0
-                        income_stmt_df.loc[index, "EPS growth"] = 0.0
-                    else:
-                        income_stmt_df.loc[index, "Revenue growth"] = (income_stmt_df.iloc[index]["Total Revenue"] / income_stmt_df.iloc[index-1]["Total Revenue"])-1
-                        income_stmt_df.loc[index, "Gross Profit growth"] = (income_stmt_df.iloc[index]["Gross Profit"] / income_stmt_df.iloc[index-1]["Gross Profit"])-1
-                        income_stmt_df.loc[index, "Gross Margin growth"] = (income_stmt_df.iloc[index]["Gross Margin"] / income_stmt_df.iloc[index-1]["Gross Margin"])-1
-                        income_stmt_df.loc[index, "Operating Earnings growth"] = (income_stmt_df.iloc[index]["Operating Income"] / income_stmt_df.iloc[index-1]["Operating Income"])-1
-                        income_stmt_df.loc[index, "Operating Margin growth"] = (income_stmt_df.iloc[index]["Operating Margin"] / income_stmt_df.iloc[index-1]["Operating Margin"])-1
-                        income_stmt_df.loc[index, "Net Income growth"] = (income_stmt_df.iloc[index]["Net Income Common Stockholders"] / income_stmt_df.iloc[index-1]["Net Income Common Stockholders"])-1
-                        income_stmt_df.loc[index, "Net Income Margin growth"] = (income_stmt_df.iloc[index]["Net Income Margin"] / income_stmt_df.iloc[index-1]["Net Income Margin"])-1
-                        income_stmt_df.loc[index, "EPS growth"] = (income_stmt_df.iloc[index]["EPS"] / income_stmt_df.iloc[index-1]["EPS"])-1
-        else:
-            for index, row in income_stmt_df.iterrows():
-                income_stmt_df.loc[index, "Gross Margin"] = income_stmt_df.loc[index, "Gross Profit"] / income_stmt_df.loc[index, "Total Revenue"]
-                income_stmt_df.loc[index, "Operating Margin"] = income_stmt_df.loc[index, "Operating Income"] / income_stmt_df.loc[index, "Total Revenue"]
-                income_stmt_df.loc[index, "Net Income Margin"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / income_stmt_df.loc[index, "Total Revenue"]
-                income_stmt_df.loc[index, "EPS"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / income_stmt_df.loc[index, "Diluted Average Shares"]
-                if index == 0:
-                    income_stmt_df.loc[index, "Revenue growth"] = 0.0
-                    income_stmt_df.loc[index, "Gross Profit growth"] = 0.0
-                    income_stmt_df.loc[index, "Gross Margin growth"] = 0.0
-                    income_stmt_df.loc[index, "Operating Earnings growth"] = 0.0
-                    income_stmt_df.loc[index, "Operating Margin growth"] = 0.0
-                    income_stmt_df.loc[index, "Net Income growth"] = 0.0
-                    income_stmt_df.loc[index, "Net Income Margin growth"] = 0.0
-                    income_stmt_df.loc[index, "EPS growth"] = 0.0
+                            balancesheet_df.loc[index, "Total Assets growth"] = (balancesheet_df.iloc[index]["Total Assets"] / balancesheet_df.iloc[index-1]["Total Assets"])-1
+                            balancesheet_df.loc[index, "Current Assets growth"] = (balancesheet_df.iloc[index]["Current Assets"] / balancesheet_df.iloc[index-1]["Current Assets"])-1
+                            balancesheet_df.loc[index, "Cash and Cash Equivalents growth"] = (balancesheet_df.iloc[index]["Cash And Cash Equivalents"] / balancesheet_df.iloc[index-1]["Cash And Cash Equivalents"])-1
+                            balancesheet_df.loc[index, "Total Liabilities growth"] = (balancesheet_df.iloc[index]["Total Liabilities Net Minority Interest"] / balancesheet_df.iloc[index-1]["Total Liabilities Net Minority Interest"])-1
+                            balancesheet_df.loc[index, "Total Equity growth"] = (balancesheet_df.iloc[index]["Total Equity Gross Minority Interest"] / balancesheet_df.iloc[index-1]["Total Equity Gross Minority Interest"])-1
+                            balancesheet_df.loc[index, "Current Liabilities growth"] = (balancesheet_df.iloc[index]["Current Liabilities"] / balancesheet_df.iloc[index-1]["Current Liabilities"])-1
+                            balancesheet_df.loc[index, "Book Value growth"] = (balancesheet_df.iloc[index]["Book Value"] / balancesheet_df.iloc[index-1]["Book Value"])-1
+                            balancesheet_df.loc[index, "Book Value per share growth"] = (balancesheet_df.iloc[index]["Book Value per share"] / balancesheet_df.iloc[index-1]["Book Value per share"])-1
+                            balancesheet_df.loc[index, "Return on Assets growth"] = (balancesheet_df.iloc[index]["Return on Assets"] / balancesheet_df.iloc[index-1]["Return on Assets"])-1
+                            balancesheet_df.loc[index, "Return on Equity growth"] = (balancesheet_df.iloc[index]["Return on Equity"] / balancesheet_df.iloc[index-1]["Return on Equity"])-1
+                            balancesheet_df.loc[index, "Return on Invested Capital growth"] = (balancesheet_df.iloc[index]["Return on Invested Capital"] / balancesheet_df.iloc[index-1]["Return on Invested Capital"])-1
+                            balancesheet_df.loc[index, "Current Ratio growth"] = (balancesheet_df.iloc[index]["Current Ratio"] / balancesheet_df.iloc[index-1]["Current Ratio"])-1
+                            balancesheet_df.loc[index, "Quick Ratio growth"] = (balancesheet_df.iloc[index]["Quick Ratio"] / balancesheet_df.iloc[index-1]["Quick Ratio"])-1
+                            balancesheet_df.loc[index, "Debt to Equity growth"] = (balancesheet_df.iloc[index]["Debt to Equity"] / balancesheet_df.iloc[index-1]["Debt to Equity"])-1
                 else:
-                    income_stmt_df.loc[index, "Revenue growth"] = (income_stmt_df.iloc[index]["Total Revenue"] / income_stmt_df.iloc[index-1]["Total Revenue"])-1
-                    income_stmt_df.loc[index, "Gross Profit growth"] = (income_stmt_df.iloc[index]["Gross Profit"] / income_stmt_df.iloc[index-1]["Gross Profit"])-1
-                    income_stmt_df.loc[index, "Gross Margin growth"] = (income_stmt_df.iloc[index]["Gross Margin"] / income_stmt_df.iloc[index-1]["Gross Margin"])-1
-                    income_stmt_df.loc[index, "Operating Earnings growth"] = (income_stmt_df.iloc[index]["Operating Income"] / income_stmt_df.iloc[index-1]["Operating Income"])-1
-                    income_stmt_df.loc[index, "Operating Margin growth"] = (income_stmt_df.iloc[index]["Operating Margin"] / income_stmt_df.iloc[index-1]["Operating Margin"])-1
-                    income_stmt_df.loc[index, "Net Income growth"] = (income_stmt_df.iloc[index]["Net Income Common Stockholders"] / income_stmt_df.iloc[index-1]["Net Income Common Stockholders"])-1
-                    income_stmt_df.loc[index, "Net Income Margin growth"] = (income_stmt_df.iloc[index]["Net Income Margin"] / income_stmt_df.iloc[index-1]["Net Income Margin"])-1
-                    income_stmt_df.loc[index, "EPS growth"] = (income_stmt_df.iloc[index]["EPS"] / income_stmt_df.iloc[index-1]["EPS"])-1
+                    for index, row in balancesheet_df.iterrows():
+                        balancesheet_df.loc[index, "Book Value"] = balancesheet_df.loc[index, "Total Equity Gross Minority Interest"]
+                        balancesheet_df.loc[index, "Book Value per share"] = balancesheet_df.loc[index, "Total Equity Gross Minority Interest"] / income_stmt_df.loc[index, "Diluted Average Shares"]
+                        balancesheet_df.loc[index, "Return on Assets"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / balancesheet_df.loc[index, "Total Assets"]
+                        balancesheet_df.loc[index, "Return on Equity"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / balancesheet_df.loc[index, "Total Equity Gross Minority Interest"]
+                        balancesheet_df.loc[index, "Current Ratio"] = balancesheet_df.loc[index, "Current Assets"] / balancesheet_df.loc[index, "Current Liabilities"]
+                        balancesheet_df.loc[index, "Quick Ratio"] = balancesheet_df.loc[index, "Cash And Cash Equivalents"] / balancesheet_df.loc[index, "Current Liabilities"]
+                        balancesheet_df.loc[index, "Debt to Equity"] = balancesheet_df.loc[index, "Total Liabilities Net Minority Interest"] / balancesheet_df.loc[index, "Total Equity Gross Minority Interest"]
+                        if index == 0:
+                            balancesheet_df.loc[index, "Total Assets growth"] = 0.0
+                            balancesheet_df.loc[index, "Current Assets growth"] = 0.0
+                            balancesheet_df.loc[index, "Cash and Cash Equivalents growth"] = 0.0
+                            balancesheet_df.loc[index, "Total Liabilities growth"] = 0.0
+                            balancesheet_df.loc[index, "Total Equity growth"] = 0.0
+                            balancesheet_df.loc[index, "Current Liabilities growth"] = 0.0
+                            balancesheet_df.loc[index, "Book Value growth"] = 0.0
+                            balancesheet_df.loc[index, "Book Value per share growth"] = 0.0
+                            balancesheet_df.loc[index, "Return on Assets growth"] = 0.0
+                            balancesheet_df.loc[index, "Return on Equity growth"] = 0.0
+                            balancesheet_df.loc[index, "Current Ratio growth"] = 0.0
+                            balancesheet_df.loc[index, "Quick Ratio growth"] = 0.0
+                            balancesheet_df.loc[index, "Debt to Equity growth"] = 0.0
+                        else:
+                            balancesheet_df.loc[index, "Total Assets growth"] = (balancesheet_df.iloc[index]["Total Assets"] / balancesheet_df.iloc[index-1]["Total Assets"])-1
+                            balancesheet_df.loc[index, "Current Assets growth"] = (balancesheet_df.iloc[index]["Current Assets"] / balancesheet_df.iloc[index-1]["Current Assets"])-1
+                            balancesheet_df.loc[index, "Cash and Cash Equivalents growth"] = (balancesheet_df.iloc[index]["Cash And Cash Equivalents"] / balancesheet_df.iloc[index-1]["Cash And Cash Equivalents"])-1
+                            balancesheet_df.loc[index, "Total Liabilities growth"] = (balancesheet_df.iloc[index]["Total Liabilities Net Minority Interest"] / balancesheet_df.iloc[index-1]["Total Liabilities Net Minority Interest"])-1
+                            balancesheet_df.loc[index, "Total Equity growth"] = (balancesheet_df.iloc[index]["Total Equity Gross Minority Interest"] / balancesheet_df.iloc[index-1]["Total Equity Gross Minority Interest"])-1
+                            balancesheet_df.loc[index, "Current Liabilities growth"] = (balancesheet_df.iloc[index]["Current Liabilities"] / balancesheet_df.iloc[index-1]["Current Liabilities"])-1
+                            balancesheet_df.loc[index, "Book Value growth"] = (balancesheet_df.iloc[index]["Book Value"] / balancesheet_df.iloc[index-1]["Book Value"])-1
+                            balancesheet_df.loc[index, "Book Value per share growth"] = (balancesheet_df.iloc[index]["Book Value per share"] / balancesheet_df.iloc[index-1]["Book Value per share"])-1
+                            balancesheet_df.loc[index, "Return on Assets growth"] = (balancesheet_df.iloc[index]["Return on Assets"] / balancesheet_df.iloc[index-1]["Return on Assets"])-1
+                            balancesheet_df.loc[index, "Return on Equity growth"] = (balancesheet_df.iloc[index]["Return on Equity"] / balancesheet_df.iloc[index-1]["Return on Equity"])-1
+                            balancesheet_df.loc[index, "Current Ratio growth"] = (balancesheet_df.iloc[index]["Current Ratio"] / balancesheet_df.iloc[index-1]["Current Ratio"])-1
+                            balancesheet_df.loc[index, "Quick Ratio growth"] = (balancesheet_df.iloc[index]["Quick Ratio"] / balancesheet_df.iloc[index-1]["Quick Ratio"])-1
+                            balancesheet_df.loc[index, "Debt to Equity growth"] = (balancesheet_df.iloc[index]["Debt to Equity"] / balancesheet_df.iloc[index-1]["Debt to Equity"])-1
+            elif "insurance" in industry.lower():
+                if "Current Assets" not in balancesheet_df.columns:
+                    balancesheet_df["Current Assets"] = 0.0
+                    balancesheet_df = balancesheet_df.rename(columns={"Derivative Product Liabilities": "Current Liabilities"})
+                    for index, row in balancesheet_df.iterrows():
+                        if "Receivables" not in balancesheet_df.columns:
+                            balancesheet_df.loc[index, "Current Assets"] = balancesheet_df.loc[index, "Cash And Cash Equivalents"] + balancesheet_df.loc[index, "Trading Securities"] + balancesheet_df.loc[index, "Financial Assets Designatedas Fair Value Through Profitor Loss Total"]
+                        else:
+                            balancesheet_df.loc[index, "Current Assets"] = balancesheet_df.loc[index, "Cash And Cash Equivalents"] + balancesheet_df.loc[index, "Receivables"] + balancesheet_df.loc[index, "Trading Securities"] + balancesheet_df.loc[index, "Financial Assets Designatedas Fair Value Through Profitor Loss Total"]
 
-        balancesheet = stock_data.balancesheet
-        balancesheet_df = pd.DataFrame(balancesheet)
-        if len(pd.DataFrame(stock_data.balancesheet).columns) > len(pd.DataFrame(stock_data.income_stmt).columns):
-            column_amount = len(pd.DataFrame(stock_data.balancesheet).columns) - len(pd.DataFrame(stock_data.income_stmt).columns)
-            balancesheet_df = balancesheet_df.drop(columns=balancesheet_df.columns[-column_amount])
-        elif len(pd.DataFrame(stock_data.balancesheet).columns) > len(pd.DataFrame(stock_data.cashflow).columns):
-            column_amount = len(pd.DataFrame(stock_data.balancesheet).columns) - len(pd.DataFrame(stock_data.cashflow).columns)
-            balancesheet_df = balancesheet_df.drop(columns=balancesheet_df.columns[-column_amount])
-
-        # Checking if the input DataFrame is empty
-        if balancesheet_df.empty:
-            raise ValueError("Input DataFrame is empty.")
-
-        # Rotate the balancesheet_df dataframe
-        balancesheet_df = balancesheet_df.transpose()
-        balancesheet_df["Total Assets growth"] = 0.0
-        balancesheet_df["Current Assets growth"] = 0.0
-        balancesheet_df["Cash and Cash Equivalents growth"] = 0.0
-        balancesheet_df["Total Liabilities growth"] = 0.0
-        balancesheet_df["Total Equity growth"] = 0.0
-        balancesheet_df["Current Liabilities growth"] = 0.0
-        balancesheet_df["Book Value"] = 0.0
-        balancesheet_df["Book Value growth"] = 0.0
-        balancesheet_df["Book Value per share"] = 0.0
-        balancesheet_df["Book Value per share growth"] = 0.0
-        balancesheet_df["Return on Assets"] = 0.0
-        balancesheet_df["Return on Assets growth"] = 0.0
-        balancesheet_df["Return on Equity"] = 0.0
-        balancesheet_df["Return on Equity growth"] = 0.0
-        balancesheet_df["Return on Invested Capital"] = 0.0
-        balancesheet_df["Return on Invested Capital growth"] = 0.0
-        balancesheet_df["Current Ratio"] = 0.0
-        balancesheet_df["Current Ratio growth"] = 0.0
-        balancesheet_df["Quick Ratio"] = 0.0
-        balancesheet_df["Quick Ratio growth"] = 0.0
-        balancesheet_df["Debt to Equity"] = 0.0
-        balancesheet_df["Debt to Equity growth"] = 0.0
-        # Invert the rows in balancesheet_df dataframe
-        balancesheet_df = balancesheet_df.iloc[::-1]
-        # Reset the index of the balancesheet_df dataframe
-        balancesheet_df = balancesheet_df.reset_index()
-        # Rename the index column to Date
-        balancesheet_df = balancesheet_df.rename(columns={"index": "Date"})
-        if "banks" in industry.lower():
-            if "Current Assets" not in balancesheet_df.columns:
-                balancesheet_df["Current Assets"] = 0.0
-                balancesheet_df = balancesheet_df.rename(columns={"Derivative Product Liabilities": "Current Liabilities"})
-                for index, row in balancesheet_df.iterrows():
-                    if "Trading Securities" not in balancesheet_df.columns:
-                        balancesheet_df.loc[index, "Current Assets"] = balancesheet_df.loc[index, "Cash And Cash Equivalents"] + balancesheet_df.loc[index, "Receivables"] + balancesheet_df.loc[index, "Financial Assets Designatedas Fair Value Through Profitor Loss Total"]
-                    else:
-                        balancesheet_df.loc[index, "Current Assets"] = balancesheet_df.loc[index, "Cash And Cash Equivalents"] + balancesheet_df.loc[index, "Receivables"] + balancesheet_df.loc[index, "Trading Securities"] + balancesheet_df.loc[index, "Financial Assets Designatedas Fair Value Through Profitor Loss Total"]
-                    balancesheet_df.loc[index, "Book Value"] = balancesheet_df.loc[index, "Total Equity Gross Minority Interest"]
-                    balancesheet_df.loc[index, "Book Value per share"] = balancesheet_df.loc[index, "Total Equity Gross Minority Interest"] / income_stmt_df.loc[index, "Diluted Average Shares"]
-                    balancesheet_df.loc[index, "Return on Assets"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / balancesheet_df.loc[index, "Total Assets"]
-                    balancesheet_df.loc[index, "Return on Equity"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / balancesheet_df.loc[index, "Total Equity Gross Minority Interest"]
-                    balancesheet_df.loc[index, "Return on Invested Capital"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / (balancesheet_df.loc[index, "Total Equity Gross Minority Interest"] + balancesheet_df.loc[index, "Total Liabilities Net Minority Interest"])
-                    balancesheet_df.loc[index, "Current Ratio"] = (balancesheet_df.loc[index, "Current Assets"]) / balancesheet_df.loc[index, "Current Liabilities"]
-                    balancesheet_df.loc[index, "Quick Ratio"] = balancesheet_df.loc[index, "Cash And Cash Equivalents"] / balancesheet_df.loc[index, "Current Liabilities"]
-                    balancesheet_df.loc[index, "Debt to Equity"] = balancesheet_df.loc[index, "Total Liabilities Net Minority Interest"] / balancesheet_df.loc[index, "Total Equity Gross Minority Interest"]
-                    if index == 0:
-                        balancesheet_df.loc[index, "Total Assets growth"] = 0.0
-                        balancesheet_df.loc[index, "Current Assets growth"] = 0.0
-                        balancesheet_df.loc[index, "Cash and Cash Equivalents growth"] = 0.0
-                        balancesheet_df.loc[index, "Total Liabilities growth"] = 0.0
-                        balancesheet_df.loc[index, "Total Equity growth"] = 0.0
-                        balancesheet_df.loc[index, "Current Liabilities growth"] = 0.0
-                        balancesheet_df.loc[index, "Book Value growth"] = 0.0
-                        balancesheet_df.loc[index, "Book Value per share growth"] = 0.0
-                        balancesheet_df.loc[index, "Return on Assets growth"] = 0.0
-                        balancesheet_df.loc[index, "Return on Equity growth"] = 0.0
-                        balancesheet_df.loc[index, "Return on Invested Capital growth"] = 0.0
-                        balancesheet_df.loc[index, "Current Ratio growth"] = 0.0
-                        balancesheet_df.loc[index, "Quick Ratio growth"] = 0.0
-                        balancesheet_df.loc[index, "Debt to Equity growth"] = 0.0
-                    else:
-                        balancesheet_df.loc[index, "Total Assets growth"] = (balancesheet_df.iloc[index]["Total Assets"] / balancesheet_df.iloc[index-1]["Total Assets"])-1
-                        balancesheet_df.loc[index, "Current Assets growth"] = (balancesheet_df.iloc[index]["Current Assets"] / balancesheet_df.iloc[index-1]["Current Assets"])-1
-                        balancesheet_df.loc[index, "Cash and Cash Equivalents growth"] = (balancesheet_df.iloc[index]["Cash And Cash Equivalents"] / balancesheet_df.iloc[index-1]["Cash And Cash Equivalents"])-1
-                        balancesheet_df.loc[index, "Total Liabilities growth"] = (balancesheet_df.iloc[index]["Total Liabilities Net Minority Interest"] / balancesheet_df.iloc[index-1]["Total Liabilities Net Minority Interest"])-1
-                        balancesheet_df.loc[index, "Total Equity growth"] = (balancesheet_df.iloc[index]["Total Equity Gross Minority Interest"] / balancesheet_df.iloc[index-1]["Total Equity Gross Minority Interest"])-1
-                        balancesheet_df.loc[index, "Current Liabilities growth"] = (balancesheet_df.iloc[index]["Current Liabilities"] / balancesheet_df.iloc[index-1]["Current Liabilities"])-1
-                        balancesheet_df.loc[index, "Book Value growth"] = (balancesheet_df.iloc[index]["Book Value"] / balancesheet_df.iloc[index-1]["Book Value"])-1
-                        balancesheet_df.loc[index, "Book Value per share growth"] = (balancesheet_df.iloc[index]["Book Value per share"] / balancesheet_df.iloc[index-1]["Book Value per share"])-1
-                        balancesheet_df.loc[index, "Return on Assets growth"] = (balancesheet_df.iloc[index]["Return on Assets"] / balancesheet_df.iloc[index-1]["Return on Assets"])-1
-                        balancesheet_df.loc[index, "Return on Equity growth"] = (balancesheet_df.iloc[index]["Return on Equity"] / balancesheet_df.iloc[index-1]["Return on Equity"])-1
-                        balancesheet_df.loc[index, "Return on Invested Capital growth"] = (balancesheet_df.iloc[index]["Return on Invested Capital"] / balancesheet_df.iloc[index-1]["Return on Invested Capital"])-1
-                        balancesheet_df.loc[index, "Current Ratio growth"] = (balancesheet_df.iloc[index]["Current Ratio"] / balancesheet_df.iloc[index-1]["Current Ratio"])-1
-                        balancesheet_df.loc[index, "Quick Ratio growth"] = (balancesheet_df.iloc[index]["Quick Ratio"] / balancesheet_df.iloc[index-1]["Quick Ratio"])-1
-                        balancesheet_df.loc[index, "Debt to Equity growth"] = (balancesheet_df.iloc[index]["Debt to Equity"] / balancesheet_df.iloc[index-1]["Debt to Equity"])-1
-            else:
-                for index, row in balancesheet_df.iterrows():
-                    balancesheet_df.loc[index, "Book Value"] = balancesheet_df.loc[index, "Total Equity Gross Minority Interest"]
-                    balancesheet_df.loc[index, "Book Value per share"] = balancesheet_df.loc[index, "Total Equity Gross Minority Interest"] / income_stmt_df.loc[index, "Diluted Average Shares"]
-                    balancesheet_df.loc[index, "Return on Assets"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / balancesheet_df.loc[index, "Total Assets"]
-                    balancesheet_df.loc[index, "Return on Equity"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / balancesheet_df.loc[index, "Total Equity Gross Minority Interest"]
-                    balancesheet_df.loc[index, "Current Ratio"] = balancesheet_df.loc[index, "Current Assets"] / balancesheet_df.loc[index, "Current Liabilities"]
-                    balancesheet_df.loc[index, "Quick Ratio"] = balancesheet_df.loc[index, "Cash And Cash Equivalents"] / balancesheet_df.loc[index, "Current Liabilities"]
-                    balancesheet_df.loc[index, "Debt to Equity"] = balancesheet_df.loc[index, "Total Liabilities Net Minority Interest"] / balancesheet_df.loc[index, "Total Equity Gross Minority Interest"]
-                    if index == 0:
-                        balancesheet_df.loc[index, "Total Assets growth"] = 0.0
-                        balancesheet_df.loc[index, "Current Assets growth"] = 0.0
-                        balancesheet_df.loc[index, "Cash and Cash Equivalents growth"] = 0.0
-                        balancesheet_df.loc[index, "Total Liabilities growth"] = 0.0
-                        balancesheet_df.loc[index, "Total Equity growth"] = 0.0
-                        balancesheet_df.loc[index, "Current Liabilities growth"] = 0.0
-                        balancesheet_df.loc[index, "Book Value growth"] = 0.0
-                        balancesheet_df.loc[index, "Book Value per share growth"] = 0.0
-                        balancesheet_df.loc[index, "Return on Assets growth"] = 0.0
-                        balancesheet_df.loc[index, "Return on Equity growth"] = 0.0
-                        balancesheet_df.loc[index, "Current Ratio growth"] = 0.0
-                        balancesheet_df.loc[index, "Quick Ratio growth"] = 0.0
-                        balancesheet_df.loc[index, "Debt to Equity growth"] = 0.0
-                    else:
-                        balancesheet_df.loc[index, "Total Assets growth"] = (balancesheet_df.iloc[index]["Total Assets"] / balancesheet_df.iloc[index-1]["Total Assets"])-1
-                        balancesheet_df.loc[index, "Current Assets growth"] = (balancesheet_df.iloc[index]["Current Assets"] / balancesheet_df.iloc[index-1]["Current Assets"])-1
-                        balancesheet_df.loc[index, "Cash and Cash Equivalents growth"] = (balancesheet_df.iloc[index]["Cash And Cash Equivalents"] / balancesheet_df.iloc[index-1]["Cash And Cash Equivalents"])-1
-                        balancesheet_df.loc[index, "Total Liabilities growth"] = (balancesheet_df.iloc[index]["Total Liabilities Net Minority Interest"] / balancesheet_df.iloc[index-1]["Total Liabilities Net Minority Interest"])-1
-                        balancesheet_df.loc[index, "Total Equity growth"] = (balancesheet_df.iloc[index]["Total Equity Gross Minority Interest"] / balancesheet_df.iloc[index-1]["Total Equity Gross Minority Interest"])-1
-                        balancesheet_df.loc[index, "Current Liabilities growth"] = (balancesheet_df.iloc[index]["Current Liabilities"] / balancesheet_df.iloc[index-1]["Current Liabilities"])-1
-                        balancesheet_df.loc[index, "Book Value growth"] = (balancesheet_df.iloc[index]["Book Value"] / balancesheet_df.iloc[index-1]["Book Value"])-1
-                        balancesheet_df.loc[index, "Book Value per share growth"] = (balancesheet_df.iloc[index]["Book Value per share"] / balancesheet_df.iloc[index-1]["Book Value per share"])-1
-                        balancesheet_df.loc[index, "Return on Assets growth"] = (balancesheet_df.iloc[index]["Return on Assets"] / balancesheet_df.iloc[index-1]["Return on Assets"])-1
-                        balancesheet_df.loc[index, "Return on Equity growth"] = (balancesheet_df.iloc[index]["Return on Equity"] / balancesheet_df.iloc[index-1]["Return on Equity"])-1
-                        balancesheet_df.loc[index, "Current Ratio growth"] = (balancesheet_df.iloc[index]["Current Ratio"] / balancesheet_df.iloc[index-1]["Current Ratio"])-1
-                        balancesheet_df.loc[index, "Quick Ratio growth"] = (balancesheet_df.iloc[index]["Quick Ratio"] / balancesheet_df.iloc[index-1]["Quick Ratio"])-1
-                        balancesheet_df.loc[index, "Debt to Equity growth"] = (balancesheet_df.iloc[index]["Debt to Equity"] / balancesheet_df.iloc[index-1]["Debt to Equity"])-1
-        elif "insurance" in industry.lower():
-            if "Current Assets" not in balancesheet_df.columns:
-                balancesheet_df["Current Assets"] = 0.0
-                balancesheet_df = balancesheet_df.rename(columns={"Derivative Product Liabilities": "Current Liabilities"})
-                for index, row in balancesheet_df.iterrows():
-                    if "Receivables" not in balancesheet_df.columns:
-                        balancesheet_df.loc[index, "Current Assets"] = balancesheet_df.loc[index, "Cash And Cash Equivalents"] + balancesheet_df.loc[index, "Trading Securities"] + balancesheet_df.loc[index, "Financial Assets Designatedas Fair Value Through Profitor Loss Total"]
-                    else:
-                        balancesheet_df.loc[index, "Current Assets"] = balancesheet_df.loc[index, "Cash And Cash Equivalents"] + balancesheet_df.loc[index, "Receivables"] + balancesheet_df.loc[index, "Trading Securities"] + balancesheet_df.loc[index, "Financial Assets Designatedas Fair Value Through Profitor Loss Total"]
-
-                    balancesheet_df.loc[index, "Book Value"] = balancesheet_df.loc[index, "Total Equity Gross Minority Interest"]
-                    balancesheet_df.loc[index, "Book Value per share"] = balancesheet_df.loc[index, "Total Equity Gross Minority Interest"] / income_stmt_df.loc[index, "Diluted Average Shares"]
-                    balancesheet_df.loc[index, "Return on Assets"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / balancesheet_df.loc[index, "Total Assets"]
-                    balancesheet_df.loc[index, "Return on Equity"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / balancesheet_df.loc[index, "Total Equity Gross Minority Interest"]
-                    balancesheet_df.loc[index, "Return on Invested Capital"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / (balancesheet_df.loc[index, "Total Equity Gross Minority Interest"] + balancesheet_df.loc[index, "Total Liabilities Net Minority Interest"])
-                    balancesheet_df.loc[index, "Current Ratio"] = (balancesheet_df.loc[index, "Current Assets"]) / balancesheet_df.loc[index, "Current Liabilities"]
-                    balancesheet_df.loc[index, "Quick Ratio"] = balancesheet_df.loc[index, "Cash And Cash Equivalents"] / balancesheet_df.loc[index, "Current Liabilities"]
-                    balancesheet_df.loc[index, "Debt to Equity"] = balancesheet_df.loc[index, "Total Liabilities Net Minority Interest"] / balancesheet_df.loc[index, "Total Equity Gross Minority Interest"]
-                    if index == 0:
-                        balancesheet_df.loc[index, "Total Assets growth"] = 0.0
-                        balancesheet_df.loc[index, "Current Assets growth"] = 0.0
-                        balancesheet_df.loc[index, "Cash and Cash Equivalents growth"] = 0.0
-                        balancesheet_df.loc[index, "Total Liabilities growth"] = 0.0
-                        balancesheet_df.loc[index, "Total Equity growth"] = 0.0
-                        balancesheet_df.loc[index, "Current Liabilities growth"] = 0.0
-                        balancesheet_df.loc[index, "Book Value growth"] = 0.0
-                        balancesheet_df.loc[index, "Book Value per share growth"] = 0.0
-                        balancesheet_df.loc[index, "Return on Assets growth"] = 0.0
-                        balancesheet_df.loc[index, "Return on Equity growth"] = 0.0
-                        balancesheet_df.loc[index, "Return on Invested Capital growth"] = 0.0
-                        balancesheet_df.loc[index, "Current Ratio growth"] = 0.0
-                        balancesheet_df.loc[index, "Quick Ratio growth"] = 0.0
-                        balancesheet_df.loc[index, "Debt to Equity growth"] = 0.0
-                    else:
-                        balancesheet_df.loc[index, "Total Assets growth"] = (balancesheet_df.iloc[index]["Total Assets"] / balancesheet_df.iloc[index-1]["Total Assets"])-1
-                        balancesheet_df.loc[index, "Current Assets growth"] = (balancesheet_df.iloc[index]["Current Assets"] / balancesheet_df.iloc[index-1]["Current Assets"])-1
-                        balancesheet_df.loc[index, "Cash and Cash Equivalents growth"] = (balancesheet_df.iloc[index]["Cash And Cash Equivalents"] / balancesheet_df.iloc[index-1]["Cash And Cash Equivalents"])-1
-                        balancesheet_df.loc[index, "Total Liabilities growth"] = (balancesheet_df.iloc[index]["Total Liabilities Net Minority Interest"] / balancesheet_df.iloc[index-1]["Total Liabilities Net Minority Interest"])-1
-                        balancesheet_df.loc[index, "Total Equity growth"] = (balancesheet_df.iloc[index]["Total Equity Gross Minority Interest"] / balancesheet_df.iloc[index-1]["Total Equity Gross Minority Interest"])-1
-                        balancesheet_df.loc[index, "Current Liabilities growth"] = (balancesheet_df.iloc[index]["Current Liabilities"] / balancesheet_df.iloc[index-1]["Current Liabilities"])-1
-                        balancesheet_df.loc[index, "Book Value growth"] = (balancesheet_df.iloc[index]["Book Value"] / balancesheet_df.iloc[index-1]["Book Value"])-1
-                        balancesheet_df.loc[index, "Book Value per share growth"] = (balancesheet_df.iloc[index]["Book Value per share"] / balancesheet_df.iloc[index-1]["Book Value per share"])-1
-                        balancesheet_df.loc[index, "Return on Assets growth"] = (balancesheet_df.iloc[index]["Return on Assets"] / balancesheet_df.iloc[index-1]["Return on Assets"])-1
-                        balancesheet_df.loc[index, "Return on Equity growth"] = (balancesheet_df.iloc[index]["Return on Equity"] / balancesheet_df.iloc[index-1]["Return on Equity"])-1
-                        balancesheet_df.loc[index, "Return on Invested Capital growth"] = (balancesheet_df.iloc[index]["Return on Invested Capital"] / balancesheet_df.iloc[index-1]["Return on Invested Capital"])-1
-                        balancesheet_df.loc[index, "Current Ratio growth"] = (balancesheet_df.iloc[index]["Current Ratio"] / balancesheet_df.iloc[index-1]["Current Ratio"])-1
-                        balancesheet_df.loc[index, "Quick Ratio growth"] = (balancesheet_df.iloc[index]["Quick Ratio"] / balancesheet_df.iloc[index-1]["Quick Ratio"])-1
-                        balancesheet_df.loc[index, "Debt to Equity growth"] = (balancesheet_df.iloc[index]["Debt to Equity"] / balancesheet_df.iloc[index-1]["Debt to Equity"])-1
+                        balancesheet_df.loc[index, "Book Value"] = balancesheet_df.loc[index, "Total Equity Gross Minority Interest"]
+                        balancesheet_df.loc[index, "Book Value per share"] = balancesheet_df.loc[index, "Total Equity Gross Minority Interest"] / income_stmt_df.loc[index, "Diluted Average Shares"]
+                        balancesheet_df.loc[index, "Return on Assets"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / balancesheet_df.loc[index, "Total Assets"]
+                        balancesheet_df.loc[index, "Return on Equity"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / balancesheet_df.loc[index, "Total Equity Gross Minority Interest"]
+                        balancesheet_df.loc[index, "Return on Invested Capital"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / (balancesheet_df.loc[index, "Total Equity Gross Minority Interest"] + balancesheet_df.loc[index, "Total Liabilities Net Minority Interest"])
+                        balancesheet_df.loc[index, "Current Ratio"] = (balancesheet_df.loc[index, "Current Assets"]) / balancesheet_df.loc[index, "Current Liabilities"]
+                        balancesheet_df.loc[index, "Quick Ratio"] = balancesheet_df.loc[index, "Cash And Cash Equivalents"] / balancesheet_df.loc[index, "Current Liabilities"]
+                        balancesheet_df.loc[index, "Debt to Equity"] = balancesheet_df.loc[index, "Total Liabilities Net Minority Interest"] / balancesheet_df.loc[index, "Total Equity Gross Minority Interest"]
+                        if index == 0:
+                            balancesheet_df.loc[index, "Total Assets growth"] = 0.0
+                            balancesheet_df.loc[index, "Current Assets growth"] = 0.0
+                            balancesheet_df.loc[index, "Cash and Cash Equivalents growth"] = 0.0
+                            balancesheet_df.loc[index, "Total Liabilities growth"] = 0.0
+                            balancesheet_df.loc[index, "Total Equity growth"] = 0.0
+                            balancesheet_df.loc[index, "Current Liabilities growth"] = 0.0
+                            balancesheet_df.loc[index, "Book Value growth"] = 0.0
+                            balancesheet_df.loc[index, "Book Value per share growth"] = 0.0
+                            balancesheet_df.loc[index, "Return on Assets growth"] = 0.0
+                            balancesheet_df.loc[index, "Return on Equity growth"] = 0.0
+                            balancesheet_df.loc[index, "Return on Invested Capital growth"] = 0.0
+                            balancesheet_df.loc[index, "Current Ratio growth"] = 0.0
+                            balancesheet_df.loc[index, "Quick Ratio growth"] = 0.0
+                            balancesheet_df.loc[index, "Debt to Equity growth"] = 0.0
+                        else:
+                            balancesheet_df.loc[index, "Total Assets growth"] = (balancesheet_df.iloc[index]["Total Assets"] / balancesheet_df.iloc[index-1]["Total Assets"])-1
+                            balancesheet_df.loc[index, "Current Assets growth"] = (balancesheet_df.iloc[index]["Current Assets"] / balancesheet_df.iloc[index-1]["Current Assets"])-1
+                            balancesheet_df.loc[index, "Cash and Cash Equivalents growth"] = (balancesheet_df.iloc[index]["Cash And Cash Equivalents"] / balancesheet_df.iloc[index-1]["Cash And Cash Equivalents"])-1
+                            balancesheet_df.loc[index, "Total Liabilities growth"] = (balancesheet_df.iloc[index]["Total Liabilities Net Minority Interest"] / balancesheet_df.iloc[index-1]["Total Liabilities Net Minority Interest"])-1
+                            balancesheet_df.loc[index, "Total Equity growth"] = (balancesheet_df.iloc[index]["Total Equity Gross Minority Interest"] / balancesheet_df.iloc[index-1]["Total Equity Gross Minority Interest"])-1
+                            balancesheet_df.loc[index, "Current Liabilities growth"] = (balancesheet_df.iloc[index]["Current Liabilities"] / balancesheet_df.iloc[index-1]["Current Liabilities"])-1
+                            balancesheet_df.loc[index, "Book Value growth"] = (balancesheet_df.iloc[index]["Book Value"] / balancesheet_df.iloc[index-1]["Book Value"])-1
+                            balancesheet_df.loc[index, "Book Value per share growth"] = (balancesheet_df.iloc[index]["Book Value per share"] / balancesheet_df.iloc[index-1]["Book Value per share"])-1
+                            balancesheet_df.loc[index, "Return on Assets growth"] = (balancesheet_df.iloc[index]["Return on Assets"] / balancesheet_df.iloc[index-1]["Return on Assets"])-1
+                            balancesheet_df.loc[index, "Return on Equity growth"] = (balancesheet_df.iloc[index]["Return on Equity"] / balancesheet_df.iloc[index-1]["Return on Equity"])-1
+                            balancesheet_df.loc[index, "Return on Invested Capital growth"] = (balancesheet_df.iloc[index]["Return on Invested Capital"] / balancesheet_df.iloc[index-1]["Return on Invested Capital"])-1
+                            balancesheet_df.loc[index, "Current Ratio growth"] = (balancesheet_df.iloc[index]["Current Ratio"] / balancesheet_df.iloc[index-1]["Current Ratio"])-1
+                            balancesheet_df.loc[index, "Quick Ratio growth"] = (balancesheet_df.iloc[index]["Quick Ratio"] / balancesheet_df.iloc[index-1]["Quick Ratio"])-1
+                            balancesheet_df.loc[index, "Debt to Equity growth"] = (balancesheet_df.iloc[index]["Debt to Equity"] / balancesheet_df.iloc[index-1]["Debt to Equity"])-1
+                else:
+                    for index, row in balancesheet_df.iterrows():
+                        balancesheet_df.loc[index, "Book Value"] = balancesheet_df.loc[index, "Total Equity Gross Minority Interest"]
+                        balancesheet_df.loc[index, "Book Value per share"] = balancesheet_df.loc[index, "Total Equity Gross Minority Interest"] / income_stmt_df.loc[index, "Diluted Average Shares"]
+                        balancesheet_df.loc[index, "Return on Assets"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / balancesheet_df.loc[index, "Total Assets"]
+                        balancesheet_df.loc[index, "Return on Equity"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / balancesheet_df.loc[index, "Total Equity Gross Minority Interest"]
+                        balancesheet_df.loc[index, "Return on Invested Capital"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / (balancesheet_df.loc[index, "Total Equity Gross Minority Interest"] + balancesheet_df.loc[index, "Total Liabilities Net Minority Interest"])
+                        balancesheet_df.loc[index, "Current Ratio"] = balancesheet_df.loc[index, "Current Assets"] / balancesheet_df.loc[index, "Current Liabilities"]
+                        balancesheet_df.loc[index, "Quick Ratio"] = balancesheet_df.loc[index, "Cash Cash Equivalents And Short Term Investments"] / balancesheet_df.loc[index, "Current Liabilities"]
+                        balancesheet_df.loc[index, "Debt to Equity"] = balancesheet_df.loc[index, "Total Liabilities Net Minority Interest"] / balancesheet_df.loc[index, "Total Equity Gross Minority Interest"]
+                        if index == 0:
+                            balancesheet_df.loc[index, "Total Assets growth"] = 0.0
+                            balancesheet_df.loc[index, "Current Assets growth"] = 0.0
+                            balancesheet_df.loc[index, "Cash and Cash Equivalents growth"] = 0.0
+                            balancesheet_df.loc[index, "Total Liabilities growth"] = 0.0
+                            balancesheet_df.loc[index, "Total Equity growth"] = 0.0
+                            balancesheet_df.loc[index, "Current Liabilities growth"] = 0.0
+                            balancesheet_df.loc[index, "Book Value growth"] = 0.0
+                            balancesheet_df.loc[index, "Book Value per share growth"] = 0.0
+                            balancesheet_df.loc[index, "Return on Assets growth"] = 0.0
+                            balancesheet_df.loc[index, "Return on Equity growth"] = 0.0
+                            balancesheet_df.loc[index, "Return on Invested Capital growth"] = 0.0
+                            balancesheet_df.loc[index, "Current Ratio growth"] = 0.0
+                            balancesheet_df.loc[index, "Quick Ratio growth"] = 0.0
+                            balancesheet_df.loc[index, "Debt to Equity growth"] = 0.0
+                        else:
+                            balancesheet_df.loc[index, "Total Assets growth"] = (balancesheet_df.iloc[index]["Total Assets"] / balancesheet_df.iloc[index-1]["Total Assets"])-1
+                            balancesheet_df.loc[index, "Current Assets growth"] = (balancesheet_df.iloc[index]["Current Assets"] / balancesheet_df.iloc[index-1]["Current Assets"])-1
+                            balancesheet_df.loc[index, "Cash and Cash Equivalents growth"] = (balancesheet_df.iloc[index]["Cash Cash Equivalents And Short Term Investments"] / balancesheet_df.iloc[index-1]["Cash Cash Equivalents And Short Term Investments"])-1
+                            balancesheet_df.loc[index, "Total Liabilities growth"] = (balancesheet_df.iloc[index]["Total Liabilities Net Minority Interest"] / balancesheet_df.iloc[index-1]["Total Liabilities Net Minority Interest"])-1
+                            balancesheet_df.loc[index, "Total Equity growth"] = (balancesheet_df.iloc[index]["Total Equity Gross Minority Interest"] / balancesheet_df.iloc[index-1]["Total Equity Gross Minority Interest"])-1
+                            balancesheet_df.loc[index, "Current Liabilities growth"] = (balancesheet_df.iloc[index]["Current Liabilities"] / balancesheet_df.iloc[index-1]["Current Liabilities"])-1
+                            balancesheet_df.loc[index, "Book Value growth"] = (balancesheet_df.iloc[index]["Book Value"] / balancesheet_df.iloc[index-1]["Book Value"])-1
+                            balancesheet_df.loc[index, "Book Value per share growth"] = (balancesheet_df.iloc[index]["Book Value per share"] / balancesheet_df.iloc[index-1]["Book Value per share"])-1
+                            balancesheet_df.loc[index, "Return on Assets growth"] = (balancesheet_df.iloc[index]["Return on Assets"] / balancesheet_df.iloc[index-1]["Return on Assets"])-1
+                            balancesheet_df.loc[index, "Return on Equity growth"] = (balancesheet_df.iloc[index]["Return on Equity"] / balancesheet_df.iloc[index-1]["Return on Equity"])-1
+                            balancesheet_df.loc[index, "Return on Invested Capital growth"] = (balancesheet_df.iloc[index]["Return on Invested Capital"] / balancesheet_df.iloc[index-1]["Return on Invested Capital"])-1
+                            balancesheet_df.loc[index, "Current Ratio growth"] = (balancesheet_df.iloc[index]["Current Ratio"] / balancesheet_df.iloc[index-1]["Current Ratio"])-1
+                            balancesheet_df.loc[index, "Quick Ratio growth"] = (balancesheet_df.iloc[index]["Quick Ratio"] / balancesheet_df.iloc[index-1]["Quick Ratio"])-1
+                            balancesheet_df.loc[index, "Debt to Equity growth"] = (balancesheet_df.iloc[index]["Debt to Equity"] / balancesheet_df.iloc[index-1]["Debt to Equity"])-1
             else:
                 for index, row in balancesheet_df.iterrows():
                     balancesheet_df.loc[index, "Book Value"] = balancesheet_df.loc[index, "Total Equity Gross Minority Interest"]
@@ -1018,8 +1066,8 @@ def fetch_stock_financial_data(stock_symbol = ""):
                         balancesheet_df.loc[index, "Total Assets growth"] = 0.0
                         balancesheet_df.loc[index, "Current Assets growth"] = 0.0
                         balancesheet_df.loc[index, "Cash and Cash Equivalents growth"] = 0.0
-                        balancesheet_df.loc[index, "Total Liabilities growth"] = 0.0
                         balancesheet_df.loc[index, "Total Equity growth"] = 0.0
+                        balancesheet_df.loc[index, "Total Liabilities growth"] = 0.0
                         balancesheet_df.loc[index, "Current Liabilities growth"] = 0.0
                         balancesheet_df.loc[index, "Book Value growth"] = 0.0
                         balancesheet_df.loc[index, "Book Value per share growth"] = 0.0
@@ -1044,162 +1092,182 @@ def fetch_stock_financial_data(stock_symbol = ""):
                         balancesheet_df.loc[index, "Current Ratio growth"] = (balancesheet_df.iloc[index]["Current Ratio"] / balancesheet_df.iloc[index-1]["Current Ratio"])-1
                         balancesheet_df.loc[index, "Quick Ratio growth"] = (balancesheet_df.iloc[index]["Quick Ratio"] / balancesheet_df.iloc[index-1]["Quick Ratio"])-1
                         balancesheet_df.loc[index, "Debt to Equity growth"] = (balancesheet_df.iloc[index]["Debt to Equity"] / balancesheet_df.iloc[index-1]["Debt to Equity"])-1
-        else:
-            for index, row in balancesheet_df.iterrows():
-                balancesheet_df.loc[index, "Book Value"] = balancesheet_df.loc[index, "Total Equity Gross Minority Interest"]
-                balancesheet_df.loc[index, "Book Value per share"] = balancesheet_df.loc[index, "Total Equity Gross Minority Interest"] / income_stmt_df.loc[index, "Diluted Average Shares"]
-                balancesheet_df.loc[index, "Return on Assets"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / balancesheet_df.loc[index, "Total Assets"]
-                balancesheet_df.loc[index, "Return on Equity"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / balancesheet_df.loc[index, "Total Equity Gross Minority Interest"]
-                balancesheet_df.loc[index, "Return on Invested Capital"] = income_stmt_df.loc[index, "Net Income Common Stockholders"] / (balancesheet_df.loc[index, "Total Equity Gross Minority Interest"] + balancesheet_df.loc[index, "Total Liabilities Net Minority Interest"])
-                balancesheet_df.loc[index, "Current Ratio"] = balancesheet_df.loc[index, "Current Assets"] / balancesheet_df.loc[index, "Current Liabilities"]
-                balancesheet_df.loc[index, "Quick Ratio"] = balancesheet_df.loc[index, "Cash Cash Equivalents And Short Term Investments"] / balancesheet_df.loc[index, "Current Liabilities"]
-                balancesheet_df.loc[index, "Debt to Equity"] = balancesheet_df.loc[index, "Total Liabilities Net Minority Interest"] / balancesheet_df.loc[index, "Total Equity Gross Minority Interest"]
+
+            cashflow = stock_data.cashflow
+            cashflow_df = pd.DataFrame(cashflow)
+            if len(pd.DataFrame(stock_data.cashflow).columns) > len(pd.DataFrame(stock_data.income_stmt).columns):
+                column_amount = len(pd.DataFrame(stock_data.cashflow).columns) - len(pd.DataFrame(stock_data.income_stmt).columns)
+                cashflow_df = cashflow_df.drop(columns=cashflow_df.columns[-column_amount])
+            elif len(pd.DataFrame(stock_data.cashflow).columns) > len(pd.DataFrame(stock_data.balancesheet).columns):
+                column_amount = len(pd.DataFrame(stock_data.cashflow).columns) - len(pd.DataFrame(stock_data.balancesheet).columns)
+                cashflow_df = cashflow_df.drop(columns=cashflow_df.columns[-column_amount])
+
+            cashflow_df = cashflow_df.drop(columns=cashflow_df.columns[-1])
+            # Checking if the input DataFrame is empty
+            if cashflow_df.empty:
+                raise ValueError("Input DataFrame is empty.")
+
+            # Rotate the cashflow_df dataframe
+            cashflow_df = cashflow_df.transpose()
+            cashflow_df["Free Cash Flow growth"] = 0.0
+            cashflow_df["Free Cash Flow per share"] = 0.0
+            cashflow_df["Free Cash Flow per share growth"] = 0.0
+            # Invert the rows in cashflow_df dataframe
+            cashflow_df = cashflow_df.iloc[::-1]
+            # Reset the index of the cashflow_df dataframe
+            cashflow_df = cashflow_df.reset_index()
+            # Rename the index column to Date
+            cashflow_df = cashflow_df.rename(columns={"index": "Date"})
+            for index, row in cashflow_df.iterrows():
+                cashflow_df.loc[index, "Free Cash Flow per share"] = (cashflow_df.loc[index, "Free Cash Flow"] / income_stmt_df.loc[index, "Diluted Average Shares"])
                 if index == 0:
-                    balancesheet_df.loc[index, "Total Assets growth"] = 0.0
-                    balancesheet_df.loc[index, "Current Assets growth"] = 0.0
-                    balancesheet_df.loc[index, "Cash and Cash Equivalents growth"] = 0.0
-                    balancesheet_df.loc[index, "Total Equity growth"] = 0.0
-                    balancesheet_df.loc[index, "Total Liabilities growth"] = 0.0
-                    balancesheet_df.loc[index, "Current Liabilities growth"] = 0.0
-                    balancesheet_df.loc[index, "Book Value growth"] = 0.0
-                    balancesheet_df.loc[index, "Book Value per share growth"] = 0.0
-                    balancesheet_df.loc[index, "Return on Assets growth"] = 0.0
-                    balancesheet_df.loc[index, "Return on Equity growth"] = 0.0
-                    balancesheet_df.loc[index, "Return on Invested Capital growth"] = 0.0
-                    balancesheet_df.loc[index, "Current Ratio growth"] = 0.0
-                    balancesheet_df.loc[index, "Quick Ratio growth"] = 0.0
-                    balancesheet_df.loc[index, "Debt to Equity growth"] = 0.0
+                    cashflow_df.loc[index, "Free Cash Flow growth"] = 0.0
+                    cashflow_df.loc[index, "Free Cash Flow per share growth"] = 0.0
                 else:
-                    balancesheet_df.loc[index, "Total Assets growth"] = (balancesheet_df.iloc[index]["Total Assets"] / balancesheet_df.iloc[index-1]["Total Assets"])-1
-                    balancesheet_df.loc[index, "Current Assets growth"] = (balancesheet_df.iloc[index]["Current Assets"] / balancesheet_df.iloc[index-1]["Current Assets"])-1
-                    balancesheet_df.loc[index, "Cash and Cash Equivalents growth"] = (balancesheet_df.iloc[index]["Cash Cash Equivalents And Short Term Investments"] / balancesheet_df.iloc[index-1]["Cash Cash Equivalents And Short Term Investments"])-1
-                    balancesheet_df.loc[index, "Total Liabilities growth"] = (balancesheet_df.iloc[index]["Total Liabilities Net Minority Interest"] / balancesheet_df.iloc[index-1]["Total Liabilities Net Minority Interest"])-1
-                    balancesheet_df.loc[index, "Total Equity growth"] = (balancesheet_df.iloc[index]["Total Equity Gross Minority Interest"] / balancesheet_df.iloc[index-1]["Total Equity Gross Minority Interest"])-1
-                    balancesheet_df.loc[index, "Current Liabilities growth"] = (balancesheet_df.iloc[index]["Current Liabilities"] / balancesheet_df.iloc[index-1]["Current Liabilities"])-1
-                    balancesheet_df.loc[index, "Book Value growth"] = (balancesheet_df.iloc[index]["Book Value"] / balancesheet_df.iloc[index-1]["Book Value"])-1
-                    balancesheet_df.loc[index, "Book Value per share growth"] = (balancesheet_df.iloc[index]["Book Value per share"] / balancesheet_df.iloc[index-1]["Book Value per share"])-1
-                    balancesheet_df.loc[index, "Return on Assets growth"] = (balancesheet_df.iloc[index]["Return on Assets"] / balancesheet_df.iloc[index-1]["Return on Assets"])-1
-                    balancesheet_df.loc[index, "Return on Equity growth"] = (balancesheet_df.iloc[index]["Return on Equity"] / balancesheet_df.iloc[index-1]["Return on Equity"])-1
-                    balancesheet_df.loc[index, "Return on Invested Capital growth"] = (balancesheet_df.iloc[index]["Return on Invested Capital"] / balancesheet_df.iloc[index-1]["Return on Invested Capital"])-1
-                    balancesheet_df.loc[index, "Current Ratio growth"] = (balancesheet_df.iloc[index]["Current Ratio"] / balancesheet_df.iloc[index-1]["Current Ratio"])-1
-                    balancesheet_df.loc[index, "Quick Ratio growth"] = (balancesheet_df.iloc[index]["Quick Ratio"] / balancesheet_df.iloc[index-1]["Quick Ratio"])-1
-                    balancesheet_df.loc[index, "Debt to Equity growth"] = (balancesheet_df.iloc[index]["Debt to Equity"] / balancesheet_df.iloc[index-1]["Debt to Equity"])-1
-
-        cashflow = stock_data.cashflow
-        cashflow_df = pd.DataFrame(cashflow)
-        if len(pd.DataFrame(stock_data.cashflow).columns) > len(pd.DataFrame(stock_data.income_stmt).columns):
-            column_amount = len(pd.DataFrame(stock_data.cashflow).columns) - len(pd.DataFrame(stock_data.income_stmt).columns)
-            cashflow_df = cashflow_df.drop(columns=cashflow_df.columns[-column_amount])
-        elif len(pd.DataFrame(stock_data.cashflow).columns) > len(pd.DataFrame(stock_data.balancesheet).columns):
-            column_amount = len(pd.DataFrame(stock_data.cashflow).columns) - len(pd.DataFrame(stock_data.balancesheet).columns)
-            cashflow_df = cashflow_df.drop(columns=cashflow_df.columns[-column_amount])
-
-        cashflow_df = cashflow_df.drop(columns=cashflow_df.columns[-1])
-        # Checking if the input DataFrame is empty
-        if cashflow_df.empty:
-            raise ValueError("Input DataFrame is empty.")
-
-        # Rotate the cashflow_df dataframe
-        cashflow_df = cashflow_df.transpose()
-        cashflow_df["Free Cash Flow growth"] = 0.0
-        cashflow_df["Free Cash Flow per share"] = 0.0
-        cashflow_df["Free Cash Flow per share growth"] = 0.0
-        # Invert the rows in cashflow_df dataframe
-        cashflow_df = cashflow_df.iloc[::-1]
-        # Reset the index of the cashflow_df dataframe
-        cashflow_df = cashflow_df.reset_index()
-        # Rename the index column to Date
-        cashflow_df = cashflow_df.rename(columns={"index": "Date"})
-        for index, row in cashflow_df.iterrows():
-            cashflow_df.loc[index, "Free Cash Flow per share"] = (cashflow_df.loc[index, "Free Cash Flow"] / income_stmt_df.loc[index, "Diluted Average Shares"])
-            if index == 0:
-                cashflow_df.loc[index, "Free Cash Flow growth"] = 0.0
-                cashflow_df.loc[index, "Free Cash Flow per share growth"] = 0.0
-            else:
-                cashflow_df.loc[index, "Free Cash Flow growth"] = (cashflow_df.iloc[index]["Free Cash Flow"] / cashflow_df.iloc[index-1]["Free Cash Flow"])-1
-                cashflow_df.loc[index, "Free Cash Flow per share growth"] = (cashflow_df.iloc[index]["Free Cash Flow per share"] / cashflow_df.iloc[index-1]["Free Cash Flow per share"])-1
-        # Join income_stmt_df, balancesheet_df and cashflow_df dataframes on the Date column
-        full_stock_financial_data_df = pd.merge(income_stmt_df, balancesheet_df, on="Date")
-        full_stock_financial_data_df = pd.merge(full_stock_financial_data_df, cashflow_df, on="Date")
-        # Drop row 0 from full_stock_financial_data_df
-        full_stock_financial_data_df["Ticker"] = symbol
-        full_stock_financial_data_df = full_stock_financial_data_df.drop([0])
-        full_stock_financial_data_df = full_stock_financial_data_df.reset_index(drop=True)
-        if "banks" in industry.lower():
-            if "Gross Profit" not in income_stmt_df.columns:
-                if "Operating Income" not in income_stmt_df.columns:
+                    cashflow_df.loc[index, "Free Cash Flow growth"] = (cashflow_df.iloc[index]["Free Cash Flow"] / cashflow_df.iloc[index-1]["Free Cash Flow"])-1
+                    cashflow_df.loc[index, "Free Cash Flow per share growth"] = (cashflow_df.iloc[index]["Free Cash Flow per share"] / cashflow_df.iloc[index-1]["Free Cash Flow per share"])-1
+            # Join income_stmt_df, balancesheet_df and cashflow_df dataframes on the Date column
+            full_stock_financial_data_df = pd.merge(income_stmt_df, balancesheet_df, on="Date")
+            full_stock_financial_data_df = pd.merge(full_stock_financial_data_df, cashflow_df, on="Date")
+            # Drop row 0 from full_stock_financial_data_df
+            full_stock_financial_data_df["Ticker"] = symbol
+            full_stock_financial_data_df = full_stock_financial_data_df.drop([0])
+            full_stock_financial_data_df = full_stock_financial_data_df.reset_index(drop=True)
+            if "banks" in industry.lower():
+                if "Gross Profit" not in income_stmt_df.columns:
+                    if "Operating Income" not in income_stmt_df.columns:
+                        full_stock_financial_data_df = full_stock_financial_data_df.rename(columns={
+                            "Diluted Average Shares": "Amount of stocks", "Total Revenue": "Revenue",
+                            "Cash And Cash Equivalents": "Cash and Cash Equivalents",
+                            "Total Liabilities Net Minority Interest": "Total Liabilities",
+                            "Total Equity Gross Minority Interest": "Total Equity"
+                        })
+                        full_stock_financial_data_df = full_stock_financial_data_df[[
+                            "Ticker", "Date", "Amount of stocks", "Revenue", "Revenue growth", "Net Income", "Net Income growth",
+                            "Net Income Margin", "Net Income Margin growth", "EPS", "EPS growth", "Total Assets", "Total Assets growth",
+                            "Current Assets", "Current Assets growth", "Cash and Cash Equivalents", "Cash and Cash Equivalents growth",
+                            "Total Liabilities", "Total Liabilities growth", "Total Equity", "Total Equity growth", "Current Liabilities",
+                            "Current Liabilities growth", "Book Value", "Book Value growth", "Book Value per share",
+                            "Book Value per share growth", "Return on Assets", "Return on Assets growth", "Return on Equity",
+                            "Return on Equity growth", "Return on Invested Capital", "Return on Invested Capital growth", 
+                            "Current Ratio", "Current Ratio growth", "Quick Ratio", "Quick Ratio growth", "Debt to Equity",
+                            "Debt to Equity growth","Free Cash Flow", "Free Cash Flow growth", "Free Cash Flow per share",
+                            "Free Cash Flow per share growth"
+                        ]]
+                    else:
+                        full_stock_financial_data_df = full_stock_financial_data_df.rename(columns={
+                            "Diluted Average Shares": "Amount of stocks", "Total Revenue": "Revenue",
+                            "Cash And Cash Equivalents": "Cash and Cash Equivalents",
+                            "Total Liabilities Net Minority Interest": "Total Liabilities",
+                            "Total Equity Gross Minority Interest": "Total Equity"
+                        })
+                        full_stock_financial_data_df = full_stock_financial_data_df[[
+                            "Ticker", "Date", "Amount of stocks", "Revenue", "Revenue growth", "Operating Income", "Operating Earnings growth",
+                            "Operating Margin", "Operating Margin growth", "Net Income", "Net Income growth", "Net Income Margin",
+                            "Net Income Margin growth", "EPS", "EPS growth", "Total Assets", "Total Assets growth", "Current Assets",
+                            "Current Assets growth", "Cash and Cash Equivalents", "Cash and Cash Equivalents growth", "Total Liabilities",
+                            "Total Liabilities growth", "Total Equity", "Total Equity growth", "Current Liabilities", "Current Liabilities growth",
+                            "Book Value", "Book Value growth", "Book Value per share", "Book Value per share growth", "Return on Assets",
+                            "Return on Assets growth", "Return on Equity", "Return on Equity growth", "Return on Invested Capital",
+                            "Return on Invested Capital growth", "Current Ratio", "Current Ratio growth", "Quick Ratio", "Quick Ratio growth",
+                            "Debt to Equity", "Debt to Equity growth", "Free Cash Flow", "Free Cash Flow growth", "Free Cash Flow per share",
+                            "Free Cash Flow per share growth"
+                        ]]
+            elif "insurance" in industry.lower():
+                if "Gross Profit" not in income_stmt_df.columns:
+                    if "Operating Income" not in income_stmt_df.columns:
+                        full_stock_financial_data_df = full_stock_financial_data_df.rename(columns={
+                            "Diluted Average Shares": "Amount of stocks", "Total Revenue": "Revenue",
+                            "Cash And Cash Equivalents": "Cash and Cash Equivalents",
+                            "Total Liabilities Net Minority Interest": "Total Liabilities",
+                            "Total Equity Gross Minority Interest": "Total Equity"
+                        })
+                        full_stock_financial_data_df = full_stock_financial_data_df[[
+                            "Ticker", "Date", "Amount of stocks", "Revenue", "Revenue growth", "Net Income", "Net Income growth", "Net Income Margin",
+                            "Net Income Margin growth", "EPS", "EPS growth", "Total Assets", "Total Assets growth", "Current Assets", "Current Assets growth",
+                            "Cash and Cash Equivalents", "Cash and Cash Equivalents growth", "Total Liabilities", "Total Liabilities growth", "Total Equity",
+                            "Total Equity growth", "Current Liabilities", "Current Liabilities growth", "Book Value", "Book Value growth", "Book Value per share",
+                            "Book Value per share growth", "Return on Assets", "Return on Assets growth", "Return on Equity", "Return on Equity growth",
+                            "Return on Invested Capital", "Return on Invested Capital growth", "Current Ratio", "Current Ratio growth", "Quick Ratio",
+                            "Quick Ratio growth", "Debt to Equity", "Debt to Equity growth", "Free Cash Flow", "Free Cash Flow growth", "Free Cash Flow per share",
+                            "Free Cash Flow per share growth"
+                        ]]
+                    else:
+                        full_stock_financial_data_df = full_stock_financial_data_df.rename(columns={
+                            "Diluted Average Shares": "Amount of stocks", "Total Revenue": "Revenue",
+                            "Cash And Cash Equivalents": "Cash and Cash Equivalents",
+                            "Total Liabilities Net Minority Interest": "Total Liabilities",
+                            "Total Equity Gross Minority Interest": "Total Equity"
+                        })
+                        full_stock_financial_data_df = full_stock_financial_data_df[[
+                            "Ticker" ,"Date", "Amount of stocks", "Revenue", "Revenue growth", "Operating Income", "Operating Earnings growth", "Operating Margin",
+                            "Operating Margin growth", "Net Income", "Net Income growth", "Net Income Margin", "Net Income Margin growth", "EPS", "EPS growth",
+                            "Total Assets", "Total Assets growth", "Current Assets", "Current Assets growth", "Cash and Cash Equivalents",
+                            "Cash and Cash Equivalents growth", "Total Liabilities", "Total Liabilities growth", "Total Equity", "Total Equity growth",
+                            "Current Liabilities", "Current Liabilities growth", "Book Value", "Book Value growth", "Book Value per share", "Book Value per share growth",
+                            "Return on Assets", "Return on Assets growth", "Return on Equity", "Return on Equity growth", "Return on Invested Capital",
+                            "Return on Invested Capital growth", "Current Ratio", "Current Ratio growth", "Quick Ratio", "Quick Ratio growth", "Debt to Equity",
+                            "Debt to Equity growth", "Free Cash Flow", "Free Cash Flow growth", "Free Cash Flow per share", "Free Cash Flow per share growth"
+                        ]]
+                else:
                     full_stock_financial_data_df = full_stock_financial_data_df.rename(columns={
                         "Diluted Average Shares": "Amount of stocks", "Total Revenue": "Revenue",
-                        "Cash And Cash Equivalents": "Cash and Cash Equivalents",
+                        "Cash Cash Equivalents And Short Term Investments": "Cash and Cash Equivalents",
                         "Total Liabilities Net Minority Interest": "Total Liabilities",
                         "Total Equity Gross Minority Interest": "Total Equity"
                     })
                     full_stock_financial_data_df = full_stock_financial_data_df[[
-                        "Ticker", "Date", "Amount of stocks", "Revenue", "Revenue growth", "Net Income", "Net Income growth",
-                        "Net Income Margin", "Net Income Margin growth", "EPS", "EPS growth", "Total Assets", "Total Assets growth",
-                        "Current Assets", "Current Assets growth", "Cash and Cash Equivalents", "Cash and Cash Equivalents growth",
-                        "Total Liabilities", "Total Liabilities growth", "Total Equity", "Total Equity growth", "Current Liabilities",
+                        "Ticker", "Date", "Amount of stocks", "Revenue", "Revenue growth", "Gross Profit", "Gross Profit growth",
+                        "Gross Margin", "Gross Margin growth", "Operating Earnings", "Operating Earnings growth", "Operating Margin",
+                        "Operating Margin growth", "Net Income", "Net Income growth", "Net Income Margin", "Net Income Margin growth",
+                        "EPS", "EPS growth", "Total Assets", "Total Assets growth", "Current Assets", "Current Assets growth",
+                        "Cash and Cash Equivalents", "Cash and Cash Equivalents growth", "Total Liabilities",
+                        "Total Liabilities growth", "Total Equity", "Total Equity growth", "Current Liabilities",
                         "Current Liabilities growth", "Book Value", "Book Value growth", "Book Value per share",
                         "Book Value per share growth", "Return on Assets", "Return on Assets growth", "Return on Equity",
-                        "Return on Equity growth", "Return on Invested Capital", "Return on Invested Capital growth", 
-                        "Current Ratio", "Current Ratio growth", "Quick Ratio", "Quick Ratio growth", "Debt to Equity",
-                        "Debt to Equity growth","Free Cash Flow", "Free Cash Flow growth", "Free Cash Flow per share",
-                        "Free Cash Flow per share growth"
+                        "Return on Equity growth", "Return on Invested Capital", "Return on Invested Capital growth", "Current Ratio",
+                        "Current Ratio growth", "Quick Ratio", "Quick Ratio growth", "Debt to Equity", "Debt to Equity growth",
+                        "Free Cash Flow", "Free Cash Flow growth", "Free Cash Flow per share", "Free Cash Flow per share growth"
                     ]]
-                else:
+            elif "biotechnology" in industry.lower():
+                if "Gross Profit" not in income_stmt_df.columns:
                     full_stock_financial_data_df = full_stock_financial_data_df.rename(columns={
                         "Diluted Average Shares": "Amount of stocks", "Total Revenue": "Revenue",
-                        "Cash And Cash Equivalents": "Cash and Cash Equivalents",
+                        "Cash Cash Equivalents And Short Term Investments": "Cash and Cash Equivalents",
                         "Total Liabilities Net Minority Interest": "Total Liabilities",
                         "Total Equity Gross Minority Interest": "Total Equity"
                     })
                     full_stock_financial_data_df = full_stock_financial_data_df[[
-                        "Ticker", "Date", "Amount of stocks", "Revenue", "Revenue growth", "Operating Income", "Operating Earnings growth",
+                        "Ticker" ,"Date", "Amount of stocks", "Revenue", "Revenue growth", "Operating Earnings", "Operating Earnings growth",
                         "Operating Margin", "Operating Margin growth", "Net Income", "Net Income growth", "Net Income Margin",
                         "Net Income Margin growth", "EPS", "EPS growth", "Total Assets", "Total Assets growth", "Current Assets",
                         "Current Assets growth", "Cash and Cash Equivalents", "Cash and Cash Equivalents growth", "Total Liabilities",
-                        "Total Liabilities growth", "Total Equity", "Total Equity growth", "Current Liabilities", "Current Liabilities growth",
-                        "Book Value", "Book Value growth", "Book Value per share", "Book Value per share growth", "Return on Assets",
-                        "Return on Assets growth", "Return on Equity", "Return on Equity growth", "Return on Invested Capital",
-                        "Return on Invested Capital growth", "Current Ratio", "Current Ratio growth", "Quick Ratio", "Quick Ratio growth",
-                        "Debt to Equity", "Debt to Equity growth", "Free Cash Flow", "Free Cash Flow growth", "Free Cash Flow per share",
-                        "Free Cash Flow per share growth"
-                    ]]
-        elif "insurance" in industry.lower():
-            if "Gross Profit" not in income_stmt_df.columns:
-                if "Operating Income" not in income_stmt_df.columns:
-                    full_stock_financial_data_df = full_stock_financial_data_df.rename(columns={
-                        "Diluted Average Shares": "Amount of stocks", "Total Revenue": "Revenue",
-                        "Cash And Cash Equivalents": "Cash and Cash Equivalents",
-                        "Total Liabilities Net Minority Interest": "Total Liabilities",
-                        "Total Equity Gross Minority Interest": "Total Equity"
-                    })
-                    full_stock_financial_data_df = full_stock_financial_data_df[[
-                        "Ticker", "Date", "Amount of stocks", "Revenue", "Revenue growth", "Net Income", "Net Income growth", "Net Income Margin",
-                        "Net Income Margin growth", "EPS", "EPS growth", "Total Assets", "Total Assets growth", "Current Assets", "Current Assets growth",
-                        "Cash and Cash Equivalents", "Cash and Cash Equivalents growth", "Total Liabilities", "Total Liabilities growth", "Total Equity",
-                        "Total Equity growth", "Current Liabilities", "Current Liabilities growth", "Book Value", "Book Value growth", "Book Value per share",
-                        "Book Value per share growth", "Return on Assets", "Return on Assets growth", "Return on Equity", "Return on Equity growth",
-                        "Return on Invested Capital", "Return on Invested Capital growth", "Current Ratio", "Current Ratio growth", "Quick Ratio",
-                        "Quick Ratio growth", "Debt to Equity", "Debt to Equity growth", "Free Cash Flow", "Free Cash Flow growth", "Free Cash Flow per share",
-                        "Free Cash Flow per share growth"
+                        "Total Liabilities growth", "Total Equity", "Total Equity growth", "Current Liabilities",
+                        "Current Liabilities growth", "Book Value", "Book Value growth", "Book Value per share",
+                        "Book Value per share growth", "Return on Assets", "Return on Assets growth", "Return on Equity",
+                        "Return on Equity growth", "Return on Invested Capital", "Return on Invested Capital growth", "Current Ratio",
+                        "Current Ratio growth", "Quick Ratio", "Quick Ratio growth", "Debt to Equity", "Debt to Equity growth",
+                        "Free Cash Flow", "Free Cash Flow growth", "Free Cash Flow per share", "Free Cash Flow per share growth"
                     ]]
                 else:
                     full_stock_financial_data_df = full_stock_financial_data_df.rename(columns={
                         "Diluted Average Shares": "Amount of stocks", "Total Revenue": "Revenue",
-                        "Cash And Cash Equivalents": "Cash and Cash Equivalents",
+                        "Cash Cash Equivalents And Short Term Investments": "Cash and Cash Equivalents",
                         "Total Liabilities Net Minority Interest": "Total Liabilities",
                         "Total Equity Gross Minority Interest": "Total Equity"
                     })
                     full_stock_financial_data_df = full_stock_financial_data_df[[
-                        "Ticker" ,"Date", "Amount of stocks", "Revenue", "Revenue growth", "Operating Income", "Operating Earnings growth", "Operating Margin",
-                        "Operating Margin growth", "Net Income", "Net Income growth", "Net Income Margin", "Net Income Margin growth", "EPS", "EPS growth",
-                        "Total Assets", "Total Assets growth", "Current Assets", "Current Assets growth", "Cash and Cash Equivalents",
-                        "Cash and Cash Equivalents growth", "Total Liabilities", "Total Liabilities growth", "Total Equity", "Total Equity growth",
-                        "Current Liabilities", "Current Liabilities growth", "Book Value", "Book Value growth", "Book Value per share", "Book Value per share growth",
-                        "Return on Assets", "Return on Assets growth", "Return on Equity", "Return on Equity growth", "Return on Invested Capital",
-                        "Return on Invested Capital growth", "Current Ratio", "Current Ratio growth", "Quick Ratio", "Quick Ratio growth", "Debt to Equity",
-                        "Debt to Equity growth", "Free Cash Flow", "Free Cash Flow growth", "Free Cash Flow per share", "Free Cash Flow per share growth"
+                        "Ticker" ,"Date", "Amount of stocks", "Revenue", "Revenue growth", "Gross Profit", "Gross Profit growth",
+                        "Gross Margin", "Gross Margin growth", "Operating Earnings", "Operating Earnings growth", "Operating Margin",
+                        "Operating Margin growth", "Net Income", "Net Income growth", "Net Income Margin", "Net Income Margin growth",
+                        "EPS", "EPS growth", "Total Assets", "Total Assets growth", "Current Assets", "Current Assets growth",
+                        "Cash and Cash Equivalents", "Cash and Cash Equivalents growth", "Total Liabilities",
+                        "Total Liabilities growth", "Total Equity", "Total Equity growth", "Current Liabilities",
+                        "Current Liabilities growth", "Book Value", "Book Value growth", "Book Value per share",
+                        "Book Value per share growth", "Return on Assets", "Return on Assets growth", "Return on Equity",
+                        "Return on Equity growth", "Return on Invested Capital", "Return on Invested Capital growth", "Current Ratio",
+                        "Current Ratio growth", "Quick Ratio", "Quick Ratio growth", "Debt to Equity", "Debt to Equity growth",
+                        "Free Cash Flow", "Free Cash Flow growth", "Free Cash Flow per share", "Free Cash Flow per share growth"
                     ]]
             else:
                 full_stock_financial_data_df = full_stock_financial_data_df.rename(columns={
@@ -1221,88 +1289,27 @@ def fetch_stock_financial_data(stock_symbol = ""):
                     "Current Ratio growth", "Quick Ratio", "Quick Ratio growth", "Debt to Equity", "Debt to Equity growth",
                     "Free Cash Flow", "Free Cash Flow growth", "Free Cash Flow per share", "Free Cash Flow per share growth"
                 ]]
-        elif "biotechnology" in industry.lower():
-            if "Gross Profit" not in income_stmt_df.columns:
-                full_stock_financial_data_df = full_stock_financial_data_df.rename(columns={
-                    "Diluted Average Shares": "Amount of stocks", "Total Revenue": "Revenue",
-                    "Cash Cash Equivalents And Short Term Investments": "Cash and Cash Equivalents",
-                    "Total Liabilities Net Minority Interest": "Total Liabilities",
-                    "Total Equity Gross Minority Interest": "Total Equity"
-                })
-                full_stock_financial_data_df = full_stock_financial_data_df[[
-                    "Ticker" ,"Date", "Amount of stocks", "Revenue", "Revenue growth", "Operating Earnings", "Operating Earnings growth",
-                    "Operating Margin", "Operating Margin growth", "Net Income", "Net Income growth", "Net Income Margin",
-                    "Net Income Margin growth", "EPS", "EPS growth", "Total Assets", "Total Assets growth", "Current Assets",
-                    "Current Assets growth", "Cash and Cash Equivalents", "Cash and Cash Equivalents growth", "Total Liabilities",
-                    "Total Liabilities growth", "Total Equity", "Total Equity growth", "Current Liabilities",
-                    "Current Liabilities growth", "Book Value", "Book Value growth", "Book Value per share",
-                    "Book Value per share growth", "Return on Assets", "Return on Assets growth", "Return on Equity",
-                    "Return on Equity growth", "Return on Invested Capital", "Return on Invested Capital growth", "Current Ratio",
-                    "Current Ratio growth", "Quick Ratio", "Quick Ratio growth", "Debt to Equity", "Debt to Equity growth",
-                    "Free Cash Flow", "Free Cash Flow growth", "Free Cash Flow per share", "Free Cash Flow per share growth"
-                ]]
-            else:
-                full_stock_financial_data_df = full_stock_financial_data_df.rename(columns={
-                    "Diluted Average Shares": "Amount of stocks", "Total Revenue": "Revenue",
-                    "Cash Cash Equivalents And Short Term Investments": "Cash and Cash Equivalents",
-                    "Total Liabilities Net Minority Interest": "Total Liabilities",
-                    "Total Equity Gross Minority Interest": "Total Equity"
-                })
-                full_stock_financial_data_df = full_stock_financial_data_df[[
-                    "Ticker" ,"Date", "Amount of stocks", "Revenue", "Revenue growth", "Gross Profit", "Gross Profit growth",
-                    "Gross Margin", "Gross Margin growth", "Operating Earnings", "Operating Earnings growth", "Operating Margin",
-                    "Operating Margin growth", "Net Income", "Net Income growth", "Net Income Margin", "Net Income Margin growth",
-                    "EPS", "EPS growth", "Total Assets", "Total Assets growth", "Current Assets", "Current Assets growth",
-                    "Cash and Cash Equivalents", "Cash and Cash Equivalents growth", "Total Liabilities",
-                    "Total Liabilities growth", "Total Equity", "Total Equity growth", "Current Liabilities",
-                    "Current Liabilities growth", "Book Value", "Book Value growth", "Book Value per share",
-                    "Book Value per share growth", "Return on Assets", "Return on Assets growth", "Return on Equity",
-                    "Return on Equity growth", "Return on Invested Capital", "Return on Invested Capital growth", "Current Ratio",
-                    "Current Ratio growth", "Quick Ratio", "Quick Ratio growth", "Debt to Equity", "Debt to Equity growth",
-                    "Free Cash Flow", "Free Cash Flow growth", "Free Cash Flow per share", "Free Cash Flow per share growth"
-                ]]
-        else:
-            full_stock_financial_data_df = full_stock_financial_data_df.rename(columns={
-                "Diluted Average Shares": "Amount of stocks", "Total Revenue": "Revenue",
-                "Cash Cash Equivalents And Short Term Investments": "Cash and Cash Equivalents",
-                "Total Liabilities Net Minority Interest": "Total Liabilities",
-                "Total Equity Gross Minority Interest": "Total Equity"
-            })
-            full_stock_financial_data_df = full_stock_financial_data_df[[
-                "Ticker", "Date", "Amount of stocks", "Revenue", "Revenue growth", "Gross Profit", "Gross Profit growth",
-                "Gross Margin", "Gross Margin growth", "Operating Earnings", "Operating Earnings growth", "Operating Margin",
-                "Operating Margin growth", "Net Income", "Net Income growth", "Net Income Margin", "Net Income Margin growth",
-                "EPS", "EPS growth", "Total Assets", "Total Assets growth", "Current Assets", "Current Assets growth",
-                "Cash and Cash Equivalents", "Cash and Cash Equivalents growth", "Total Liabilities",
-                "Total Liabilities growth", "Total Equity", "Total Equity growth", "Current Liabilities",
-                "Current Liabilities growth", "Book Value", "Book Value growth", "Book Value per share",
-                "Book Value per share growth", "Return on Assets", "Return on Assets growth", "Return on Equity",
-                "Return on Equity growth", "Return on Invested Capital", "Return on Invested Capital growth", "Current Ratio",
-                "Current Ratio growth", "Quick Ratio", "Quick Ratio growth", "Debt to Equity", "Debt to Equity growth",
-                "Free Cash Flow", "Free Cash Flow growth", "Free Cash Flow per share", "Free Cash Flow per share growth"
-            ]]
 
-        full_stock_financial_data_df = full_stock_financial_data_df.rename(columns={"Date": "date",
-            "Ticker": "ticker", "Amount of stocks": "average_shares", "Revenue": "revenue", "Revenue growth": "revenue_Growth",
-            "Gross Profit": "gross_Profit", "Gross Profit growth": "gross_Profit_Growth", "Gross Margin": "gross_Margin",
-            "Gross Margin growth": "gross_Margin_Growth", "Operating Earnings": "operating_Earning",
-            "Operating Earnings growth": "operating_Earning_Growth", "Operating Margin": "operating_Earning_Margin",
-            "Operating Margin growth": "operating_Earning_Margin_Growth", "Net Income": "net_Income", "Net Income growth": "net_Income_Growth",
-            "Net Income Margin": "net_Income_Margin", "Net Income Margin growth": "net_Income_Margin_Growth", "EPS": "eps",
-            "EPS growth": "eps_Growth", "Total Assets": "total_Assets", "Total Assets growth": "total_Assets_Growth",
-            "Current Assets": "current_Assets", "Current Assets growth": "current_Assets_Growth", "Cash and Cash Equivalents": "cash_And_Cash_Equivalents",
-            "Cash and Cash Equivalents growth": "cash_And_Cash_Equivalents_Growth", "Total Equity": "equity", "Total Equity growth": "equity_Growth",
-            "Total Liabilities": "liabilities", "Total Liabilities growth": "liabilities_Growth", "Current Liabilities": "current_Liabilities",
-            "Current Liabilities growth": "current_Liabilities_Growth", "Book Value": "book_Value", "Book Value growth": "book_Value_Growth",
-            "Book Value per share": "book_Value_Per_Share", "Book Value per share growth": "book_Value_Per_Share_Growth",
-            "Return on Assets": "return_On_Assets", "Return on Assets growth": "return_On_Assets_Growth", "Return on Equity": "return_On_Equity",
-            "Return on Equity growth": "return_On_Equity_Growth", "Current Ratio": "current_Ratio", "Current Ratio growth": "current_Ratio_Growth",
-            "Quick Ratio": "quick_Ratio", "Quick Ratio growth": "quick_Ratio_Growth", "Debt to Equity": "debt_To_Equity",
-            "Debt to Equity growth": "debt_To_Equity_Growth", "Free Cash Flow": "free_Cash_Flow", "Free Cash Flow growth": "free_Cash_Flow_Growth",
-            "Free Cash Flow per share": "free_Cash_Flow_Per_Share", "Free Cash Flow per share growth": "free_Cash_Flow_Per_Share_Growth"
-            })
-        return full_stock_financial_data_df
-
+            full_stock_financial_data_df = full_stock_financial_data_df.rename(columns={"Date": "date",
+                "Ticker": "ticker", "Amount of stocks": "average_shares", "Revenue": "revenue", "Revenue growth": "revenue_Growth",
+                "Gross Profit": "gross_Profit", "Gross Profit growth": "gross_Profit_Growth", "Gross Margin": "gross_Margin",
+                "Gross Margin growth": "gross_Margin_Growth", "Operating Earnings": "operating_Earning",
+                "Operating Earnings growth": "operating_Earning_Growth", "Operating Margin": "operating_Earning_Margin",
+                "Operating Margin growth": "operating_Earning_Margin_Growth", "Net Income": "net_Income", "Net Income growth": "net_Income_Growth",
+                "Net Income Margin": "net_Income_Margin", "Net Income Margin growth": "net_Income_Margin_Growth", "EPS": "eps",
+                "EPS growth": "eps_Growth", "Total Assets": "total_Assets", "Total Assets growth": "total_Assets_Growth",
+                "Current Assets": "current_Assets", "Current Assets growth": "current_Assets_Growth", "Cash and Cash Equivalents": "cash_And_Cash_Equivalents",
+                "Cash and Cash Equivalents growth": "cash_And_Cash_Equivalents_Growth", "Total Equity": "equity", "Total Equity growth": "equity_Growth",
+                "Total Liabilities": "liabilities", "Total Liabilities growth": "liabilities_Growth", "Current Liabilities": "current_Liabilities",
+                "Current Liabilities growth": "current_Liabilities_Growth", "Book Value": "book_Value", "Book Value growth": "book_Value_Growth",
+                "Book Value per share": "book_Value_Per_Share", "Book Value per share growth": "book_Value_Per_Share_Growth",
+                "Return on Assets": "return_On_Assets", "Return on Assets growth": "return_On_Assets_Growth", "Return on Equity": "return_On_Equity",
+                "Return on Equity growth": "return_On_Equity_Growth", "Current Ratio": "current_Ratio", "Current Ratio growth": "current_Ratio_Growth",
+                "Quick Ratio": "quick_Ratio", "Quick Ratio growth": "quick_Ratio_Growth", "Debt to Equity": "debt_To_Equity",
+                "Debt to Equity growth": "debt_To_Equity_Growth", "Free Cash Flow": "free_Cash_Flow", "Free Cash Flow growth": "free_Cash_Flow_Growth",
+                "Free Cash Flow per share": "free_Cash_Flow_Per_Share", "Free Cash Flow per share growth": "free_Cash_Flow_Per_Share_Growth"
+                })
+            return full_stock_financial_data_df
     except KeyError as e:
         raise KeyError(f"Stock symbol '{symbol}' is invalid or not found.") from e
 # Create a function the combines dataframe from fetch_stock_price_data with full_stock_financial_data_df from fetch_stock_financial_data
@@ -1536,6 +1543,7 @@ if __name__ == "__main__":
     ticker_list = db_interactions.import_ticker_list()
     for ticker in ticker_list:
         print(ticker)
+        stock_info = yf.Ticker(ticker).info
         if db_interactions.does_stock_exists_stock_price_data(ticker) is False:
             print("Stock data does not exist")
             print(f"Fetching stock data for {ticker}")
@@ -1582,69 +1590,46 @@ if __name__ == "__main__":
                 db_interactions.export_stock_price_data(stock_price_data_df)
                 print("Stock data has been fetched and exported to the database")
 
-        if db_interactions.does_stock_exists_stock_income_stmt_data(ticker) is False:
-            print("Financial stock data does not exist")
-            print(f"Fetching stock financial data for {ticker}")
-            # Fetch stock financial data for the imported stock symbols
-            full_stock_financial_data_df = fetch_stock_financial_data(ticker)
-            # Export the stock financial data to the database
-            db_interactions.export_stock_financial_data(full_stock_financial_data_df)
-            print("Financial stock data has been fetched and exported to the database")
-        elif db_interactions.does_stock_exists_stock_income_stmt_data(ticker) is True:
-            print("Some financial stock data already exists")
-            print(f"Checking if today's financial data has already been fetched for {ticker}")
-            # Import the latest stock financial data from the database for the spicific stock ticker
-            full_stock_financial_data_df = db_interactions.import_stock_financial_data(stock_ticker=ticker)
-            db_date = full_stock_financial_data_df.iloc[0]["date"]
-            full_stock_financial_data_df = fetch_stock_financial_data(ticker)
-            source_date = full_stock_financial_data_df["date"].dt.date.iloc[-1]
-            if db_date == source_date:
-                print(f"The lastest financial data has already been fetched for {ticker}")
-            else:
+        if stock_info["typeDisp"] != "Index":
+            if db_interactions.does_stock_exists_stock_income_stmt_data(ticker) is False:
+                print("Financial stock data does not exist")
+                print(f"Fetching stock financial data for {ticker}")
                 # Fetch stock financial data for the imported stock symbols
-                print("Fetching stock financial data")
                 full_stock_financial_data_df = fetch_stock_financial_data(ticker)
-                full_stock_financial_data_df = full_stock_financial_data_df.loc[full_stock_financial_data_df["date"].dt.date > db_date]
                 # Export the stock financial data to the database
                 db_interactions.export_stock_financial_data(full_stock_financial_data_df)
                 print("Financial stock data has been fetched and exported to the database")
+            elif db_interactions.does_stock_exists_stock_income_stmt_data(ticker) is True:
+                print("Some financial stock data already exists")
+                print(f"Checking if today's financial data has already been fetched for {ticker}")
+                # Import the latest stock financial data from the database for the spicific stock ticker
+                full_stock_financial_data_df = db_interactions.import_stock_financial_data(stock_ticker=ticker)
+                db_date = full_stock_financial_data_df.iloc[0]["date"]
+                full_stock_financial_data_df = fetch_stock_financial_data(ticker)
+                source_date = full_stock_financial_data_df["date"].dt.date.iloc[-1]
+                if db_date == source_date:
+                    print(f"The lastest financial data has already been fetched for {ticker}")
+                else:
+                    # Fetch stock financial data for the imported stock symbols
+                    print("Fetching stock financial data")
+                    full_stock_financial_data_df = fetch_stock_financial_data(ticker)
+                    full_stock_financial_data_df = full_stock_financial_data_df.loc[full_stock_financial_data_df["date"].dt.date > db_date]
+                    # Export the stock financial data to the database
+                    db_interactions.export_stock_financial_data(full_stock_financial_data_df)
+                    print("Financial stock data has been fetched and exported to the database")
 
-        if db_interactions.does_stock_exists_stock_ratio_data(ticker) is False:
-            print("Stock ratio data does not exist")
-            print("Importing stock financial data to calculate stock ratio data")
-            TABEL_NAME = "stock_income_stmt_data"
-            quary = f"""SELECT COUNT(financial_Statement_Date)
-                        FROM {TABEL_NAME}
-                        WHERE ticker = '{ticker}'
-                        """
-            entry_amount = pd.read_sql(sql=quary, con=db_con)
-            full_stock_financial_data_df = db_interactions.import_stock_financial_data(amount=entry_amount.loc[0, entry_amount.columns[0]], stock_ticker=ticker)
-            full_stock_financial_data_df = full_stock_financial_data_df.dropna(axis=1)
-            date = full_stock_financial_data_df.iloc[0]["date"]
-            TABEL_NAME = "stock_price_data"
-            quary = f"""SELECT *
-                        FROM {TABEL_NAME}
-                        WHERE ticker = '{ticker}' AND date >= '{date}'
-                        """
-            stock_price_data_df = pd.read_sql(sql=quary, con=db_con)
-            combined_stock_data_df = combine_stock_data(stock_price_data_df, full_stock_financial_data_df)
-            combined_stock_data_df = calculate_ratios(combined_stock_data_df)
-            stock_ratio_data_df = combined_stock_data_df[['date', 'ticker', 'P/S', 'P/E', 'P/B', 'P/FCF']]
-            stock_ratio_data_df = stock_ratio_data_df.rename(columns={"P/S": "p_s", "P/E": "p_e", "P/B": "p_b", "P/FCF": "p_fcf"})
-            stock_ratio_data_df = drop_nan_values(stock_ratio_data_df)
-            db_interactions.export_stock_ratio_data(stock_ratio_data_df)
-            print("Stock ratio data has been calculated and exported to the database")
-        elif db_interactions.does_stock_exists_stock_ratio_data(ticker) is True:
-            print("Some stock ratio data already exists")
-            print(f"Checking if today's price ratio data has already been calculated for {ticker}")
-            stock_ratio_data_df = db_interactions.import_stock_ratio_data(stock_ticker=ticker)
-            date = stock_ratio_data_df.iloc[0]["date"]
-            if str(date) == datetime.datetime.now().strftime("%Y-%m-%d"):
-                print(f"Today's price ratio data has already been calculated for {ticker}")
-            else:
+            if db_interactions.does_stock_exists_stock_ratio_data(ticker) is False:
+                print("Stock ratio data does not exist")
                 print("Importing stock financial data to calculate stock ratio data")
-                full_stock_financial_data_df = db_interactions.import_stock_financial_data(amount=1, stock_ticker=ticker)
+                TABEL_NAME = "stock_income_stmt_data"
+                quary = f"""SELECT COUNT(financial_Statement_Date)
+                            FROM {TABEL_NAME}
+                            WHERE ticker = '{ticker}'
+                            """
+                entry_amount = pd.read_sql(sql=quary, con=db_con)
+                full_stock_financial_data_df = db_interactions.import_stock_financial_data(amount=entry_amount.loc[0, entry_amount.columns[0]], stock_ticker=ticker)
                 full_stock_financial_data_df = full_stock_financial_data_df.dropna(axis=1)
+                date = full_stock_financial_data_df.iloc[0]["date"]
                 TABEL_NAME = "stock_price_data"
                 quary = f"""SELECT *
                             FROM {TABEL_NAME}
@@ -1658,6 +1643,30 @@ if __name__ == "__main__":
                 stock_ratio_data_df = drop_nan_values(stock_ratio_data_df)
                 db_interactions.export_stock_ratio_data(stock_ratio_data_df)
                 print("Stock ratio data has been calculated and exported to the database")
+            elif db_interactions.does_stock_exists_stock_ratio_data(ticker) is True:
+                print("Some stock ratio data already exists")
+                print(f"Checking if today's price ratio data has already been calculated for {ticker}")
+                stock_ratio_data_df = db_interactions.import_stock_ratio_data(stock_ticker=ticker)
+                date = stock_ratio_data_df.iloc[0]["date"]
+                if str(date) == datetime.datetime.now().strftime("%Y-%m-%d"):
+                    print(f"Today's price ratio data has already been calculated for {ticker}")
+                else:
+                    print("Importing stock financial data to calculate stock ratio data")
+                    full_stock_financial_data_df = db_interactions.import_stock_financial_data(amount=1, stock_ticker=ticker)
+                    full_stock_financial_data_df = full_stock_financial_data_df.dropna(axis=1)
+                    TABEL_NAME = "stock_price_data"
+                    quary = f"""SELECT *
+                                FROM {TABEL_NAME}
+                                WHERE ticker = '{ticker}' AND date >= '{date}'
+                                """
+                    stock_price_data_df = pd.read_sql(sql=quary, con=db_con)
+                    combined_stock_data_df = combine_stock_data(stock_price_data_df, full_stock_financial_data_df)
+                    combined_stock_data_df = calculate_ratios(combined_stock_data_df)
+                    stock_ratio_data_df = combined_stock_data_df[['date', 'ticker', 'P/S', 'P/E', 'P/B', 'P/FCF']]
+                    stock_ratio_data_df = stock_ratio_data_df.rename(columns={"P/S": "p_s", "P/E": "p_e", "P/B": "p_b", "P/FCF": "p_fcf"})
+                    stock_ratio_data_df = drop_nan_values(stock_ratio_data_df)
+                    db_interactions.export_stock_ratio_data(stock_ratio_data_df)
+                    print("Stock ratio data has been calculated and exported to the database")
 
     # Calculate the execution time
     end_time = time.time()

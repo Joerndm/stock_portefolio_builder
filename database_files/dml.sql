@@ -6,11 +6,11 @@ FROM stock_portefolio_builder.stock_price_data;
 
 SELECT *
 FROM stock_portefolio_builder.stock_price_data
-WHERE ticker = "NOVO-B.CO";
+WHERE ticker = "DEMANT.CO";
 
 SELECT *
 FROM stock_portefolio_builder.stock_price_data
-WHERE ticker = "ORSTED.CO" AND `date` > "2024-03-27";
+WHERE ticker = "DEMANT.CO" AND `date` > "2024-03-27";
 
 SELECT *
 FROM (SELECT * FROM stock_portefolio_builder.stock_price_data
