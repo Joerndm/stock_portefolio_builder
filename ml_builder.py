@@ -1,8 +1,9 @@
-import os
+import os, shutil, time, io, sys
 import pandas as pd
 import time
 import datetime
 import math
+import tempfile
 
 from dateutil.relativedelta import relativedelta
 import yfinance as yf
@@ -10,43 +11,42 @@ import numpy as np
 if not hasattr(np, 'float'):
     np.float = float
 if not hasattr(np, 'int'):
-    np.int = int
-# if not hasattr(np, 'bool'):
-#     np.bool = bool
+    np. int = int
 import matplotlib
 import matplotlib.pyplot as plt
 import shutil
 from sklearn import tree
 from sklearn.svm import SVR
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.linear_model import LinearRegression, Ridge
+from sklearn. linear_model import LinearRegression, Ridge
 from sklearn.neural_network import MLPRegressor
 from sklearn.metrics import make_scorer
 from sklearn.model_selection import KFold
-from keras_tuner.tuners import Sklearn
 from sklearn.metrics import mean_absolute_error
 from sklearn.metrics import mean_squared_error
 from sklearn.metrics import r2_score
+from sklearn.model_selection import RepeatedKFold
 import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
-from tensorflow.keras.optimizers import Adam
+from tensorflow. keras. models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional, Input
+from tensorflow.keras.optimizers import Adam, RMSprop, Nadam
 from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras import regularizers
+import keras
 import keras_tuner as kt
+from keras_tuner. tuners import Sklearn
 
 matplotlib.use('Agg')
 pd.set_option('future.no_silent_downcasting', True)
 
-import stock_data_fetch
+# import stock_data_fetch
 import split_dataset
 import dimension_reduction
 import monte_carlo_sim
 
-#-*- coding: cp1252 -*-
-# or
-# -*- coding: latin-1 -*-
-
-TIME_STEPS = 126
+# Force UTF-8 logging globally
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="ignore")
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="ignore")
 
 # Fits a linear regression model to the traning dataset and predicts the stock price
 def linear_model(traning_dataset, test_dataset, prediction_dataset, stock_df):
@@ -124,161 +124,120 @@ def linear_model(traning_dataset, test_dataset, prediction_dataset, stock_df):
 
     return forecast_df
 
-# Fits a random forest regressor model to the traning dataset and predicts the stock price
-def random_forest_regressor_model(traning_dataset, test_dataset, prediction_dataset, stock_df):
-    """
-    Predicts the stock price using a random forest regressor model.
-
-    Parameters:
-    - traning_dataset (pandas.DataFrame): A DataFrame containing the traning dataset.
-    - test_dataset (pandas.DataFrame): A DataFrame containing the test dataset.
-    - prediction_dataset (pandas.DataFrame): A DataFrame containing the prediction dataset.
-    - stock_df (pandas.DataFrame): A DataFrame containing the stock data.
-
-    Returns:
-    pandas.DataFrame: A DataFrame containing the predicted stock prices.
-
-    Raises:
-    None    
-    """
-    x_training_df = traning_dataset.drop(["Price"], axis=1)
-    y_training_df = traning_dataset["Price"]
-    # Convert the DataFrame to a numpy array
-    x_training = np.array(x_training_df)
-    y_training = np.array(y_training_df)
-    x_test_df = test_dataset.drop(["Price"], axis=1)
-    y_test_df = test_dataset["Price"]
-    # Convert the DataFrame to a numpy array
-    x_test = np.array(x_test_df)
-    y_test = np.array(y_test_df)
-    # Convert the DataFrame to a numpy array
-    x_prediction = np.array(prediction_dataset)
-    rf = RandomForestRegressor()
-    rf.fit(x_training, y_training)
-    rf_confidence = rf.score(x_test, y_test)
-    rf_mean_absolute_error = mean_absolute_error(y_test, rf.predict(x_test))
-    # Print the fitted model's weight and intercept
-    rf_confidence = rf.score(x_test, y_test)
-    rf_mean_absolute_error = mean_absolute_error(y_test, rf.predict(x_test))
-    rf_mean_squared_error = mean_squared_error(y_test, rf.predict(x_test))
-    predict_precision_df = pd.DataFrame({"Model": ["Random Forest"],
-        "Confidence": [rf_confidence],
-        "Mean Absolute Error": [rf_mean_absolute_error],
-        "Mean Squared Error": [rf_mean_squared_error]
-    })
-    print(predict_precision_df)
-    forecast_set_rf = rf.predict(x_prediction)
-    date_list = []
-    for i in range(len(x_prediction)):
-        x = len(x_prediction) - i
-        date = stock_df["Date"].values[-x]
-        date = datetime.datetime.strptime(date, '%Y-%m-%d')
-        date_list.append(date)
-
-
-    forecast_dict = {"Date":date_list, "Prediction_rf":forecast_set_rf
-    }
-    forecast_df = pd.DataFrame(forecast_dict)
-    forecast_df = forecast_df.set_index("Date")
-    # print(forecast_df)
-    predicted_return = ((forecast_df.iloc[-1]["Prediction_rf"] / forecast_df.iloc[0]["Prediction_rf"]) - 1) * 100
-    if predicted_return > 0:
-        print(f"The prediction expects a profitable return on: {predicted_return}%, over the next {len(forecast_df)} days.")
-    elif predicted_return < 0:
-        print(f"The prediction expects a loss of: {predicted_return}%, over the next {len(forecast_df)} days.")
-    else:
-        print(f"The prediction expects no return over the next {len(forecast_df)} days.")
-
-
-    return forecast_df
-
 def build_random_forest_model(hp):
-    """Builds a RandomForestRegressor with tunable hyperparameters."""
+    """Builds a RandomForestRegressor with expanded tunable hyperparameters."""
     
-    # 1. Define the choice space using strings (to satisfy Keras Tuner)
-    max_features_choice = hp.Choice('max_features', ['sqrt', 'log2', '0.8'])
+    max_features_choice = hp.Choice('max_features', ['sqrt', 'log2', '0.3', '0.5', '0.8'])
     
-    # 2. Implement conditional conversion to satisfy scikit-learn
-    if max_features_choice == '0.8':
-        # If the string '0.8' is chosen, convert it to the required float 0.8
-        max_features_value = 0.8
+    if max_features_choice in ['0.3', '0.5', '0.8']:
+        max_features_value = float(max_features_choice)
     else:
-        # Otherwise, use the string ('sqrt' or 'log2') directly
         max_features_value = max_features_choice
+    
+    # Get bootstrap choice
+    bootstrap = hp.Boolean('bootstrap')
+    
+    # max_samples can only be used with bootstrap=True
+    if bootstrap:
+        max_samples_value = hp.Float('max_samples', 0.5, 1.0, step=0.1)
+    else:
+        max_samples_value = None
 
     model = RandomForestRegressor(
-        # Number of trees in the forest
-        n_estimators=hp.Int('n_estimators', 100, 500, step=100),
-        # Maximum depth of the tree
-        max_depth=hp.Int('max_depth', 5, 20, step=5, default=10),
-        # Minimum number of samples required to split an internal node
-        min_samples_split=hp.Choice('min_samples_split', [2, 5, 10]),
-        
-        # 3. Pass the correctly typed value
-        max_features=max_features_value, 
-        
+        n_estimators=hp. Int('n_estimators', 100, 1500, step=100),
+        max_depth=hp.Int('max_depth', 3, 50, step=2),
+        min_samples_split=hp.Choice('min_samples_split', [2, 5, 10, 15]),
+        min_samples_leaf=hp.Choice('min_samples_leaf', [1, 2, 4, 8, 16]),
+        criterion=hp.Choice('criterion', ['squared_error', 'absolute_error', 'friedman_mse']),
+        bootstrap=bootstrap,
+        max_features=max_features_value,
+        max_samples=max_samples_value,  # Now conditionally set
         random_state=42,
-        n_jobs=-1 # Use all processors
+        n_jobs=-1
     )
     return model
 
-def tune_random_forest_model(stock_symbol, traning_dataset_df, max_trials=10):
+def tune_random_forest_model(stock_symbol, x_training_dataset_df, y_training_dataset_df, max_trials=20):
+    """
+    Improved Random Forest tuning with better hyperparameters and optimization.  
     
-    # Random Forest uses 2D features (x_train, y_train are simple NumPy arrays)
-    x_train = traning_dataset_df.drop(["prediction"], axis=1).values
-    y_train = traning_dataset_df["prediction"].values
+    Parameters:
+    - stock_symbol (str): The stock ticker symbol
+    - x_training_dataset_df (pd.DataFrame): Training dataset (ALREADY SCALED)
+    - y_training_dataset_df (pd.Series or np.ndarray): Training labels (UNSCALED for RF)
+    - max_trials (int): Maximum number of tuning trials
     
-    # Define the Keras Tuner for Scikit-learn models using Bayesian Optimization
-    # We are minimizing MSE, so greater_is_better=False
+    Returns:
+    - best_rf_model: The tuned Random Forest model
+    """
+    
+    # Convert to numpy arrays to avoid feature name warnings
+    x_train = x_training_dataset_df.values
+    y_train = y_training_dataset_df.values
+
+    # Define the MSE scorer
     mse_scorer = make_scorer(mean_squared_error, greater_is_better=False)
-    
-    overwrite_val = True
+
+    # Setup directory structure
+    overwrite_val = False
     directory_val = "tuning_dir"
     project_name_val = f"RF_tuning_{stock_symbol}"
-    # Directory cleanup block
     project_path = os.path.join(directory_val, project_name_val)
-    if os.path.exists(project_path):
-        if overwrite_val == True:
-            try:
-                # Force deletion of the directory tree
-                shutil.rmtree(project_path)
-            except Exception as e:
-                print(f"Warning: Could not manually delete old tuning directory {project_path}. Error: {e}")
-                # Continue, letting the tuner attempt to overwrite
-                pass
 
+    # Cleanup old tuning directory if needed
+    if os.path.exists(project_path):
+        if overwrite_val:
+            try:
+                shutil.rmtree(project_path)
+                print(f"🗑️  Deleted old tuning directory: {project_path}")
+            except Exception as e:
+                print(f"⚠️  Warning: Could not delete old tuning directory {project_path}. Error: {e}")
+
+    # Create tuner with Hyperband (faster than Bayesian Optimization)
     tuner = Sklearn(
-        oracle=kt.oracles.BayesianOptimization(
-            objective=kt.Objective('score', 'min'), # Minimize the score (which is -MSE)
-            max_trials=max_trials,
+        oracle=kt.oracles. Hyperband(
+            objective=kt. Objective('score', 'min'),
+            max_epochs=max_trials,
+            factor=3,
             seed=42
         ),
         hypermodel=build_random_forest_model,
         scoring=mse_scorer,
-        cv=KFold(n_splits=5, shuffle=True, random_state=42),
+        cv=RepeatedKFold(n_splits=5, n_repeats=2, random_state=42),
         directory=directory_val,
         project_name=project_name_val,
         overwrite=overwrite_val
     )
-    
-    # Search for the best hyperparameters
+
+    # Search for best hyperparameters
+    print(f"🔍 Starting Random Forest hyperparameter tuning for {stock_symbol}...")
     tuner.search(x_train, y_train)
-    
-    # Get the best model
+
+    # Get best hyperparameters
     best_hp = tuner.get_best_hyperparameters(num_trials=1)[0]
-    
-    # Build and retrain the best model on the full training set
-    best_rf_model = tuner.hypermodel.build(best_hp)
+
+    # Build and train best model
+    best_rf_model = tuner.hypermodel. build(best_hp)
     best_rf_model.fit(x_train, y_train)
 
-    print(f"""
-    🌳 Best Random Forest hyperparameters found:
-    - n_estimators: {best_hp.get('n_estimators')}
-    - max_depth: {best_hp.get('max_depth')}
-    - min_samples_split: {best_hp.get('min_samples_split')}
-    - max_features: {best_hp.get('max_features')}
-    """)
-    
+    # Print best hyperparameters
+    print("\n🌳 Best Random Forest hyperparameters found:")
+    for param, value in best_hp.values. items():
+        print(f"  ✓ {param}: {value}")
+
+    # Feature importance logging
+    importances = best_rf_model. feature_importances_
+    feature_names = x_training_dataset_df.columns
+
+    print("\n📊 Top 10 Feature Importances:")
+    feature_importance_df = pd.DataFrame({
+        'feature': feature_names,
+        'importance': importances
+    }).sort_values('importance', ascending=False)
+
+    for idx, row in feature_importance_df.head(10).iterrows():
+        print(f"  • {row['feature']}: {row['importance']:.4f}")
+
     return best_rf_model
 
 # Fits a ridge model to the traning dataset and predicts the stock price
@@ -407,6 +366,48 @@ def svm_model(traning_dataset, test_dataset, prediction_dataset, stock_df, kerne
 
 
     return forecast_df
+
+def build_svm_model(hp):
+    kernel_choice = hp.Choice('kernel', ['linear', 'rbf', 'poly'])
+    model = SVR(
+        kernel=kernel_choice,
+        C=hp.Float('C', 1e-3, 1e3, sampling='log'),
+        gamma=hp.Float('gamma', 1e-4, 1e1, sampling='log'),
+        degree=hp.Int('degree', 2, 5) if kernel_choice == 'poly' else 3
+    )
+    return model
+
+def tune_svm_model(stock_symbol, training_dataset_df, max_trials=20):
+    x_train = training_dataset_df.drop(["prediction"], axis=1).values
+    y_train = training_dataset_df["prediction"].values
+
+    mse_scorer = make_scorer(mean_squared_error, greater_is_better=False)
+
+    tuner = Sklearn(
+        oracle=kt.oracles.BayesianOptimization(
+            objective=kt.Objective('score', 'min'),
+            max_trials=max_trials,
+            seed=42
+        ),
+        hypermodel=build_svm_model,
+        scoring=mse_scorer,
+        cv=KFold(n_splits=5, shuffle=True, random_state=42),
+        directory="tuning_dir",
+        project_name=f"SVM_tuning_{stock_symbol}",
+        overwrite=False
+    )
+
+    tuner.search(x_train, y_train)
+
+    best_hp = tuner.get_best_hyperparameters(num_trials=1)[0]
+    best_svm_model = tuner.hypermodel.build(best_hp)
+    best_svm_model.fit(x_train, y_train)
+
+    print("⚖️ Best SVM hyperparameters found:")
+    for param, value in best_hp.values.items():
+        print(f"- {param}: {value}")
+
+    return best_svm_model
 
 # Fits a decision tree model to the traning dataset and predicts the stock price
 def decision_tree_model(traning_dataset, test_dataset, prediction_dataset, stock_df):
@@ -598,39 +599,173 @@ def create_sequences(data, time_steps):
 def build_lstm_model(hp, input_shape):
     model = Sequential()
     # First LSTM layer
-    model.add(LSTM(
-        units=hp.Int('units_1', min_value=32, max_value=512, step=32),
-        return_sequences=True,
-        input_shape=input_shape
-    ))
-    model.add(Dropout(hp.Float("dropout_1", min_value=0.3, max_value=0.9, step=0.1)))
+    model.add(
+        Bidirectional(
+            LSTM(
+                units=hp.Int(
+                    "input_units",
+                    min_value=32,
+                    max_value=512,
+                    step=16
+                ),
+                return_sequences=True,
+                kernel_regularizer=regularizers.l2(
+                    hp.Float(
+                        "l2_reg_input",
+                        1e-6, 1e-3,
+                        sampling="log"
+                    )
+                ),
+                input_shape=input_shape
+            )
+        )
+    )
 
-    # Second LSTM layer
-    model.add(LSTM(
-        units=hp.Int('units_2', min_value=32, max_value=512, step=32),
-        return_sequences=False
-    ))
-    model.add(Dropout(hp.Float("dropout_2", min_value=0.3, max_value=0.9, step=0.1)))
+    max_amount_layers = 20
+    for i in range(1, hp.Int('n_layers', 1, max_amount_layers)):
+        model.add(
+            Bidirectional(
+                LSTM(
+                    units=hp. Int(
+                        f"units_{i}",
+                        min_value=32,
+                        max_value=512,
+                        step=16
+                    ),
+                    return_sequences=True,
+                    kernel_regularizer=regularizers.l2(
+                        hp.Float(
+                            f"l2_reg_{i}",
+                            1e-6, 1e-3,
+                            sampling="log"
+                        )
+                    )
+                )
+            )
+        )
 
-    # Output layer
-    model.add(Dense(1))
+        model.add(
+            Dropout(
+                hp.Float(
+                    f"dropout_{i}",
+                    min_value=0.1,
+                    max_value=0.5,
+                    step=0.1
+                )
+            )
+        )
+
+    # Final LSTM (collapse to 2D)
+    model.add(
+        Bidirectional(
+            LSTM(
+                units=hp.Int(
+                    f"final_units",
+                    min_value=32,
+                    max_value=512,
+                    step=16
+                ),
+                return_sequences=False,
+                kernel_regularizer=regularizers. l2(
+                    hp. Float(
+                        f"l2_reg_final",
+                        1e-6, 1e-3,
+                        sampling="log"
+                    )
+               )
+            )
+        )
+    )
+
+    model.add(
+        Dense(
+            units=hp.Int(
+                "dense_1",
+                min_value=16,
+                max_value=128,
+                step=16
+            ),
+            activation=hp.Choice(
+                "dense_1_activation",
+                ["relu", "tanh"]
+            )
+        )
+    )
+
+    model.add(
+        Dropout(
+            hp.Float(
+                "dropout__dense_1",
+                min_value=0.1,
+                max_value=0.8,
+                step=0.05
+            )
+        )
+    )
+
+    model.add(
+        Dense(
+            units=hp.Int(
+                "dense_2",
+                min_value=4,
+                max_value=96,
+                step=4),
+            activation=hp.Choice(
+                "dense_2_activation",
+                ["relu", "sigmoid"]
+            )
+        )
+    )
+
+    model.add(
+        Dropout(
+            hp.Float(
+                "dropout_dense_2",
+                min_value=0.1,
+                max_value=0.8,
+                step=0.05
+            )
+        )
+    )
+
+    # Output layers
+    model.add(
+        Dense(
+            1,
+            activation="linear"
+        )
+    )
+
+    # Optimizer choice
+    optimizer_choice = hp.Choice("optimizer", ["adam", "rmsprop", "nadam"])
+    learning_rate = hp.Float("learning_rate", 1e-5, 1e-2, sampling="log")
+
+    if optimizer_choice == "adam":
+        optimizer = Adam(learning_rate=learning_rate)
+    elif optimizer_choice == "rmsprop":
+        optimizer = RMSprop(learning_rate=learning_rate)
+    else:
+        optimizer = Nadam(learning_rate=learning_rate)
+
+    # Loss choice
+    loss_choice = hp.Choice(
+        "loss",
+        ["mean_squared_error", "huber", "mean_absolute_percentage_error"]
+    )
 
     # Optimizer with tunable learning rate
     model.compile(
-        optimizer=Adam(
-            learning_rate=hp.Choice("learning_rate", values=[1e-4, 5e-4, 1e-3])
-        ),
-        loss="mean_squared_error",
-        metrics=["mean_absolute_error"]
+        optimizer=optimizer,
+        loss=loss_choice,
+        metrics=["mean_absolute_error", "mean_squared_error", "accuracy"]
     )
     return model
 
-def tune_lstm_model(stock, traning_dataset, test_dataset, max_trials=10, executions_per_trial=1, epochs=100):
-    # Prepare data (unchanged)
-    x_train = traning_dataset.drop(["prediction"], axis=1).values
-    y_train = traning_dataset["prediction"].values
-    x_test = test_dataset.drop(["prediction"], axis=1).values
-    y_test = test_dataset["prediction"].values
+def tune_lstm_model(stock, x_training_dataset, y_training_dataset, x_test_dataset, y_test_dataset, max_trials=10, executions_per_trial=1, epochs=100, retries=3, delay=5, onedrive_base=r"C:\Users\joern\OneDrive\Dokumenter\Privat\Aktie_database\code\stock_portefolio_builder"):
+    x_train = x_training_dataset.values
+    y_train = y_training_dataset.values
+    x_test = x_test_dataset.values
+    y_test = y_test_dataset.values
 
     # Reshape for LSTM (unchanged)
     x_train_lstm = create_sequences(x_train, TIME_STEPS)
@@ -638,14 +773,10 @@ def tune_lstm_model(stock, traning_dataset, test_dataset, max_trials=10, executi
     x_test_lstm = create_sequences(x_test, TIME_STEPS)
     y_test_lstm = y_test[TIME_STEPS-1:]
 
+    # Basic sanity checks (same approach as tune_lstm_model)
     if x_test_lstm.ndim == 1:
-        # This occurs if the test data is too short or create_sequences failed.
-        # We attempt to reshape it back to 3D based on TIME_STEPS and feature count.
         num_features = x_train_lstm.shape[2]
         x_test_lstm = x_test_lstm.reshape(-1, TIME_STEPS, num_features)
-
-    y_train_lstm = y_train_lstm.reshape(-1, 1)
-    y_test_lstm = y_test_lstm.reshape(-1, 1)
 
     # If x_test_lstm.shape is (N, 1) or similar, the data is too short.
     if len(x_test_lstm.shape) < 3:
@@ -653,96 +784,266 @@ def tune_lstm_model(stock, traning_dataset, test_dataset, max_trials=10, executi
             "Test data sequence creation failed. Check that the test dataset size is larger than TIME_STEPS."
         )
 
-    x_full = np.concatenate((x_train_lstm, x_test_lstm), axis=0)
-    y_full = np.concatenate((y_train_lstm, y_test_lstm), axis=0)
+    # Reshape y data to be 2D arrays
+    y_train_lstm = y_train_lstm.reshape(-1, 1)
+    y_test_lstm = y_test_lstm.reshape(-1, 1)
 
-    # Calculate the size of the test set relative to the combined set.
-    # We use the length of the test data (x_test_lstm) divided by the length of the full data (x_full).
-    validation_split_ratio = len(x_test_lstm) / len(x_full)
-
-    overwrite_val = False
-    directory_val = "tuning_dir"
+    # --- Setup directories ---
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    tuning_dir = os.path.join(script_dir, "tuning_dir")
+    temp_dir = os.path.join(tempfile.gettempdir(), "temp_tuning_dir")
     project_name_val = f"LSTM_tuning_{stock}"
+    finished_project_path = os.path.join(tuning_dir, project_name_val)
+    temp_project_path = os.path.join(temp_dir, project_name_val)
 
-    # Directory cleanup block
-    project_path = os.path.join(directory_val, project_name_val)
-    if os.path.exists(project_path):
-        if overwrite_val == True:
-            try:
-                # Force deletion of the directory tree
-                shutil.rmtree(project_path)
-            except Exception as e:
-                print(f"Warning: Could not manually delete old tuning directory {project_path}. Error: {e}")
-                # Continue, letting the tuner attempt to overwrite
-                pass
+    print(f"Script directory: {script_dir}")
+    print(f"Finished tuning directory: {finished_project_path}")
+    print(f"Temporary tuning directory: {temp_project_path}")
+
+    # --- PRIORITY 1: Check for finished tuning ---
+    best_model = load_best_model_from_finished_tuning(
+        finished_project_path, 
+        x_train_lstm. shape[1], 
+        x_train_lstm.shape[2]
+    )
+    if best_model is not None:
+        print(f"✅ Loaded best model from finished tuning: {finished_project_path}")
+        return best_model
+
+    # --- PRIORITY 2: Check for partial tuning and continue ---
+    overwrite_val = False
+    if os.path.exists(temp_project_path):
+        print(f"⏸️  Found partial tuning at {temp_project_path}. Continuing tuning...")
+        overwrite_val = False  # Continue from existing
+    else:
+        print(f"🆕 No partial tuning found.  Starting new tuning...")
+        overwrite_val = False
 
     # Define tuner
     tuner = kt.RandomSearch(
-        lambda hp: build_lstm_model(hp, input_shape=(x_train_lstm.shape[1], x_train_lstm.shape[2])),
+        lambda hp: build_lstm_model(
+            hp,
+            input_shape=(
+                x_train_lstm.shape[1],
+                x_train_lstm.shape[2]
+            )
+        ),
         objective="val_loss",
         max_trials=max_trials,
         executions_per_trial=executions_per_trial,
-        directory=directory_val,
+        directory=temp_dir,
         project_name=project_name_val,
         overwrite=overwrite_val
     )
 
-    early_stopping = EarlyStopping(
-        monitor='val_loss', # Watch the loss on the validation data
-        patience=10,        # Stop if no improvement after 10 epochs
-        restore_best_weights=True
+    # Early stopping patience as a tunable hyperparameter
+    def build_callbacks(hp):
+        patience = hp.Int(
+            "patience",
+            min_value=5,
+            max_value=30,
+            step=5
+        )
+
+        # Learning rate schedule choice
+        lr_schedule_choice = hp.Choice("lr_schedule", ["none", "reduce_on_plateau", "exp_decay"])
+
+        callbacks = [
+            EarlyStopping(
+                monitor="val_loss",
+                patience=patience,
+                restore_best_weights=True,
+                verbose=1
+            )
+        ]
+
+        if lr_schedule_choice == "reduce_on_plateau":
+            callbacks.append(
+                tf.keras.callbacks.ReduceLROnPlateau(
+                    monitor="val_loss",
+                    factor=0.5,
+                    patience=5,
+                    min_lr=1e-6,
+                    verbose=1
+                )
+            )
+        elif lr_schedule_choice == "exp_decay":
+            def scheduler(epoch, lr):
+                decay_rate = hp.Float("decay_rate", 0.8, 0.99, step=0.01)
+                return lr * decay_rate
+            callbacks.append(tf.keras.callbacks.LearningRateScheduler(scheduler, verbose=1))
+
+        return callbacks
+
+    # --- Retry loop for search ---
+    for attempt in range(retries):
+        try:
+            # Run search with tunable batch size and patience
+            tuner.search(
+                x_train_lstm,
+                y_train_lstm,
+                epochs=epochs,
+                batch_size=kt.HyperParameters(). Choice(
+                    "batch_size",
+                    values=[32, 64, 128, 256]
+                ),
+                validation_data=(
+                    x_test_lstm,
+                    y_test_lstm
+                ),
+                callbacks=build_callbacks(tuner.oracle.hyperparameters),
+                verbose=0
+            )
+            break  # Exit loop if search is successful
+        except (UnicodeDecodeError, tf.errors. FailedPreconditionError) as e:
+            print(f"Attempt {attempt+1} failed: {e}")
+            # Cleanup failed trial directory before retry
+            if os.path.exists(temp_project_path):
+                try:
+                    shutil.rmtree(temp_project_path)
+                    print("Cleaned up failed trial directory.")
+                except Exception as ce:
+                    print(f"Could not clean trial dir: {ce}")
+            if attempt < retries - 1:
+                print(f"Retrying in {delay} seconds...")
+                time.sleep(delay)
+            else:
+                raise
+
+    # Get the best model and hyperparameters
+    best_trials = tuner.oracle.get_best_trials(num_trials=1)
+    if not best_trials:
+        raise RuntimeError("Keras Tuner failed to find any successful trials.")
+    else:
+        print(best_trials)
+
+    best_hp = best_trials[0].hyperparameters # Get the best model hyperparameters
+
+    print("✅ Best hyperparameters found:")
+    for param, value in best_hp.values.items():
+        print(f"- {param}: {value}")
+
+    best_model = build_lstm_model(
+        best_hp,
+        input_shape=(
+            x_train_lstm.shape[1],
+            x_train_lstm.shape[2]
+        )
     )
 
-    fit_arguments = {
-        'epochs': epochs,
-        'validation_split': validation_split_ratio, # Pass validation data here
-        'callbacks': [early_stopping], # Pass callbacks here
-        'verbose': 0
-    }
-
-    tuner.search(
-        x_full,
-        y_full,
-        **fit_arguments
+    # Explicitly build with batch dimension
+    best_model.build(
+        input_shape=(
+            None, x_train_lstm.shape[1],
+            x_train_lstm. shape[2]
+        )
     )
+    print("Best model architecture:")
+    print(best_model.summary())
 
-    # Get the best model
-    best_hps = tuner.get_best_hyperparameters(num_trials=1)[0]
-    print(f"""
-    ✅ Best hyperparameters found:
-    - units_1: {best_hps.get('units_1')}
-    - units_2: {best_hps.get('units_2')}
-    - dropout_1: {best_hps.get('dropout_1')}
-    - dropout_2: {best_hps.get('dropout_2')}
-    - learning_rate: {best_hps.get('learning_rate')}
-    """)
+    # --- Move tuning folder to script directory ---
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    final_dest = os.path.join(script_dir, f"tuning_dir\{project_name_val}")
+    print(f"Moving tuning folder to: {final_dest}")
+    if os.path.exists(final_dest):
+        shutil.rmtree(final_dest)
 
-    best_model = tuner.get_best_models(num_models=1)[0]
+    shutil.move(temp_project_path, final_dest)
+
+    # --- Cleanup temp dir ---
+    if os.path.exists(temp_dir):
+        try:
+            shutil.rmtree(temp_dir)
+            print("🧹 Cleaned up local temp directory.")
+        except Exception as e:
+            print(f"Warning: Could not delete temp directory {temp_dir}. Error: {e}")
+
     return best_model
 
-def predict_future_price_changes(ticker, scaler, model, selected_features_list, stock_df, prediction_days):
+def load_best_model_from_finished_tuning(finished_project_path, seq_length, num_features):
     """
-    Predicts the future stock price.
+    Attempts to load the best model from a finished tuning directory.
+    
+    Returns:
+        best_model: The loaded Keras model, or None if no finished tuning exists
+    """
+    if not os. path.exists(finished_project_path):
+        print(f"No finished tuning found at {finished_project_path}")
+        return None
+    
+    try:
+        # Initialize a tuner to access the oracle (without running tuning)
+        tuner = kt.RandomSearch(
+            lambda hp: build_lstm_model(
+                hp,
+                input_shape=(seq_length, num_features)
+            ),
+            objective="val_loss",
+            max_trials=1,
+            directory=os.path.dirname(finished_project_path),
+            project_name=os.path.basename(finished_project_path),
+            overwrite=False
+        )
+        
+        # Get the best trials
+        best_trials = tuner.oracle.get_best_trials(num_trials=1)
+        
+        if not best_trials:
+            print(f"No completed trials found in {finished_project_path}")
+            return None
+        
+        best_hp = best_trials[0].hyperparameters
+        
+        print("✅ Best hyperparameters from finished tuning:")
+        for param, value in best_hp.values.items():
+            print(f"- {param}: {value}")
+        
+        # Rebuild the best model with the saved hyperparameters
+        best_model = build_lstm_model(
+            best_hp,
+            input_shape=(seq_length, num_features)
+        )
+        
+        # Explicitly build with batch dimension
+        best_model.build(
+            input_shape=(None, seq_length, num_features)
+        )
+        
+        print("Best model architecture from finished tuning:")
+        print(best_model.summary())
+        
+        return best_model
+        
+    except Exception as e:
+        print(f"Error loading best model from finished tuning: {e}")
+        return None
+
+def predict_future_price_changes(ticker, scaler_x, scaler_y, model, selected_features_list, stock_df, prediction_days, historical_prediction_dataset_df=None):
+    """
+    Predicts the future stock price. 
 
     Parameters:
-    - ticker (str): The stock ticker.
-    - scaler (object): The scaler object.
-    - model (object): The model object.
+    - ticker (str): The stock ticker. 
+    - scaler_x (MinMaxScaler): The scaler for x values.
+    - scaler_y (MinMaxScaler): The scaler for y values (for inverse-transforming LSTM predictions).
+    - model (dict): Dictionary containing 'lstm' and 'rf' models.
     - selected_features_list (list): The list of selected features.
     - stock_df (pandas.DataFrame): A DataFrame containing the stock data.
     - prediction_days (int): The number of days to predict.
+    - historical_prediction_dataset_df (pd.DataFrame): Historical prediction data.
 
     Returns:
-    pandas.DataFrame: A DataFrame containing the predicted stock prices.
+    pandas.DataFrame: A DataFrame containing the predicted stock prices. 
 
     Raises:
     - ValueError: If the prediction could not be completed.
     """
-
+    
     try:
         # Extract individual models from the 'model' dictionary
         lstm_model = model['lstm']
         rf_model = model['rf']
+
         # Predict the future stock open_Price
         short_term_dynamic_list = [
             '1M', '3M', '6M', '9M', '1Y', '2Y', '3Y', '4Y',
@@ -751,27 +1052,56 @@ def predict_future_price_changes(ticker, scaler, model, selected_features_list, 
             "bollinger_Band_120_2STD", 'p_s', 'p_e', 'p_b',
             'p_fcf', "momentum"
         ]
-        # print(f"selected_features_list: {selected_features_list}")
-        features_list = selected_features_list.copy()
+
+        features_list = selected_features_list. copy()
+
         # Append "Date" to the selected_features_list in position 0
         features_list.insert(0, "date")
         features_list.insert(1, "open_Price")
         features_list.insert(2, "1D")
+
         stock_mod_df = stock_df.copy()
+
+        # --- 3. Prepare historical prediction dataset if provided ---
+        if historical_prediction_dataset_df is not None and len(historical_prediction_dataset_df) > 0:
+            pred_count = len(historical_prediction_dataset_df)
+            pred_dates = stock_df["date"].iloc[-pred_count:].copy(). to_frame()
+            
+            for run in range(len(historical_prediction_dataset_df)):
+                if pred_count > 1:
+                    x_lstm_df = stock_mod_df.iloc[-(TIME_STEPS+pred_count-1):-(pred_count-1)][selected_features_list]
+                    scaled_x_lstm_df = scaler_x.transform(x_lstm_df)
+                    scaled_x_input_lstm = scaled_x_lstm_df.values.reshape(1, TIME_STEPS, scaled_x_lstm_df.shape[1])
+                elif pred_count <= 1:
+                    x_lstm_df = stock_mod_df.iloc[-(TIME_STEPS):][selected_features_list]
+                    scaled_x_lstm_df = scaler_x.transform(x_lstm_df)
+                    scaled_x_input_lstm = scaled_x_lstm_df.values.reshape(1, TIME_STEPS, scaled_x_lstm_df.shape[1])
+
+                if pred_count > 1:
+                    scaled_x_input_rf_df = historical_prediction_dataset_df.iloc[-pred_count:-(pred_count-1)][selected_features_list]
+                elif pred_count <= 1:
+                    scaled_x_input_rf_df = historical_prediction_dataset_df.iloc[-pred_count:][selected_features_list]
+
+                # --- Predict with both models ---
+                
+                # LSTM prediction (scaled) -> inverse transform to original scale
+                forecast_lstm_scaled = lstm_model.predict(scaled_x_input_lstm, verbose=0)[0][0]
+                forecast_lstm = scaler_y.inverse_transform([[forecast_lstm_scaled]])[0][0]
+
+                # Random Forest prediction (already unscaled - RF is scale-invariant)
+                forecast_rf = rf_model.predict(scaled_x_input_rf_df)[0]
+
+                # ENSEMBLE: Average the predictions
+                forecast_price_change = (forecast_lstm + forecast_rf) / 2
+
+                # Append a new row to stock_mod_df for this prediction
+                stock_mod_df. loc[stock_mod_df["date"] == pred_dates["date"].iloc[run], "1D"] = forecast_price_change
+                # Update the open_Price column with the calculated value
+                stock_mod_df. loc[stock_mod_df["date"] == pred_dates["date"].iloc[run], "open_Price"] = stock_mod_df["open_Price"].iloc[-(pred_count+1)] * (1 + forecast_price_change)
+                pred_count -= 1
+
         for run in range(prediction_days):
             future_df = stock_mod_df.iloc[-1].copy().to_frame().transpose()
-            # future_day = pd.to_datetime(stock_mod_df.iloc[-1]["date"]) + relativedelta(days=1)
-            # if future_day.weekday() == 5:
-            #     future_day = future_day + datetime.timedelta(days=2)
-            #     future_day = future_day.strftime("%Y-%m-%d")
-            #     future_df["date"] = str(future_day)
-            # elif future_day.weekday() == 6:
-            #     future_day = future_day + datetime.timedelta(days=1)
-            #     future_day = future_day.strftime("%Y-%m-%d")
-            #     future_df["date"] = str(future_day)
-            # else:
-            #     future_day = future_day.strftime("%Y-%m-%d")
-            #     future_df["date"] = str(future_day)
             future_day = pd.to_datetime(stock_mod_df.iloc[-1]["date"]) + relativedelta(days=1)
             while future_day.weekday() >= 5: # 5=Sat, 6=Sun
                 future_day += datetime.timedelta(days=1)
@@ -967,7 +1297,7 @@ def predict_future_price_changes(ticker, scaler, model, selected_features_list, 
 
                     # Calculate the p_fcf ratio
                     if feature == "p_fcf":
-                        p_fcf = stock_mod_df.iloc[-1]["open_Price"] / stock_mod_df.iloc[-1]["free_Cash_Flow_Per_Share_Growth"]
+                        p_fcf = stock_mod_df.iloc[-1]["open_Price"] / stock_mod_df.iloc[-1]["free_Cash_Flow_Per_Share"]
                         future_df["p_fcf"] = p_fcf
 
                     # Calculate the momentum
@@ -991,61 +1321,43 @@ def predict_future_price_changes(ticker, scaler, model, selected_features_list, 
                                 # Update the momentum column with the calculated value
                                 future_df["momentum"] = momentum
 
-            # # Change the data type of the date column to datetime
-            # future_df["date"] = pd.to_datetime(future_df["date"]) 
-            # # Concat the pandas series as new line to the stock_mod_df
-            # prediction_df = pd.concat([stock_mod_df.iloc[-1].to_frame().transpose(), future_df], axis=0).reset_index(drop=True)
-            # # prediction_df = prediction_df.drop(["name", "open_Price", "trade_Volume"], axis=1)
-            # prediction_df = prediction_df.drop(["date", "ticker", "currency", "open_Price", "1D"], axis=1)
-            # # Concat the future_df to the stock_mod_df
-            # stock_mod_df = pd.concat([stock_mod_df, future_df], axis=0).reset_index(drop=True)
-            # # Scale the prediction_df
-            # scaled_prediction_df = scaler.transform(prediction_df)
-            # scaled_prediction = np.array(scaled_prediction_df[selected_features_list])
-            # scaled_prediction = scaled_prediction.reshape((scaled_prediction.shape[0], 1, scaled_prediction.shape[1]))
-            # # Predict the future stock price
-            # forecast = model.predict(scaled_prediction)
-            # forecast_price_change = forecast[1]
-            # Define TIME_STEPS = 5 (assuming it's not defined globally, define it here if needed)
-
             # Change the data type of the date column to datetime
-            future_df["date"] = pd.to_datetime(future_df["date"])
+            future_df["date"] = pd. to_datetime(future_df["date"])
             
-            # Concat the newly calculated day (future_df) to the historical/predicted data (stock_mod_df).
-            # The features for the new day are now fully available in stock_mod_df.
-            stock_mod_df = pd.concat([stock_mod_df, future_df], axis=0).reset_index(drop=True)
-            # --- 3. Prepare Input Data for both models ---
+            # Concat the newly calculated day (future_df) to the historical/predicted data (stock_mod_df)
+            stock_mod_df = pd. concat([stock_mod_df, future_df], axis=0). reset_index(drop=True)
+            
+            # --- Prepare Input Data for both models ---
 
-            # A. LSTM Input (Last TIME_STEPS sequence)
-            sequence_for_lstm_df = stock_mod_df.iloc[-TIME_STEPS:][selected_features_list]
-            scaled_lstm_sequence = scaler.transform(sequence_for_lstm_df)
-            # CRITICAL: Use .values to convert from DataFrame to NumPy array for reshape
-            x_input_lstm = scaled_lstm_sequence.values.reshape(1, TIME_STEPS, scaled_lstm_sequence.shape[1])
-            
-            # B. Random Forest Input (Only the current day's features)
-            # RF model was trained on 2D data, so we only need the last row (current day)
-            input_rf_df = stock_mod_df.iloc[-1:][selected_features_list]
-            x_input_rf = scaler.transform(input_rf_df)
+            # A.  LSTM Input (Last TIME_STEPS sequence)
+            x_lstm_df = stock_mod_df.iloc[-TIME_STEPS:][selected_features_list]
+            scaled_x_lstm_df = scaler_x.transform(x_lstm_df)
+            scaled_x_input_lstm = scaled_x_lstm_df.values. reshape(1, TIME_STEPS, scaled_x_lstm_df.shape[1])
 
-            # --- 4. Predict and Ensemble ---
-            
-            # Predict with LSTM
-            forecast_lstm = lstm_model.predict(x_input_lstm, verbose=0)[0][0] 
-            
-            # Predict with Random Forest
-            forecast_rf = rf_model.predict(x_input_rf)[0]
+            # B.  Random Forest Input (Only the current day's features)
+            x_input_rf_df = stock_mod_df. iloc[-1:][selected_features_list]
+            scaled_x_input_rf = scaler_x.transform(x_input_rf_df)
+
+            # --- Predict and Ensemble ---
+
+            # LSTM prediction (scaled) -> inverse transform to original scale
+            forecast_lstm_scaled = lstm_model.predict(scaled_x_input_lstm, verbose=0)[0][0]
+            forecast_lstm = scaler_y.inverse_transform([[forecast_lstm_scaled]])[0][0]
+
+            # Random Forest prediction (already unscaled - RF is scale-invariant)
+            forecast_rf = rf_model.predict(scaled_x_input_rf)[0]
             
             # ENSEMBLE: Average the predictions
             forecast_price_change = (forecast_lstm + forecast_rf) / 2
             
-            # --- 5. Update stock_mod_df with the Ensemble Forecast ---
+            # --- Update stock_mod_df with the Ensemble Forecast ---
             
             # Update the 1D column with the calculated value
-            stock_mod_df.loc[len(stock_mod_df)-1, "1D"] = forecast_price_change
+            stock_mod_df. loc[len(stock_mod_df)-1, "1D"] = forecast_price_change
             # Update the open_Price column with the calculated value
             stock_mod_df.loc[len(stock_mod_df)-1, "open_Price"] = stock_mod_df.loc[len(stock_mod_df)-2, "open_Price"] * (1 + forecast_price_change)
 
-        # --- 6. Final cleanup (same as before) ---
+        # --- Final cleanup ---
         columns_to_convert = stock_mod_df.columns.drop(["date", "ticker", "currency"]).to_list()
         for column in columns_to_convert:
             stock_mod_df[column] = stock_mod_df[column].astype(float)
@@ -1054,62 +1366,8 @@ def predict_future_price_changes(ticker, scaler, model, selected_features_list, 
         return stock_mod_df
 
     except Exception as e:
-        print("The prediction could not be completed. Please check the input data.")
-        # Removed printing intermediate DFs to keep the final traceback cleaner
-        raise ValueError("The prediction could not be completed. Please check the input data.") from e
-    #         # --- START LSTM SEQUENCE PREPARATION ---
-            
-    #         # 1. Slice the last TIME_STEPS (5) rows from the updated stock_mod_df.
-    #         #    This creates the 5-day sequence required by the LSTM.
-    #         sequence_for_prediction_df = stock_mod_df.iloc[-TIME_STEPS:][selected_features_list]
-
-    #         # 2. Scale the 5-day sequence. Output shape is (5, 71).
-    #         scaled_sequence = scaler.transform(sequence_for_prediction_df)
-            
-    #         # 3. Reshape the scaled sequence into the 3D format required for Keras: (1, TIME_STEPS, num_features).
-    #         #    Output shape is (1, 5, 71).
-    #         # CORRECTED LINE
-    #         x_input_lstm = scaled_sequence.values.reshape(1, TIME_STEPS, scaled_sequence.shape[1])
-
-    #         # 4. Predict the price change for the *last* day in the sequence.
-    #         #    The output is a 2D array: [[predicted_change]].
-    #         forecast = model.predict(x_input_lstm, verbose=0)
-            
-    #         # Extract the single float value for the predicted price change.
-    #         forecast_price_change = forecast[0][0] 
-            
-    #         # --- END LSTM SEQUENCE PREPARATION ---
-
-    #         # Update the 1D column with the calculated value
-    #         stock_mod_df.loc[len(stock_mod_df)-1, "1D"] = forecast_price_change
-    #         # Update the Price column with the calculated value
-    #         stock_mod_df.loc[len(stock_mod_df)-1, "open_Price"] = stock_mod_df.loc[len(stock_mod_df)-2, "open_Price"] * (1 + forecast_price_change)
-    #         # Update the 1D column with the calculated value
-    #         stock_mod_df.loc[len(stock_mod_df)-1, "1D"] = forecast_price_change
-    #         # Update the Price column with the calculated value
-    #         stock_mod_df.loc[len(stock_mod_df)-1, "open_Price"] = stock_mod_df.loc[len(stock_mod_df)-2, "open_Price"] * (1 + forecast_price_change)
-
-    #     columns = stock_mod_df.columns.to_list()
-    #     # Remove the "date", "ticker" and "currency" column from the columns list
-    #     columns.remove("date")
-    #     columns.remove("ticker")
-    #     columns.remove("currency")
-    #     # Change the data type of the columns to float
-    #     for column in columns:
-    #         stock_mod_df[column] = stock_mod_df[column].astype(float)
-
-    #     stock_mod_df = stock_mod_df[features_list]
-    #     return stock_mod_df
-
-    # except ValueError as e:
-    #     print("The prediction could not be completed. Please check the input data.")
-    #     print("future_df")
-    #     print(future_df)
-    #     print("prediction_df")
-    #     print(prediction_df)
-    #     print("stock_mod_df")
-    #     print(stock_mod_df)
-    #     raise ValueError("The prediction could not be completed. Please check the input data.") from e
+        print("The prediction could not be completed.  Please check the input data.")
+        raise ValueError("The prediction could not be completed. Please check the input data. ") from e
 
 # Combines the predicted stock prices from different models
 def calculate_predicted_profit(forecast_df, prediction_days):
@@ -1161,7 +1419,7 @@ def plot_graph(stock_data_df, forecast_data_df):
     plt.figure(figsize=(18, 8))
     stock_data_df["date"] = stock_data_df["date"].astype('datetime64[ns]')
     forecast_data_df["date"] = forecast_data_df["date"].astype('datetime64[ns]')
-    forecast_data_df = forecast_data_df.loc[forecast_data_df["date"] >= stock_data_df.iloc[-1]["date"]]
+    # forecast_data_df = forecast_data_df.loc[forecast_data_df["date"] >= stock_data_df.iloc[-1]["date"]]
     stock_data_df = stock_data_df.set_index("date")
     forecast_data_df = forecast_data_df.set_index("date")
     stock_data_df["open_Price"].plot()
@@ -1191,83 +1449,120 @@ def plot_graph(stock_data_df, forecast_data_df):
 
 # Run the main function
 if __name__ == "__main__":
-    import fetch_secrets
-    import db_connectors
     import db_interactions
 
+    gpus = tf.config.list_physical_devices('GPU')
+    for gpu in gpus:
+        tf.config.experimental.set_memory_growth(gpu, True)
+
     start_time = time.time()
+
     # Import stock symbols from DB
     stock_symbols_list = db_interactions.import_ticker_list()
     print(stock_symbols_list)
     stock_symbol = stock_symbols_list[0]
     stock_symbol = "DEMANT.CO"
     print(stock_symbol)
+
+    # Import stock data
     stock_data_df = db_interactions.import_stock_dataset(stock_symbol)
     # Change the date column to datetime 64
     stock_data_df["date"] = pd.to_datetime(stock_data_df["date"])
     # Drop the columns that are empty
     stock_data_df = stock_data_df.dropna(axis=0, how="any")
     stock_data_df = stock_data_df.dropna(axis=1, how="any")
-    print("Stock Data DF:")
-    print(stock_data_df)
-    # Split the dataset into traning, test data and prediction data
+
+    # Split the dataset into training, test data and prediction data
     test_size = 0.20
-    scaler, x_training_data, x_test_data, y_training_data_df, y_test_data_df, prediction_data = split_dataset.dataset_train_test_split(stock_data_df, test_size, 1)
-    print("X Training Data:")
-    print(x_training_data)
-    print("Y Training Data DF:")
-    print(y_training_data_df)
-    print("X Test Data:")
-    print(x_test_data)
-    print("Y Test Data DF:")
-    print(y_test_data_df)
-    print("Prediction Data:")
-    print(prediction_data)
+    scaler_x, scaler_y, x_train_scaled, x_test_scaled, y_train_scaled, y_test_scaled, x_Predictions = split_dataset.dataset_train_test_split(stock_data_df, test_size, 1)
+
+    # Inverse-transform y values for Random Forest (RF is scale-invariant, needs unscaled y)
+    y_train_unscaled = scaler_y. inverse_transform(y_train_scaled. reshape(-1, 1)).flatten()
+    y_test_unscaled = scaler_y.inverse_transform(y_test_scaled.reshape(-1, 1)).flatten()
+
+    # Convert to DataFrames for feature selection
+    x_training_data = pd.DataFrame(x_train_scaled)
+    x_test_data = pd.DataFrame(x_test_scaled)
+    y_training_data_df = pd.Series(y_train_unscaled)  # UNSCALED for Random Forest
+    y_test_data_df = pd.Series(y_test_unscaled)      # UNSCALED for Random Forest
+    prediction_data = x_Predictions
+
     # Feature selection
     max_features = len(x_training_data.columns)
+    # print(f"Max features:\n{max_features}")
     feature_amount = max_features
     x_training_dataset, x_test_dataset, x_prediction_dataset, selected_features_model, selected_features_list = dimension_reduction.feature_selection(feature_amount, x_training_data, x_test_data, y_training_data_df, y_test_data_df, prediction_data, stock_data_df)
+
     # Combine the reduced dataset with the stock price
     x_training_dataset_df = pd.DataFrame(x_training_dataset, columns=selected_features_list)
     y_training_data_df = y_training_data_df.reset_index(drop=True)
-    traning_dataset_df = x_training_dataset_df.join(y_training_data_df)
-    print("Training Dataset DF:")
-    print(traning_dataset_df)
+
     x_test_dataset_df = pd.DataFrame(x_test_dataset, columns=selected_features_list)
     y_test_data_df = y_test_data_df.reset_index(drop=True)
-    test_dataset_df = x_test_dataset_df.join(y_test_data_df)
-    print("Test Dataset DF:")
-    print(test_dataset_df)
+
     x_prediction_dataset_df = pd.DataFrame(x_prediction_dataset, columns=selected_features_list)
-    # Predict the stock price
-    # lstm = lstm_model(traning_dataset_df, test_dataset_df)
-    # 1. Tune and get the best LSTM model
+    TIME_STEPS = len(x_prediction_dataset_df)
+
+    # Create scaled y values for LSTM training
+    y_train_scaled_for_lstm = pd.Series(y_train_scaled)
+    y_test_scaled_for_lstm = pd.Series(y_test_scaled)
+
+    # Predict the stock price using different models
+    # 1.  Tune and get the best LSTM model (uses SCALED y)
     print("Starting LSTM Hyperparameter Tuning...")
-    lstm = tune_lstm_model(stock_symbol, traning_dataset_df, test_dataset_df, max_trials=100, epochs=500)
-    
-    # 2. Tune and get the best Random Forest model
+    lstm = tune_lstm_model(stock_symbol, x_training_dataset_df, y_train_scaled_for_lstm, x_test_dataset_df, y_test_scaled_for_lstm, max_trials=10, executions_per_trial=2, epochs=500)
+
+    # 2. Tune and get the best Random Forest model (uses UNSCALED y)
     print("Starting Random Forest Hyperparameter Tuning...")
-    rf_model = tune_random_forest_model(stock_symbol, traning_dataset_df, max_trials=100)
-    amount_of_days = 30
+    rf_model = tune_random_forest_model(stock_symbol, x_training_dataset_df, y_training_data_df, max_trials=20)
+
+    # 3. Predict the future stock price changes
+    amount_of_days = 90
     forecast_df = predict_future_price_changes(
         ticker=stock_symbol, 
-        scaler=scaler, 
-        model={'lstm': lstm, 'rf': rf_model}, # Pass a dictionary of models
+        scaler_x=scaler_x,
+        scaler_y=scaler_y,
+        model={'lstm': lstm, 'rf': rf_model},
         selected_features_list=selected_features_list, 
         stock_df=stock_data_df, 
-        prediction_days=amount_of_days
+        prediction_days=amount_of_days,
+        historical_prediction_dataset_df=x_prediction_dataset_df
     )
-    print("Forecast DataFrame:")
-    print(forecast_df)
+    # print("Forecast DataFrame:")
+    # print(forecast_df)
+    # print(forecast_df.info())
+    # plt.plot(forecast_df["open_Price"], color="green")
+    # plt.xlabel("Date")
+    # plt.ylabel("Opening price")
+    # legend_list = ["Predicted Stock Price"]
+    # plt.legend(legend_list,
+    #     loc="best"
+    # )
+    # stock_name = stock_data_df.iloc[0]["ticker"]
+    # graph_name = str(f"future_stock_prediction_of_{stock_name}.png")
+    # my_path = os.path.abspath(__file__)
+    # path = os.path.dirname(my_path)
+    # # Save the graph
+    # try:
+    #     plt.savefig(os.path.join(path, "generated_graphs", graph_name), bbox_inches="tight", pad_inches=0.5, transparent=False, format="png")
+    #     plt.clf()
+    #     plt.close("all")
+
+    # except FileNotFoundError as e:
+    #     raise FileNotFoundError("The graph could not be saved. Please check the file name or path.") from e
+
     # Calculate the predicted profit
     calculate_predicted_profit(forecast_df, amount_of_days)
+
     # Plot the graph
     plot_graph(stock_data_df, forecast_df)
+
     # Run a Monte Carlo simulation
     year_amount = 10
     sim_amount = 1000
     monte_carlo_day_df, monte_carlo_year_df = monte_carlo_sim.monte_carlo_analysis(0, stock_data_df, forecast_df, year_amount, sim_amount)
     forecast_df = forecast_df.rename(columns={"open_Price": stock_symbol + "_price"})
+
     # Calculate the execution time
     end_time = time.time()
     execution_time = end_time - start_time

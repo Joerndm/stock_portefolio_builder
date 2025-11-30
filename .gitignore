@@ -161,6 +161,7 @@ cython_debug/
 
 # Folders
 genarated_graphs/
+tuning_dir/
 
 # Files
 test.py

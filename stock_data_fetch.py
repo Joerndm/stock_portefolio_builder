@@ -5,6 +5,7 @@ import datetime
 from dateutil.relativedelta import relativedelta
 import pandas as pd
 import yfinance as yf
+import pandas_ta as ta
 
 # Import stock symbols from a CSV file
 def import_tickers_from_csv(csv_file):

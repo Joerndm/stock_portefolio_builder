@@ -1,6 +1,6 @@
-""""""
 import math
 from sklearn.model_selection import train_test_split
+import numpy as np
 
 import db_interactions
 import data_scalers
@@ -8,22 +8,24 @@ import data_scalers
 # Split the dataset into training and test data
 def dataset_train_test_split(dataset_dataframe, ts, rs):
     """
-    Split the dataset into training and test data.
+    Split the dataset into training and test data with proper scaling for both x and y values. 
 
     Parameters:
-    - dataset_dataframe (pandas.DataFrame): The dataset to split.
-    - ts (float): The size of the test data.
+    - dataset_dataframe (pandas.DataFrame): The dataset to split. 
+    - ts (float): The size of the test data. 
     - rs (int): The random state for the split.
 
     Returns:
-    - numpy.ndarray: The training data.
-    - numpy.ndarray: The test data.
-    - numpy.ndarray: The training labels.
-    - numpy.ndarray: The test labels.
-    - numpy.ndarray: The prediction data.
+    - scaler_x: The fitted MinMaxScaler for x values.
+    - scaler_y: The fitted MinMaxScaler for y values.
+    - numpy.ndarray: The scaled training data (x). 
+    - numpy.ndarray: The scaled test data (x).
+    - numpy.ndarray: The scaled training labels (y).
+    - numpy.ndarray: The scaled test labels (y).
+    - numpy.ndarray: The scaled prediction data (x for future predictions). 
 
     Raises:
-    - KeyError: If the dataset does not have the required columns.
+    - KeyError: If the dataset does not have the required columns. 
     """
 
     try:
@@ -31,56 +33,80 @@ def dataset_train_test_split(dataset_dataframe, ts, rs):
         drop_colum_list = ["date", "name", "date_published", "ticker", "currency"]
         for column in drop_colum_list:
             if column in dataset_dataframe.columns:
-                dataset_dataframe = dataset_dataframe.drop([column], axis=1)
+                dataset_dataframe = dataset_dataframe. drop([column], axis=1)
 
         train_data_df = dataset_dataframe.copy()
-        # print("train_data_df")
-        # print(train_data_df)
-        # print("train_data_df.info")
-        # print(train_data_df.info())
         forecast_out = int(math.ceil(0.05 * len(train_data_df)))
         train_data_df["prediction"] = train_data_df.iloc[0:-forecast_out]["1D"]
-        # print("train_data_df")
-        # print(train_data_df)
-        # print("train_data_df.info")
-        # print(train_data_df.info())
-        scaler = data_scalers.data_preprocessing_minmax_scaler_fit(train_data_df.drop(["open_Price", "1D", "prediction"], axis=1)) 
-        scaler.set_output(transform="pandas")
-        scaled_x = data_scalers.data_preprocessing_minmax_scaler_transform(scaler, train_data_df.drop(["open_Price", "1D", "prediction"], axis=1))
-        x_Predictions = scaled_x.iloc[-forecast_out:].copy()
+        
+        # Fit scaler on x features (before any filtering)
+        scaler_x = data_scalers.data_preprocessing_minmax_scaler_fit(
+            train_data_df. drop(["open_Price", "1D", "prediction"], axis=1)
+        )
+        scaler_x.set_output(transform="pandas")
+        
+        # Transform x data
+        scaled_x = data_scalers.data_preprocessing_minmax_scaler_transform(
+            scaler_x, 
+            train_data_df. drop(["open_Price", "1D", "prediction"], axis=1)
+        )
+        
+        # Separate prediction data (future data with no known y values)
+        x_Predictions = scaled_x. iloc[-forecast_out:].copy()
         x = scaled_x.iloc[:-forecast_out].copy()
-        # print("x")
-        # print(x)
-        # train_data_df = train_data_df.dropna(axis=0, how="any")
+        
+        # Drop rows with NaN values in prediction column
         train_data_df = train_data_df.dropna(subset=["prediction"], axis=0, how="any")
-        # print("train_data_df")
-        # print(train_data_df)
-        # print("train_data_df.info")
-        # print(train_data_df.info())
-        # print("train_data_df.describe")
-        # print(train_data_df.describe())
-        y = train_data_df["prediction"]
-        # print("y")
-        # print(y)
-        x_train, x_test, y_train, y_test  = train_test_split(x, y, test_size=ts, random_state=rs)
-        return scaler, x_train, x_test, y_train, y_test, x_Predictions
+        y = train_data_df["prediction"].values.reshape(-1, 1)  # Reshape for scaler
+        
+        # Align x with y (remove rows that were dropped from y)
+        x = x.loc[train_data_df.index].copy()
+        
+        # Fit y scaler on all available data (before split)
+        scaler_y = data_scalers.data_preprocessing_minmax_scaler_fit(y)
+        
+        # Transform y data using scaler
+        y_scaled = data_scalers.data_preprocessing_minmax_scaler_transform(scaler_y, y).flatten()
+        
+        # Split into training and test sets
+        x_train, x_test, y_train, y_test = train_test_split(
+            x, y_scaled, test_size=ts, random_state=rs
+        )
+        
+        # Scale x values
+        scaler_x.set_output(transform="pandas")
+        x_train_scaled = data_scalers.data_preprocessing_minmax_scaler_transform(scaler_x, x_train)
+        x_test_scaled = data_scalers.data_preprocessing_minmax_scaler_transform(scaler_x, x_test)
+        
+        return scaler_x, scaler_y, x_train_scaled, x_test_scaled, y_train, y_test, x_Predictions
 
     except KeyError as e:
         raise KeyError("Dataset does not have the required columns.") from e
 
 # Run the main function
 if __name__ == "__main__":
-    stock_data_df = db_interactions.import_stock_dataset("BAVA.CO")
+    stock_data_df = db_interactions.import_stock_dataset("BAVA. CO")
     print(stock_data_df.info())
     print("stock_data_df")
-    scaler, x_training_data, x_test_data, y_training_data, y_test_data, prediction_data = dataset_train_test_split(stock_data_df, 0.20, 1)
-    print("x_training_data")
+    scaler_x, scaler_y, x_training_data, x_test_data, y_training_data, y_test_data, prediction_data = dataset_train_test_split(stock_data_df, 0.20, 1)
+    
+    print("\n=== TRAINING DATA ===")
+    print("x_training_data shape:", x_training_data.shape)
+    print("y_training_data shape:", y_training_data. shape)
+    print("x_training_data:")
     print(x_training_data)
-    print("y_training_data")
+    print("y_training_data:")
     print(y_training_data)
-    print("x_test_data")
+    
+    print("\n=== TEST DATA ===")
+    print("x_test_data shape:", x_test_data.shape)
+    print("y_test_data shape:", y_test_data.shape)
+    print("x_test_data:")
     print(x_test_data)
-    print("y_test_data")
+    print("y_test_data:")
     print(y_test_data)
-    print("prediction_data")
+    
+    print("\n=== PREDICTION DATA ===")
+    print("prediction_data shape:", prediction_data.shape)
+    print("prediction_data:")
     print(prediction_data)

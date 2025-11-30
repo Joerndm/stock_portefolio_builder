@@ -18,6 +18,7 @@ def data_preprocessing_minmax_scaler_fit(data):
 
     try:
         # Scale data before applying PCA
+        # scaling = MinMaxScaler(feature_range=(-1, 1))
         scaling = MinMaxScaler()
         # Fit the scaler to the data and transform it
         scaler = scaling.fit(data)
