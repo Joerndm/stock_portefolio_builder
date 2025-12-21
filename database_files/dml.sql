@@ -2,7 +2,12 @@ SELECT *
 FROM stock_portefolio_builder.stock_info_data;
 
 SELECT *
-FROM stock_portefolio_builder.stock_price_data;
+FROM stock_portefolio_builder.stock_price_data
+ORDER BY date DESC;
+
+SELECT *
+FROM stock_portefolio_builder.stock_ratio_data
+ORDER BY date DESC;
 
 SELECT *
 FROM stock_portefolio_builder.stock_price_data
@@ -21,7 +26,7 @@ ORDER BY date ASC;
 
 SELECT *
 FROM stock_portefolio_builder.stock_income_stmt_data
-WHERE ticker = "GMAB.CO";
+WHERE ticker = "NOVO-B.CO";
 
 SELECT *
 FROM stock_portefolio_builder.stock_income_stmt_data

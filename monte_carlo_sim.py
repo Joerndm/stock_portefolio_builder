@@ -16,18 +16,24 @@ def monte_carlo_analysis(seed_number, stock_data_df, forecast_df, years, sim_amo
     price_df = pd.DataFrame()
     # calculate amount of days into x future of years
     days = years * 252
-    returns = np.log(1 + forecast_df["open_Price"].pct_change().dropna()).infer_objects(copy=False)
+    
+    # Ensure we're working with a Series, not DataFrame
+    close_prices = forecast_df["close_Price"]
+    if isinstance(close_prices, pd.DataFrame):
+        close_prices = close_prices.iloc[:, 0]  # Take first column if DataFrame
+    
+    returns = np.log(1 + close_prices.pct_change().dropna()).infer_objects(copy=False)
     stat, p = stats.shapiro(returns)
     # print(stat, p)
     alpha = 0.05
     if p > alpha:
-        mu = returns.mean()
+        mu = float(returns.mean())  # Ensure scalar
         print("Sample looks Gaussian (fail to reject H0)")
     else:
-        mu = returns.median()
+        mu = float(returns.median())  # Ensure scalar
         print("Sample does not look Gaussian (reject H0)")
 
-    sigma = returns.std()
+    sigma = float(returns.std())  # Ensure scalar
     dt = years / days
     drift = (mu - (0.5 * sigma**2)) * dt
     shock = sigma * np.sqrt(dt)

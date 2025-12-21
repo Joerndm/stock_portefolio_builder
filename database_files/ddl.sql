@@ -12,12 +12,16 @@ CREATE TABLE `stock_info_data` (
   UNIQUE (`ticker`)
 );
 
+#DROP TABLE IF EXISTS `stock_price_data`;
 CREATE TABLE `stock_price_data` (
   `date` DATE NOT NULL,
   `ticker` VARCHAR(255) NOT NULL ,
   `currency` VARCHAR(255),
-  `trade_Volume` FLOAT,
+  `trade_Volume` BIGINT,
   `open_Price` FLOAT,
+  `high_Price` FLOAT,
+  `low_Price` FLOAT,
+  `close_Price` FLOAT,
   `1D` FLOAT,
   `1M` FLOAT,
   `3M` FLOAT,
@@ -28,15 +32,40 @@ CREATE TABLE `stock_price_data` (
   `3Y` FLOAT,
   `4Y` FLOAT,
   `5Y` FLOAT,
+  `sma_5` FLOAT,
+  `sma_20` FLOAT,
   `sma_40` FLOAT,
   `sma_120` FLOAT,
+  `sma_200` FLOAT,
+  `ema_5` FLOAT,
+  `ema_20` FLOAT,
   `ema_40` FLOAT,
   `ema_120` FLOAT,
+  `ema_200` FLOAT,
+  `std_Div_5` FLOAT,
+  `std_Div_20` FLOAT,
   `std_Div_40` FLOAT,
   `std_Div_120` FLOAT,
+  `std_Div_200` FLOAT,
+  `bollinger_Band_5_2STD` FLOAT,
+  `bollinger_Band_20_2STD` FLOAT,
   `bollinger_Band_40_2STD` FLOAT,
   `bollinger_Band_120_2STD` FLOAT,
+  `bollinger_Band_200_2STD` FLOAT,
   `momentum` FLOAT,
+  `rsi_14` FLOAT,
+  `atr_14` FLOAT,
+  `macd` FLOAT,
+  `macd_signal` FLOAT,
+  `macd_histogram` FLOAT,
+  `volume_sma_20` FLOAT,
+  `volume_ema_20` FLOAT,
+  `volume_ratio` FLOAT,
+  `vwap` FLOAT,
+  `obv` FLOAT,
+  `volatility_5d` FLOAT,
+  `volatility_20d` FLOAT,
+  `volatility_60d` FLOAT,
   CONSTRAINT `PK_stock_price` PRIMARY KEY (`date`, `ticker`),
   FOREIGN KEY (`ticker`) REFERENCES `stock_info_data`(`ticker`)
 );
@@ -112,6 +141,7 @@ CREATE TABLE `stock_cash_flow_data` (
   FOREIGN KEY (`ticker`) REFERENCES `stock_info_data`(`ticker`)
 );
 
+#DROP TABLE IF EXISTS `stock_ratio_data`;
 CREATE TABLE `stock_ratio_data` (
   `date` DATE NOT NULL,
   `ticker` VARCHAR(255) NOT NULL,

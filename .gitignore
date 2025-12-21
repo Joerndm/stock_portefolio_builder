@@ -162,9 +162,11 @@ cython_debug/
 # Folders
 genarated_graphs/
 tuning_dir/
+test_reports/
 
 # Files
 test.py
+Improvement_recommendations.md
 
 # File types
 *.png

@@ -46,6 +46,7 @@ def import_tickers_from_csv(csv_file):
 
     except FileNotFoundError as e:
         raise FileNotFoundError(f"CSV file '{csv_file}' does not exist.") from e
+
 # Fetch company information for given ticker using yfinance
 def fetch_stock_standard_data(stock_symbol = ""):
     """
@@ -98,6 +99,7 @@ def fetch_stock_standard_data(stock_symbol = ""):
 
     except KeyError as e:
         raise KeyError("Could not transform stock_info to a pandas dataframe") from e
+
 # Import stock data using yfinance and a list of stock symbols
 def fetch_stock_price_data(stock_ticker="", start_date=(datetime.datetime.now() - relativedelta(years=15))):
     """
@@ -137,28 +139,21 @@ def fetch_stock_price_data(stock_ticker="", start_date=(datetime.datetime.now() 
         raise KeyError(f"Stock ticker '{stock_ticker}' is invalid or not found.") from e
 
     try:
-        # Create a DataFrame with the stock data
         stock_price_data_df = pd.DataFrame(stock_price_data)
-        # Reset the index of the DataFrame
-        # print("stock_price_data_df")
-        # print(stock_price_data_df)
         stock_price_data_df = stock_price_data_df.droplevel(1, axis=1)
-        # print("stock_price_data_df")
-        # print(stock_price_data_df)
         stock_price_data_df = stock_price_data_df.reset_index()
-        # print("stock_price_data_df")
-        # print(stock_price_data_df)
-        stock_price_data_df = stock_price_data_df[["Date", "Open", "Volume"]]
-        # print("stock_price_data_df")
-        # print(stock_price_data_df)
-        # Rename the columns
+        stock_price_data_df = stock_price_data_df[["Date", "Open", "High", "Low", "Close", "Volume"]]
         stock_price_data_df = stock_price_data_df.rename(
-            columns={"Date" : "date", "Open" : "open_Price", "Volume" : "trade_Volume"})
-        # print("stock_price_data_df")
-        # print(stock_price_data_df)
+                        columns={
+                "Date": "date",
+                "Open": "open_Price",
+                "High": "high_Price",
+                "Low": "low_Price",
+                "Close": "close_Price",
+                "Volume": "trade_Volume"
+            }
+        )
         stock_price_data_df = stock_price_data_df.rename_axis(None, axis=1)
-        # print("stock_price_data_df")
-        # print(stock_price_data_df)
 
     except KeyError as e:
         raise KeyError("Could not transform stock_price_data to a pandas dataframe") from e
@@ -186,10 +181,6 @@ def fetch_stock_price_data(stock_ticker="", start_date=(datetime.datetime.now() 
 
     try:
         # Create a temporary DataFrame with the stock data joined with the stock_price_data_df and stock_info_df
-        # print("stock_price_data_df")
-        # print(stock_price_data_df)
-        # print("stock_info_df")
-        # print(stock_info_df)
         stock_price_data_df = stock_price_data_df.join(
             stock_info_df,
             how="cross"
@@ -200,6 +191,7 @@ def fetch_stock_price_data(stock_ticker="", start_date=(datetime.datetime.now() 
 
     except KeyError as e:
         raise KeyError("Could not join stock_price_data_df with stock_info_df") from e
+
 # Calculate the period returns for the given stock data
 def calculate_period_returns(stock_price_data_df):
     """
@@ -223,39 +215,184 @@ def calculate_period_returns(stock_price_data_df):
     if stock_price_data_df.empty:
         raise ValueError("The stock_price_data_df parameter cannot be empty.")
 
-    if stock_price_data_df["open_Price"].isnull().values.any():
-        raise ValueError("""The stock_price_data_df parameter "open_Price" cannot contain null values.""")
+    if stock_price_data_df["close_Price"].isnull().values.any():
+        raise ValueError("""The stock_price_data_df parameter "close_Price" cannot contain null values.""")
 
     try:
-        # Create a new columns in stock_price_data_df called 1D, 1M, 3M, 6M, 9M, 1Y, 2Y, 3Y, 4Y, and 5Y
-        stock_price_data_df["1D"] = stock_price_data_df["open_Price"].pct_change(1)
-        stock_price_data_df["1M"] = stock_price_data_df["open_Price"].pct_change(21)
-        stock_price_data_df["3M"] = stock_price_data_df["open_Price"].pct_change(63)
-        stock_price_data_df["6M"] = stock_price_data_df["open_Price"].pct_change(126)
-        stock_price_data_df["9M"] = stock_price_data_df["open_Price"].pct_change(189)
-        stock_price_data_df["1Y"] = stock_price_data_df["open_Price"].pct_change(252)
-        stock_price_data_df["2Y"] = stock_price_data_df["open_Price"].pct_change(504)
-        stock_price_data_df["3Y"] = stock_price_data_df["open_Price"].pct_change(756)
-        stock_price_data_df["4Y"] = stock_price_data_df["open_Price"].pct_change(1008)
-        stock_price_data_df["5Y"] = stock_price_data_df["open_Price"].pct_change(1260)
+        periods = {
+            "1D": 1,
+            "1M": 21,
+            "3M": 63,
+            "6M": 126,
+            "9M": 189,
+            "1Y": 252,
+            "2Y": 504,
+            "3Y": 756,
+            "4Y": 1008,
+            "5Y": 1260,
+        }
+        for label, period in periods.items():
+            stock_price_data_df[label] = stock_price_data_df["close_Price"].pct_change(period)
 
     except KeyError as e:
-        raise KeyError("COuld not calculate periodic returns from spicified dataframe.") from e
+        raise KeyError("Could not calculate periodic returns from specified dataframe.") from e
 
     try:
-        # Shift the rows by 1
-        stock_price_data_df[["1M", "3M", "6M", "9M", "1Y", "2Y", "3Y", "4Y", "5Y"]] = stock_price_data_df[["1M", "3M", "6M", "9M", "1Y", "2Y", "3Y", "4Y", "5Y"]].shift(periods=1)
+        # Shift the rows by 1 to avoid look-ahead bias
+        # This ensures we predict TOMORROW'S return using TODAY's features
+        stock_price_data_df[["1D", "1M", "3M", "6M", "9M", "1Y", "2Y", "3Y", "4Y", "5Y"]] = stock_price_data_df[["1D", "1M", "3M", "6M", "9M", "1Y", "2Y", "3Y", "4Y", "5Y"]].shift(periods=1)
         # Return the stock_price_data_df DataFrame
         return stock_price_data_df
 
     except KeyError as e:
         raise KeyError("Could not shift the rows by 1.") from e
+
+# Adding technical indicators using pandas-ta
+def add_technical_indicators(stock_price_data_df):
+    """
+    Adds technical indicators (RSI, MACD, ATR) to the stock data DataFrame.
+
+    Parameters:
+    - stock_price_data_df (pd.DataFrame): DataFrame with stock price data. Must have columns: close_Price, high_Price, low_Price.
+
+    Returns:
+    - pd.DataFrame: DataFrame with added technical indicator columns.
+    """
+    # Check if the stock_price_data_df parameter is empty
+    if stock_price_data_df.empty:
+        raise ValueError("The stock_price_data_df parameter cannot be empty.")
+
+    if stock_price_data_df["close_Price"].isnull().values.any():
+        raise ValueError("""The stock_price_data_df parameter "close_Price" cannot contain null values.""")
+
+    try:
+        stock_price_data_df.ta.rsi(close="close_Price", length=14, append=True)  # RSI with default length of 14
+        stock_price_data_df.ta.macd(close="close_Price", append=True)  # MACD with default configuration
+        stock_price_data_df.ta.atr(high="high_Price", low="low_Price", close="close_Price", length=14, append=True)  # ATR with length 14
+        # Don't drop all rows with any NaN - these will be handled by final dropna(subset=) in main pipeline
+        # Technical indicators create expected NaN values at the beginning due to calculation windows
+    
+    except KeyError as e:
+        raise KeyError("Could not calculate periodic returns from specified dataframe.") from e
+
+    try:
+        # Rename columns to match database schema
+        rename_dict = {}
+        if "MACDh_12_26_9" in stock_price_data_df.columns:
+            rename_dict["MACDh_12_26_9"] = "macd_histogram"
+        if "MACDs_12_26_9" in stock_price_data_df.columns:
+            rename_dict["MACDs_12_26_9"] = "macd_signal"
+        if "MACD_12_26_9" in stock_price_data_df.columns:
+            rename_dict["MACD_12_26_9"] = "macd"
+        
+        if rename_dict:
+            stock_price_data_df.rename(columns=rename_dict, inplace=True)
+        
+        # Only shift columns that exist in the dataframe
+        columns_to_shift = []
+        for col in ["RSI_14", "macd", "macd_histogram", "macd_signal", "ATRl_14", "ATRr_14", "ATR_14"]:
+            if col in stock_price_data_df.columns:
+                columns_to_shift.append(col)
+        
+        if columns_to_shift:
+            stock_price_data_df[columns_to_shift] = stock_price_data_df[columns_to_shift].shift(periods=1)
+        
+        # Return the stock_price_data_df DataFrame
+        return stock_price_data_df
+    
+    except KeyError as e:
+        raise KeyError("Could not shift the rows by 1.") from e
+
+def add_volume_indicators(stock_price_data_df):
+    """
+    Adds volume-based technical indicators to the stock data DataFrame.
+
+    Parameters:
+    - stock_price_data_df (pd.DataFrame): DataFrame with stock price data. Must have columns: close_Price, trade_Volume.
+
+    Returns:
+    - pd.DataFrame: DataFrame with added volume indicator columns (volume_sma_20, volume_ema_20, volume_ratio, vwap, obv).
+    """
+    # Check if the stock_price_data_df parameter is empty
+    if stock_price_data_df.empty:
+        raise ValueError("The stock_price_data_df parameter cannot be empty.")
+
+    if stock_price_data_df["trade_Volume"].isnull().values.any():
+        raise ValueError("""The stock_price_data_df parameter "trade_Volume" cannot contain null values.""")
+
+    try:
+        # Volume SMA (20-day)
+        stock_price_data_df["volume_sma_20"] = stock_price_data_df["trade_Volume"].rolling(window=20).mean()
+        
+        # Volume EMA (20-day)
+        stock_price_data_df["volume_ema_20"] = stock_price_data_df["trade_Volume"].ewm(span=20, adjust=False).mean()
+        
+        # Volume Ratio (current volume / 20-day SMA)
+        stock_price_data_df["volume_ratio"] = stock_price_data_df["trade_Volume"] / stock_price_data_df["volume_sma_20"]
+        
+        # VWAP (Volume Weighted Average Price)
+        # Calculate cumulative (price * volume) and cumulative volume
+        stock_price_data_df["vwap"] = (stock_price_data_df["close_Price"] * stock_price_data_df["trade_Volume"]).cumsum() / stock_price_data_df["trade_Volume"].cumsum()
+        
+        # OBV (On-Balance Volume)
+        # Calculate price change direction
+        price_change = stock_price_data_df["close_Price"].diff()
+        obv_direction = price_change.apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))
+        stock_price_data_df["obv"] = (stock_price_data_df["trade_Volume"] * obv_direction).cumsum()
+        
+        # Shift all volume indicators by 1 to avoid lookahead bias
+        stock_price_data_df[["volume_sma_20", "volume_ema_20", "volume_ratio", "vwap", "obv"]] = stock_price_data_df[["volume_sma_20", "volume_ema_20", "volume_ratio", "vwap", "obv"]].shift(periods=1)
+        
+        return stock_price_data_df
+    
+    except KeyError as e:
+        raise KeyError("Could not calculate volume indicators from specified dataframe.") from e
+
+def add_volatility_indicators(stock_price_data_df):
+    """
+    Adds volatility indicators to the stock data DataFrame.
+
+    Parameters:
+    - stock_price_data_df (pd.DataFrame): DataFrame with stock price data. Must have column: close_Price.
+
+    Returns:
+    - pd.DataFrame: DataFrame with added volatility columns (volatility_5d, volatility_20d, volatility_60d).
+    """
+    # Check if the stock_price_data_df parameter is empty
+    if stock_price_data_df.empty:
+        raise ValueError("The stock_price_data_df parameter cannot be empty.")
+
+    if stock_price_data_df["close_Price"].isnull().values.any():
+        raise ValueError("""The stock_price_data_df parameter "close_Price" cannot contain null values.""")
+
+    try:
+        # Calculate returns for volatility calculation
+        returns = stock_price_data_df["close_Price"].pct_change()
+        
+        # 5-day volatility (rolling standard deviation of returns)
+        stock_price_data_df["volatility_5d"] = returns.rolling(window=5).std()
+        
+        # 20-day volatility
+        stock_price_data_df["volatility_20d"] = returns.rolling(window=20).std()
+        
+        # 60-day volatility
+        stock_price_data_df["volatility_60d"] = returns.rolling(window=60).std()
+        
+        # Shift all volatility indicators by 1 to avoid lookahead bias
+        stock_price_data_df[["volatility_5d", "volatility_20d", "volatility_60d"]] = stock_price_data_df[["volatility_5d", "volatility_20d", "volatility_60d"]].shift(periods=1)
+        
+        return stock_price_data_df
+    
+    except KeyError as e:
+        raise KeyError("Could not calculate volatility indicators from specified dataframe.") from e
+
 # Calculate the moving averages for the given stock data
 def calculate_moving_averages(stock_price_data_df):
     """
     Calculates the moving averages for the given stock data and returns a pandas DataFrame.
 
     The DataFrame will contain the date, stock name, stock symbol, price, and the moving averages.
+    Calculates SMA and EMA for periods: 5, 20, 40, 120, 200
 
     Parameters:
     - stock_price_data_df (pandas.DataFrame): A DataFrame containing the stock data.
@@ -266,101 +403,60 @@ def calculate_moving_averages(stock_price_data_df):
     Raises:
     - ValueError: If the stock_price_data_df parameter is empty.
     - ValueError: If the stock_price_data_df parameter contains null values.
-    - KeyError: If columns cannot be created in the specified DataFrame.
     - KeyError: If the moving averages cannot be calculated from the specified DataFrame.
-    - KeyError: If the rows cannot be shifted by 1.
     """
     # Check if the stock_price_data_df parameter is empty
     if stock_price_data_df.empty:
         raise ValueError("The stock_price_data_df parameter cannot be empty.")
 
-    if stock_price_data_df["open_Price"].isnull().values.any():
-        raise ValueError("""The stock_price_data_df parameter "open_Price" cannot contain null values.""")
+    if stock_price_data_df["close_Price"].isnull().values.any():
+        raise ValueError("""The stock_price_data_df parameter "close_Price" cannot contain null values.""")
 
     try:
-        # Create a new columns in stock_price_data_df called sma_40, sma_120, ema_40, and ema_120
-        stock_price_data_df["sma_40"] = 0.0
-        stock_price_data_df["sma_120"] = 0.0
-        stock_price_data_df["ema_40"] = 0.0
-        stock_price_data_df["ema_120"] = 0.0
-
-    except KeyError as e:
-        raise KeyError("Could not create new columns in the spicified dataframe.") from e
-
-    try:
-        # Loop through each row in stock_price_data_df
-        for index, row in stock_price_data_df.iterrows():
-            # Calculate sma_40 for every row
-            if index == 0:
-                sma_40 = stock_price_data_df.iloc[index]["open_Price"]
-            elif index < 40:
-                sma_40 = stock_price_data_df.iloc[0:index+1]["open_Price"].mean()
-            elif index >= 40:
-                sma_40 = stock_price_data_df.iloc[index-39:index+1]["open_Price"].mean()
-
-            # Update the sma_40 column with the calculated value
-            stock_price_data_df.loc[index, "sma_40"] = sma_40
-            # Calculate sma_120 for every row
-            if index == 0:
-                sma_120 = stock_price_data_df.iloc[index]["open_Price"]
-            elif index < 120:
-                sma_120 = stock_price_data_df.iloc[0:index+1]["open_Price"].mean()
-            elif index >= 120:
-                sma_120 = stock_price_data_df.iloc[index-119:index+1]["open_Price"].mean()
-
-            # Update the sma_120 column with the calculated value
-            stock_price_data_df.loc[index, "sma_120"] = sma_120
-            # Calculate ema_40 for every row
-            if index == 0:
-                ema_40 = stock_price_data_df.iloc[index]["open_Price"]
-            elif index < 40:
-                ema_40 = stock_price_data_df.iloc[0:index+1]["open_Price"].ewm(span=40).mean()
-                if ema_40.empty:
-                    ema_40 = 0.0
-                else:
-                    ema_40 = ema_40.values[-1]
-            elif index >= 40:
-                ema_40 = stock_price_data_df.iloc[index-39:index+1]["open_Price"].ewm(span=40).mean()
-                ema_40 = ema_40.values[-1]
-
-            # Update the ema_40 column with the calculated value
-            stock_price_data_df.loc[index, "ema_40"] = ema_40
-            # Calculate ema_120 for every row
-            if index == 0:
-                ema_120 = stock_price_data_df.iloc[index]["open_Price"]
-            elif index < 120:
-                ema_120 = stock_price_data_df.iloc[0:index+1]["open_Price"].ewm(span=120).mean()
-                if ema_120.empty:
-                    ema_120 = 0.0
-                else:
-                    ema_120 = ema_120.values[-1]
-            elif index >= 120:
-                ema_120 = stock_price_data_df.iloc[index-119:index+1]["open_Price"].ewm(span=120).mean()
-                ema_120 = ema_120.values[-1]
-
-            # Update the ema_120 column with the calculated value
-            stock_price_data_df.loc[index, "ema_120"] = ema_120
-            # Create print statement per 250 index processed
-            if index % 250 == 0:
-                print(f"Processed {index} rows, out of {len(stock_price_data_df)} rows.")
+        # Define all periods we need to calculate
+        periods = [5, 20, 40, 120, 200]
+        
+        # Calculate Simple Moving Averages (SMA) using pandas-ta
+        for period in periods:
+            stock_price_data_df.ta.sma(close="close_Price", length=period, append=True)
+        
+        # Calculate Exponential Moving Averages (EMA) using pandas-ta
+        for period in periods:
+            stock_price_data_df.ta.ema(close="close_Price", length=period, append=True)
+        
+        # Remove any duplicate columns that pandas-ta might have created
+        stock_price_data_df = stock_price_data_df.loc[:, ~stock_price_data_df.columns.duplicated()]
+        
+        # Rename columns to match database schema naming convention
+        rename_map = {}
+        for period in periods:
+            # Only add to rename map if the columns exist
+            if f'SMA_{period}' in stock_price_data_df.columns:
+                rename_map[f'SMA_{period}'] = f'sma_{period}'
+            if f'EMA_{period}' in stock_price_data_df.columns:
+                rename_map[f'EMA_{period}'] = f'ema_{period}'
+        
+        stock_price_data_df.rename(columns=rename_map, inplace=True)
+        
+        # Shift all moving averages by 1 to avoid look-ahead bias
+        # (using yesterday's MA to predict today)
+        ma_columns = [f'sma_{p}' for p in periods if f'sma_{p}' in stock_price_data_df.columns] + \
+                     [f'ema_{p}' for p in periods if f'ema_{p}' in stock_price_data_df.columns]
+        stock_price_data_df[ma_columns] = stock_price_data_df[ma_columns].shift(1)
+        
+        print("Moving averages calculated successfully (periods: 5, 20, 40, 120, 200).")
+        return stock_price_data_df
 
     except KeyError as e:
         raise KeyError("Could not calculate moving averages from specified DataFrame.") from e
 
-    try:
-        stock_price_data_df[["sma_40", "sma_120", "ema_40", "ema_120"]] = stock_price_data_df[["sma_40", "sma_120", "ema_40", "ema_120"]].shift(1)
-        print("Moving averages calculated successfully.")
-        # Return the stock_price_data_df DataFrame
-        return stock_price_data_df
-
-    except KeyError as e:
-        raise KeyError("Could not shift the rows by 1.") from e
 # Calculate the standard deviation of the stock price
 def calculate_standard_diviation_value(stock_price_data_df):
     """
     Calculates the standard deviation of the stock price and returns a pandas DataFrame.
 
     The DataFrame will contain the date, stock name, stock symbol, price, and the standard deviation of the stock price.
+    Calculates rolling standard deviation for periods: 5, 20, 40, 120, 200
 
     Parameters:
     - stock_price_data_df (pandas.DataFrame): A DataFrame containing the stock data.
@@ -370,71 +466,47 @@ def calculate_standard_diviation_value(stock_price_data_df):
 
     Raises:
     - ValueError: If the stock_price_data_df parameter is empty.
-    - ValueError: If the stock_price_data_df parameter "open_Price" contains null values.
-    - KeyError: If new columns cannot be created in the specified DataFrame.
+    - ValueError: If the stock_price_data_df parameter "close_Price" contains null values.
     - KeyError: If the standard deviation of the stock price cannot be calculated from the specified DataFrame.
-    - KeyError: If the rows cannot be shifted by 1.
     """
     # Checking if the combined_stock_price_data_df parameter is empty
     if stock_price_data_df.empty:
         raise ValueError("No stock data provided.")
 
-    if stock_price_data_df["open_Price"].isnull().values.any():
-        raise ValueError("""The stock_price_data_df parameter "open_Price" cannot contain null values.""")
+    if stock_price_data_df["close_Price"].isnull().values.any():
+        raise ValueError("""The stock_price_data_df parameter "close_Price" cannot contain null values.""")
 
     try:
-        # Calculate the standard deviation of the stock price
-        # Create a new columns in stock_price_data_df called std_Div_40, std_Div_120
-        stock_price_data_df["std_Div_40"] = 0.0
-        stock_price_data_df["std_Div_120"] = 0.0
-
-    except KeyError as e:
-        raise KeyError("Could not create new columns in the spicified dataframe") from e
-
-    try:
-        # Loop through each row in stock_price_data_df
-        for index, row in stock_price_data_df.iterrows():
-            # Calculate std_Div_40 for every row
-            if index == 0:
-                Std_Div_40 = 0.0
-            elif index < 40:
-                Std_Div_40 = stock_price_data_df.iloc[0:index+1]["open_Price"].std()
-            elif index >= 40:
-                Std_Div_40 = stock_price_data_df.iloc[index-39:index+1]["open_Price"].std()
-
-            # Update the std_Div_40 column with the calculated value
-            stock_price_data_df.loc[index, "std_Div_40"] = Std_Div_40
-            # Calculate std_Div_120 for every row
-            if index == 0:
-                Std_Div_120 = 0.0
-            elif index < 120:
-                Std_Div_120 = stock_price_data_df.iloc[0:index+1]["open_Price"].std()
-            elif index >= 120:
-                Std_Div_120 = stock_price_data_df.iloc[index-119:index+1]["open_Price"].std()
-
-            # Update the std_Div_120 column with the calculated value
-            stock_price_data_df.loc[index, "std_Div_120"] = Std_Div_120
-            # Create print statement per 250 index processed
-            if index % 250 == 0:
-                print(f"Processed {index} rows, out of {len(stock_price_data_df)} rows.")
+        # Define all periods we need to calculate
+        periods = [5, 20, 40, 120, 200]
+        
+        # Calculate rolling standard deviation using vectorized pandas operations
+        # This is 10-100x faster than loop-based approach
+        for period in periods:
+            # Use rolling window to calculate std for each period
+            # min_periods=period ensures we only calculate when we have enough data
+            stock_price_data_df[f"std_Div_{period}"] = stock_price_data_df["close_Price"].rolling(
+                window=period, 
+                min_periods=period
+            ).std()
+        
+        # Shift all std columns by 1 to avoid look-ahead bias
+        std_columns = [f'std_Div_{p}' for p in periods]
+        stock_price_data_df[std_columns] = stock_price_data_df[std_columns].shift(1)
+        
+        print(f"Standard deviation calculated successfully (periods: 5, 20, 40, 120, 200).")
+        return stock_price_data_df
 
     except KeyError as e:
         raise KeyError("Could not calculate standard deviation of the stock price.") from e
 
-    try:
-        print("Standard deviation of the stock price calculated successfully.")
-        # Return the stock_price_data_df DataFrame
-        stock_price_data_df[["std_Div_40", "std_Div_120"]] = stock_price_data_df[["std_Div_40", "std_Div_120"]].shift(1)
-        return stock_price_data_df
-
-    except KeyError as e:
-        raise KeyError("Could not shift the rows by 1.") from e
 # Calculate the stock price momentum
 def calculate_bollinger_bands(stock_price_data_df):
     """
     Calculates the Bollinger Bands for the given stock data and returns a pandas DataFrame.
 
     The DataFrame will contain the date, stock name, stock symbol, price, and the Bollinger Bands.
+    Calculates Bollinger Bands (4*STD width) for periods: 5, 20, 40, 120, 200
 
     Parameters:
     - stock_price_data_df (pandas.DataFrame): A DataFrame containing the stock data.
@@ -444,67 +516,36 @@ def calculate_bollinger_bands(stock_price_data_df):
 
     Raises:
     - ValueError: If the stock_price_data_df parameter is empty.
-    - ValueError: If the stock_price_data_df parameter "sma_40" contains null values.
-    - ValueError: If the stock_price_data_df parameter "sma_120" contains null values.
-    - ValueError: If the stock_price_data_df parameter "std_Div_40" contains null values.
-    - ValueError: If the stock_price_data_df parameter "std_Div_120" contains null values.
-    - KeyError: If new columns cannot be created in the specified DataFrame.
     - KeyError: If the Bollinger Bands cannot be calculated from the specified DataFrame.
-    - KeyError: If the rows cannot be shifted by 1.
     """
     # Checking if the stock_price_data_df parameter is empty
     if stock_price_data_df.empty:
         raise ValueError("No stock data provided.")
 
-    if stock_price_data_df.iloc[40:]["sma_40"].isnull().values.any():
-        raise ValueError("""The stock_price_data_df parameter "sma_40" cannot contain null values.""")
-
-    if stock_price_data_df.iloc[120:]["sma_120"].isnull().values.any():
-        raise ValueError("""The stock_price_data_df parameter "sma_120" cannot contain null values.""")
-
-    if stock_price_data_df.iloc[40:]["std_Div_40"].isnull().values.any():
-        raise ValueError("""The stock_price_data_df parameter "std_Div_40" cannot contain null values.""")
-
-    if stock_price_data_df.iloc[120:]["std_Div_120"].isnull().values.any():
-        raise ValueError("""The stock_price_data_df parameter "std_Div_120" cannot contain null values.""")
+    # Note: We don't validate for NULL values here because:
+    # 1. Rolling windows and shifts create expected NaNs at the beginning
+    # 2. The final dropna() in the pipeline will clean these up
+    # 3. Bollinger calculation handles NaN propagation naturally
 
     try:
-        # Calculate the Bollinger Bands for the given stock data
-        # Create a new columns in stock_price_data_df called Bollinger_Bands_40, Bollinger_Bands_120
-        stock_price_data_df["bollinger_Band_40_2STD"] = 0.0
-        stock_price_data_df["bollinger_Band_120_2STD"] = 0.0
-
-    except KeyError as e:
-        raise KeyError("Could not create new columns in the spicified dataframe") from e
-
-    try:
-        # Loop through each row in stock_price_data_df
-        for index, row in stock_price_data_df.iterrows():
-            # Calculate Bollinger_Bands_40 for every row
-            Bollinger_Band_40_Upper = stock_price_data_df.iloc[index]["sma_40"] + (stock_price_data_df.iloc[index]["std_Div_40"] * 2)
-            Bollinger_Band_40_Lower = stock_price_data_df.iloc[index]["sma_40"] - (stock_price_data_df.iloc[index]["std_Div_40"] * 2)
-            # Update the Bollinger_Bands_40 column with the calculated value
-            stock_price_data_df.loc[index, "bollinger_Band_40_2STD"] = Bollinger_Band_40_Upper - Bollinger_Band_40_Lower
-            Bollinger_Band_120_Upper = stock_price_data_df.iloc[index]["sma_120"] + (stock_price_data_df.iloc[index]["std_Div_120"] * 2)
-            Bollinger_Band_120_Lower = stock_price_data_df.iloc[index]["sma_120"] - (stock_price_data_df.iloc[index]["std_Div_120"] * 2)
-            # Update the Bollinger_Bands_120 column with the calculated value
-            stock_price_data_df.loc[index, "bollinger_Band_120_2STD"] = Bollinger_Band_120_Upper - Bollinger_Band_120_Lower
-            # Create print statement per 250 index processed
-            if index % 250 == 0:
-                print(f"Processed {index} rows, out of {len(stock_price_data_df)} rows.")
-
-        print("Bollinger Bands calculated successfully.")
+        # Define all periods we need to calculate
+        periods = [5, 20, 40, 120, 200]
+        
+        # Calculate the Bollinger Bands using vectorized operations
+        # Bollinger Band width = (Upper Band - Lower Band) = (SMA + 2*STD) - (SMA - 2*STD) = 4*STD
+        for period in periods:
+            stock_price_data_df[f"bollinger_Band_{period}_2STD"] = 4.0 * stock_price_data_df[f"std_Div_{period}"]
+        
+        # Shift all Bollinger Band columns by 1 to avoid look-ahead bias
+        bb_columns = [f'bollinger_Band_{p}_2STD' for p in periods]
+        stock_price_data_df[bb_columns] = stock_price_data_df[bb_columns].shift(1)
+        
+        print("Bollinger Bands calculated successfully (periods: 5, 20, 40, 120, 200).")
+        return stock_price_data_df
 
     except KeyError as e:
         raise KeyError("Could not calculate Bollinger Bands from specified DataFrame.") from e
 
-    try:
-        # Return the stock_price_data_df DataFrame
-        stock_price_data_df[["bollinger_Band_40_2STD", "bollinger_Band_120_2STD"]] = stock_price_data_df[["bollinger_Band_40_2STD", "bollinger_Band_120_2STD"]].shift(1)
-        return stock_price_data_df
-
-    except KeyError as e:
-        raise KeyError("Could not shift the rows by 1.") from e
 # Calculate the stock price momentum
 def calculate_momentum(stock_price_data_df):
     """
@@ -520,7 +561,7 @@ def calculate_momentum(stock_price_data_df):
 
     Raises:
     - ValueError: If the stock_price_data_df parameter is empty.
-    - ValueError: If the stock_price_data_df parameter "open_Price" contains null values.
+    - ValueError: If the stock_price_data_df parameter "close_Price" contains null values.
     - KeyError: If new columns cannot be created in the specified DataFrame.
     - KeyError: If the momentum cannot be calculated from the specified DataFrame.
     - KeyError: If the rows cannot be shifted by 1.
@@ -529,8 +570,8 @@ def calculate_momentum(stock_price_data_df):
     if stock_price_data_df.empty:
         raise ValueError("No stock data provided.")
 
-    if stock_price_data_df.iloc[40:]["open_Price"].isnull().values.any():
-        raise ValueError("""The stock_price_data_df parameter "open_Price" cannot contain null values.""")
+    if stock_price_data_df.iloc[40:]["close_Price"].isnull().values.any():
+        raise ValueError("""The stock_price_data_df parameter "close_Price" cannot contain null values.""")
 
     # Calculate the momentum for the given stock data
     try:
@@ -541,33 +582,33 @@ def calculate_momentum(stock_price_data_df):
         raise KeyError("Could not create new columns in the spicified dataframe") from e
 
     try:
-        for index, row in stock_price_data_df.iterrows():
-            # Calculate std_Div_40 for every row
-            if index == 0:
-                momentum = 0.0
-            elif stock_price_data_df.iloc[index]["open_Price"] >= stock_price_data_df.iloc[index-1]["open_Price"]:
-                if stock_price_data_df.loc[index-1, "momentum"] <= 0:
-                    momentum = 1
-                    # Update the momentum column with the calculated value
-                    stock_price_data_df.loc[index, "momentum"] = momentum
-                elif stock_price_data_df.loc[index-1, "momentum"] > 0:
-                    momentum = stock_price_data_df.loc[index-1, "momentum"] + 1
-                    # Update the momentum column with the calculated value
-                    stock_price_data_df.loc[index, "momentum"] = momentum
-            elif stock_price_data_df.iloc[index]["open_Price"] < stock_price_data_df.iloc[index-1]["open_Price"]:
-                if stock_price_data_df.loc[index-1, "momentum"] >= 0:
-                    momentum = -1
-                    # Update the momentum column with the calculated value
-                    stock_price_data_df.loc[index, "momentum"] = momentum
-                elif stock_price_data_df.loc[index-1, "momentum"] < 0:
-                    momentum = stock_price_data_df.loc[index-1, "momentum"] - 1
-                    # Update the momentum column with the calculated value
-                    stock_price_data_df.loc[index, "momentum"] = momentum
-
-            # Create print statement per 250 index processed
-            if index % 250 == 0:
-                print(f"Processed {index} rows, out of {len(stock_price_data_df)} rows.")
-
+        # Use vectorized operations to calculate momentum more efficiently
+        stock_price_data_df["price_change"] = stock_price_data_df["close_Price"] - stock_price_data_df["close_Price"].shift(1)
+        stock_price_data_df["momentum"] = 0.0
+        
+        # Create momentum tracking
+        for i in range(1, len(stock_price_data_df)):
+            prev_idx = stock_price_data_df.index[i-1]
+            curr_idx = stock_price_data_df.index[i]
+            
+            if stock_price_data_df.loc[curr_idx, "price_change"] >= 0:  # Price went up or stayed same
+                if stock_price_data_df.loc[prev_idx, "momentum"] <= 0:
+                    stock_price_data_df.loc[curr_idx, "momentum"] = 1
+                else:
+                    stock_price_data_df.loc[curr_idx, "momentum"] = stock_price_data_df.loc[prev_idx, "momentum"] + 1
+            else:  # Price went down
+                if stock_price_data_df.loc[prev_idx, "momentum"] >= 0:
+                    stock_price_data_df.loc[curr_idx, "momentum"] = -1
+                else:
+                    stock_price_data_df.loc[curr_idx, "momentum"] = stock_price_data_df.loc[prev_idx, "momentum"] - 1
+                    
+            # Create print statement per 250 rows processed
+            if i % 250 == 0:
+                print(f"Processed {i} rows, out of {len(stock_price_data_df)} rows.")
+        
+        # Drop the temporary price_change column
+        stock_price_data_df = stock_price_data_df.drop(columns=["price_change"])
+        
         print("Momentum calculated successfully.")
 
     except KeyError as e:
@@ -580,6 +621,7 @@ def calculate_momentum(stock_price_data_df):
 
     except KeyError as e:
         raise KeyError("Could not shift the rows by 1.") from e
+
 # Import financial stock data using yfinance and a list of stock symbols
 def fetch_stock_financial_data(stock_symbol = ""):
     """
@@ -1313,6 +1355,7 @@ def fetch_stock_financial_data(stock_symbol = ""):
             return full_stock_financial_data_df
     except KeyError as e:
         raise KeyError(f"Stock symbol '{symbol}' is invalid or not found.") from e
+
 # Create a function the combines dataframe from fetch_stock_price_data with full_stock_financial_data_df from fetch_stock_financial_data
 def combine_stock_data(stock_price_data_df, full_stock_financial_data_df):
     """
@@ -1353,6 +1396,7 @@ def combine_stock_data(stock_price_data_df, full_stock_financial_data_df):
 
     except ValueError as e:
         raise ValueError(f"Error combining stock data: {e}") from e
+
 # Create a function that calculates P/S, P/E, P/B and P/FCF ratios
 def calculate_ratios(combined_stock_data_df):
     """
@@ -1376,19 +1420,20 @@ def calculate_ratios(combined_stock_data_df):
 
     try:
         # Calculate the P/S ratio
-        combined_stock_data_df["P/S"] = combined_stock_data_df["open_Price"] / (combined_stock_data_df["revenue"] / combined_stock_data_df["average_shares"])
+        combined_stock_data_df["P/S"] = combined_stock_data_df["close_Price"] / (combined_stock_data_df["revenue"] / combined_stock_data_df["average_shares"])
         # Calculate the P/E ratio
-        combined_stock_data_df["P/E"] = combined_stock_data_df["open_Price"] / combined_stock_data_df["eps"]
+        combined_stock_data_df["P/E"] = combined_stock_data_df["close_Price"] / combined_stock_data_df["eps"]
         # Calculate the P/B ratio
-        combined_stock_data_df["P/B"] = combined_stock_data_df["open_Price"] / combined_stock_data_df["book_Value_Per_Share"]
+        combined_stock_data_df["P/B"] = combined_stock_data_df["close_Price"] / combined_stock_data_df["book_Value_Per_Share"]
         # Calculate the P/FCF ratio
-        combined_stock_data_df["P/FCF"] = combined_stock_data_df["open_Price"] / combined_stock_data_df["free_Cash_Flow_Per_Share"]
+        combined_stock_data_df["P/FCF"] = combined_stock_data_df["close_Price"] / combined_stock_data_df["free_Cash_Flow_Per_Share"]
         print("Ratios have been calculated successfully, and added to the dataframe.")
         combined_stock_data_df[["P/S", "P/E", "P/B", "P/FCF"]] = combined_stock_data_df[["P/S", "P/E", "P/B", "P/FCF"]].shift(1)
         return combined_stock_data_df
 
     except ValueError as e:
         raise ValueError(f"Error calculating ratios: {e}") from e
+
 # Drop rows with NaN values in combined_stock_data_df
 def drop_nan_values(combined_stock_data_df):
     """
@@ -1407,10 +1452,14 @@ def drop_nan_values(combined_stock_data_df):
     if combined_stock_data_df.empty:
         raise ValueError("No combined stock data provided.")
 
-    # Drop rows with NaN values in combined_stock_data_df
-    combined_stock_data_df = combined_stock_data_df.dropna()
+    # Drop rows with NaN values only in critical columns (not all columns) to preserve data
+    # Allow calculated features to have NaN values (they will be handled by ml_builder)
+    critical_cols = ['date', 'ticker', 'close_Price']
+    available_critical_cols = [col for col in critical_cols if col in combined_stock_data_df.columns]
+    combined_stock_data_df = combined_stock_data_df.dropna(subset=available_critical_cols)
     combined_stock_data_df = combined_stock_data_df.reset_index(drop=True)
     return combined_stock_data_df
+
 # Create a function that exports the dataframes to an Excel file
 def export_to_excel(dataframes, excel_file):
     """
@@ -1451,6 +1500,7 @@ def export_to_excel(dataframes, excel_file):
 
     except ValueError as e:
         raise ValueError(f"Error exporting to Excel: {e}") from e
+
 # Import stock symbols from a xlsx file
 def import_excel(excel_file):
     """
@@ -1488,6 +1538,7 @@ def import_excel(excel_file):
 
     except ValueError as e:
         raise ValueError(f"Error importing from Excel: {e}") from e
+
 # Convert the Excel file to a CSV file
 def convert_excel_to_csv(dataframe, file_name):
     """
@@ -1551,12 +1602,24 @@ if __name__ == "__main__":
             # Fetch stock data for the imported stock symbols
             stock_price_data_df = fetch_stock_price_data(ticker)
             stock_price_data_df = calculate_period_returns(stock_price_data_df)
+            stock_price_data_df = add_technical_indicators(stock_price_data_df)
+            stock_price_data_df = add_volume_indicators(stock_price_data_df)
+            # Skip volatility indicators for indices (e.g., ^VIX, ^GSPC) - calculating "volatility of volatility" is redundant
+            if stock_info["typeDisp"] != "Index":
+                stock_price_data_df = add_volatility_indicators(stock_price_data_df)
             stock_price_data_df = calculate_moving_averages(stock_price_data_df)
             stock_price_data_df = calculate_standard_diviation_value(stock_price_data_df)
             stock_price_data_df = calculate_bollinger_bands(stock_price_data_df)
             stock_price_data_df = calculate_momentum(stock_price_data_df)
-            stock_price_data_df = stock_price_data_df.dropna()
-            db_interactions.export_stock_price_data(stock_price_data_df)
+            # Drop rows with NaN only in critical columns (not all columns) to preserve data
+            # Critical columns: price data, date, ticker - allow NaN in calculated features
+            critical_cols = ['date', 'ticker', 'close_Price', 'open_Price', 'high_Price', 'low_Price']
+            stock_price_data_df = stock_price_data_df.dropna(subset=critical_cols)
+            print(f"After dropna(): {len(stock_price_data_df)} rows remaining")
+            if not stock_price_data_df.empty:
+                db_interactions.export_stock_price_data(stock_price_data_df)
+            else:
+                print("⚠️  WARNING: DataFrame is empty after dropna(), skipping export")
             print("Stock data has been fetched and exported to the database")
         elif db_interactions.does_stock_exists_stock_price_data(ticker) is True:
             print("Some stock data already exists")
@@ -1577,18 +1640,37 @@ if __name__ == "__main__":
                 stock_price_data_df["date"] = pd.to_datetime(stock_price_data_df["date"])
                 print(f"New date is: {new_date}")
                 new_stock_price_data_df = fetch_stock_price_data(ticker, new_date)
+                
+                # Check if new data was actually fetched
+                if new_stock_price_data_df.empty:
+                    print(f"No new data available for {ticker} from {new_date}")
+                    print("Stock data is already up to date")
+                    continue
+                
                 # print("new_stock_price_data_df")
                 # print(new_stock_price_data_df)
                 stock_price_data_df = pd.concat([stock_price_data_df, new_stock_price_data_df], axis=0, ignore_index=True)
                 # print("stock_price_data_df")
                 # print(stock_price_data_df)
                 stock_price_data_df = calculate_period_returns(stock_price_data_df)
+                stock_price_data_df = add_technical_indicators(stock_price_data_df)
+                stock_price_data_df = add_volume_indicators(stock_price_data_df)
+                # Skip volatility indicators for indices (e.g., ^VIX, ^GSPC) - calculating "volatility of volatility" is redundant
+                if stock_info["typeDisp"] != "Index":
+                    stock_price_data_df = add_volatility_indicators(stock_price_data_df)
                 stock_price_data_df = calculate_moving_averages(stock_price_data_df)
                 stock_price_data_df = calculate_standard_diviation_value(stock_price_data_df)
                 stock_price_data_df = calculate_bollinger_bands(stock_price_data_df)
                 stock_price_data_df = calculate_momentum(stock_price_data_df)
                 stock_price_data_df = stock_price_data_df.loc[stock_price_data_df["date"] >= new_stock_price_data_df.loc[0, "date"]]
-                db_interactions.export_stock_price_data(stock_price_data_df)
+                # Drop rows with NaN only in critical columns (not all columns) to preserve data
+                critical_cols = ['date', 'ticker', 'close_Price', 'open_Price', 'high_Price', 'low_Price']
+                stock_price_data_df = stock_price_data_df.dropna(subset=critical_cols)
+                print(f"After dropna(): {len(stock_price_data_df)} rows remaining")
+                if not stock_price_data_df.empty:
+                    db_interactions.export_stock_price_data(stock_price_data_df)
+                else:
+                    print("⚠️  WARNING: DataFrame is empty after dropna(), skipping export")
                 print("Stock data has been fetched and exported to the database")
 
         if stock_info["typeDisp"] != "Index":

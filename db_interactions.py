@@ -574,7 +574,7 @@ def export_stock_price_data(stock_price_data_df=""):
     None
 
     Raises:
-    - ValueError: If the stock_price_data_df parameter is empty.
+    - ValueError: If the stock_price_data_df is empty.
     - ValueError: If the stock_price_data_df parameter does not contain the column "date".
     - ValueError: If the stock_price_data_df parameter does not contain the column "ticker".
     - ValueError: If the stock_price_data_df parameter "date" contains NaN values.
@@ -585,7 +585,7 @@ def export_stock_price_data(stock_price_data_df=""):
     - KeyError: If the stock_price_data_df cannot be exported to stock_price_data in the database.
     """
     if stock_price_data_df.empty:
-        raise ValueError("The stock_price_data_df parameter cannot be empty.")
+        raise ValueError("The stock_price_data_df cannot be empty.")
 
     if 'date' not in stock_price_data_df.columns:
         raise ValueError("The stock_price_data_df parameter must contain the column 'date'.")
@@ -613,24 +613,45 @@ def export_stock_price_data(stock_price_data_df=""):
         raise KeyError(f"Could not establish connection to the database. Error: {e}") from e
 
     try:
-        column_list = ['currency', 'trade_Volume',
-            'open_Price', '1D', '1M', '3M', '6M', '9M', '1Y', '2Y', '3Y', '4Y', '5Y',
-            'sma_40', 'sma_120', 'ema_40', 'ema_120', 'std_Div_40', 'std_Div_120',
-            'bollinger_Band_40_2STD', 'bollinger_Band_120_2STD', 'momentum'
-            ]
-
-        for column in column_list:
-            if column not in stock_price_data_df.columns:
-                column_list.pop(column)
-
-        column_list.insert(0, 'date')
-        column_list.insert(1, 'ticker')
-
+        # Step 1: Remove duplicate columns (keep first occurrence)
+        stock_price_data_df = stock_price_data_df.loc[:, ~stock_price_data_df.columns.duplicated()]
+        
+        # Step 2: Rename columns to match database schema (case-sensitive)
+        column_rename_map = {
+            'RSI_14': 'rsi_14',
+            'ATR_14': 'atr_14',
+            'ATRr_14': 'atr_14',  # Handle both variations
+            'ATRl_14': 'atr_14'   # Handle all ATR variations
+        }
+        stock_price_data_df = stock_price_data_df.rename(columns=column_rename_map)
+        
+        # Step 3: Define all expected database columns (from ddl.sql)
+        db_columns = [
+            'date', 'ticker', 'currency', 'trade_Volume', 
+            'open_Price', 'high_Price', 'low_Price', 'close_Price',
+            '1D', '1M', '3M', '6M', '9M', '1Y', '2Y', '3Y', '4Y', '5Y',
+            'sma_5', 'sma_20', 'sma_40', 'sma_120', 'sma_200',
+            'ema_5', 'ema_20', 'ema_40', 'ema_120', 'ema_200',
+            'std_Div_5', 'std_Div_20', 'std_Div_40', 'std_Div_120', 'std_Div_200',
+            'bollinger_Band_5_2STD', 'bollinger_Band_20_2STD', 'bollinger_Band_40_2STD',
+            'bollinger_Band_120_2STD', 'bollinger_Band_200_2STD',
+            'momentum', 'rsi_14', 'atr_14', 'macd', 'macd_signal', 'macd_histogram',
+            'volume_sma_20', 'volume_ema_20', 'volume_ratio', 'vwap', 'obv',
+            'volatility_5d', 'volatility_20d', 'volatility_60d'
+        ]
+        
+        # Step 4: Add missing columns with None/NULL values
+        for col in db_columns:
+            if col not in stock_price_data_df.columns:
+                stock_price_data_df[col] = None
+        
+        # Step 5: Select only database columns in correct order
+        stock_price_data_df = stock_price_data_df[db_columns]
+        
     except Exception as e:
-        raise KeyError(f"Could not drop columns from stock_price_data_df. Error: {e}") from e
+        raise KeyError(f"Could not prepare stock_price_data_df columns for database export. Error: {e}") from e
 
     try:
-        stock_price_data_df = stock_price_data_df[column_list]
         stock_price_data_df.to_sql(name="stock_price_data", con=db_con, index=False, if_exists="append")
 
     except Exception as e:
