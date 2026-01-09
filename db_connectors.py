@@ -1,4 +1,18 @@
-"""Estabilishes a connection to the database"""
+"""
+Database Connection Module.
+
+This module provides functions to establish connections to MySQL databases
+using different connectors for various use cases.
+
+Functions:
+    mysql_connector: Creates a MySQL connection using mysql.connector.
+    pandas_mysql_connector: Creates a SQLAlchemy engine for pandas operations.
+
+Examples:
+    >>> db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+    >>> db_con = mysql_connector(db_host, db_user, db_pass, db_name)
+    >>> engine = pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+"""
 from sqlalchemy import create_engine
 import mysql.connector as mysql
 
@@ -59,6 +73,7 @@ def pandas_mysql_connector(mysql_host, mysql_user, mysql_password, mysql_databas
     except mysql.Error as e:
         raise mysql.Error("Could not connect to the database.") from e
 
+# Test the database connection functions
 if __name__ == "__main__":
     db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
     print(type(db_host), type(db_user), type(db_pass), type(db_name))

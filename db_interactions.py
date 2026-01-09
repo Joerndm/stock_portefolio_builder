@@ -1,4 +1,33 @@
-"""This module contains functions for interacting with the database."""
+"""
+Database Interaction Module
+
+This module provides functions for interacting with a MySQL database containing stock market data.
+It handles importing and exporting data across multiple tables including stock information, price data,
+financial statements, ratios, and predictions.
+
+Tables:
+    - stock_info_data: Basic stock information and tickers
+    - stock_price_data: Historical price and technical indicator data
+    - stock_income_stmt_data: Income statement financial data
+    - stock_balancesheet_data: Balance sheet financial data
+    - stock_cash_flow_data: Cash flow statement data
+    - stock_ratio_data: Financial ratios and metrics
+    - stock_prediction_data: Stock prediction data
+
+Functions:
+    - import_ticker_list: Retrieves all stock tickers from the database
+    - does_stock_exists_*: Checks if a stock exists in specific tables
+    - import_stock_*: Imports data from various tables
+    - export_stock_*: Exports data to various tables
+    - import_stock_dataset: Combines and imports complete stock dataset
+
+Dependencies:
+    - pandas: For data manipulation and SQL operations
+    - fetch_secrets: For retrieving database credentials
+    - db_connectors: For establishing database connections
+
+Author: Stock Portfolio Builder
+"""
 import pandas as pd
 
 import fetch_secrets
@@ -990,8 +1019,25 @@ def export_stock_ratio_data(stock_ratio_data_df=""):
 
 def import_stock_dataset(stock_ticker=""):
     """
-    """
+    This function imports a complete stock dataset by combining data from multiple tables in the database.
+    It merges stock price data, financial statements (income, balance sheet, cash flow), and ratio data,
+    along with VIX data for market volatility reference.
 
+    Args:
+    stock_ticker: str - The stock ticker symbol to fetch the complete dataset for
+
+    Returns:
+    combined_stock_data_df: pandas DataFrame - A comprehensive dataset containing price data with 
+                                               forward-filled financial statement data and ratio data
+
+    Raises:
+    - KeyError: If the secrets cannot be fetched.
+    - KeyError: If the connection to the database cannot be established.
+    - ValueError: If stock_ticker is empty or if the stock does not exist in any of the required tables
+                  (stock_info_data, stock_price_data, stock_income_stmt_data, stock_balancesheet_data, 
+                   stock_cash_flow_data, stock_ratio_data).
+    - KeyError: If the dataset cannot be imported from the database tables.
+    """
     try:
         # Fetch the secrets from the secret_import function
         db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()

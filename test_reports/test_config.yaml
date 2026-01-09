@@ -1,0 +1,70 @@
+# Test Configuration for Master Test Suite
+# ========================================
+
+# Test categories to run (set to false to skip)
+categories:
+  functional: true
+  ml: true
+  integration: true
+  regression: true
+  performance: true
+
+# Quick mode settings (for CI/CD or fast validation)
+quick_mode:
+  enabled: false
+  skip_categories:
+    - ml
+    - integration
+    - regression
+
+# Regression testing thresholds
+regression_thresholds:
+  r2_tolerance: 0.05          # Allow 5% R² degradation
+  mse_tolerance: 0.05         # Allow 5% MSE increase
+  mae_tolerance: 0.05         # Allow 5% MAE increase
+  time_tolerance: 0.20        # Allow 20% training time increase
+
+# Performance benchmarks
+performance_benchmarks:
+  feature_calculation_max_time: 2.0    # seconds for 500 rows
+  data_split_max_time: 0.1             # seconds for 1000 rows
+  model_training_timeout: 300          # seconds (5 minutes)
+
+# Test data generation
+test_data:
+  n_samples: 200
+  n_features: 30
+  train_ratio: 0.65
+  val_ratio: 0.15
+  test_ratio: 0.20
+  random_seed: 42
+
+# Model training parameters (for testing)
+test_training_params:
+  max_retraining_attempts: 2
+  lstm_time_steps: 10
+  rf_trials: 10
+  xgb_trials: 10
+  lstm_trials: 5
+
+# Industry standard metrics to validate
+required_metrics:
+  - mse        # Mean Squared Error
+  - r2         # R-squared
+  - mae        # Mean Absolute Error
+  - rmse       # Root Mean Squared Error (calculated from MSE)
+
+# Expected model behaviors
+expected_behaviors:
+  overfitting_detection: true
+  early_stopping: true
+  hyperparameter_tuning: true
+  ensemble_prediction: true
+  multi_metric_evaluation: true
+
+# Test output settings
+output:
+  verbose: false
+  save_results: true
+  results_directory: "./test_results"
+  log_file: "./test_master_suite.log"

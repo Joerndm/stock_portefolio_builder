@@ -1,7 +1,17 @@
-""""""
+"""
+Data Scalers Module
+
+This module provides functions for scaling datasets using scikit-learn's preprocessing scalers.
+It includes implementations for both MinMaxScaler and StandardScaler with separate fit and 
+transform operations for MinMaxScaler to support training/testing data workflows.
+
+Functions:
+    data_preprocessing_minmax_scaler_fit: Fits a MinMaxScaler to the dataset.
+    data_preprocessing_minmax_scaler_transform: Transforms data using a fitted MinMaxScaler.
+    data_preprocessing_std_scaler: Fits and transforms data using StandardScaler.
+"""
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 
-# Create a function to fits the scaler for the dataset with MinMaxScaler
 def data_preprocessing_minmax_scaler_fit(data):
     """
     Fits the scaler for the dataset with MinMaxScaler.
@@ -27,7 +37,6 @@ def data_preprocessing_minmax_scaler_fit(data):
     except ValueError as e:
         raise ValueError("The specified component amount is greater than the number of features in the dataset.") from e
 
-# Create a function to transform the dataset with MinMaxScaler
 def data_preprocessing_minmax_scaler_transform(scaler, data):
     """
     Transform the dataset with MinMaxScaler.
@@ -50,7 +59,6 @@ def data_preprocessing_minmax_scaler_transform(scaler, data):
     except ValueError as e:
         raise ValueError("The specified component amount is greater than the number of features in the dataset.") from e
 
-# Create a function to fits the scaler for the dataset with StandardScaler
 def data_preprocessing_std_scaler(data):
     """
     Fits the scaler for the dataset with StandardScaler.

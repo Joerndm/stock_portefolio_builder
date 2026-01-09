@@ -1,3 +1,21 @@
+"""
+Dataset splitting utilities for stock portfolio analysis.
+
+This module provides functionality to split stock market datasets into training,
+validation, and test sets with proper scaling. It handles both feature (x) and
+target (y) data preparation for machine learning models, ensuring no data leakage
+between sets.
+
+Key features:
+- Train/validation/test split with configurable proportions
+- MinMax scaling for features and targets
+- Separate prediction dataset for future forecasting
+- Automatic handling of temporal data and missing values
+
+Functions:
+    dataset_train_test_split: Split and scale dataset into train/val/test sets
+"""
+
 import math
 from sklearn.model_selection import train_test_split
 import numpy as np
@@ -6,7 +24,6 @@ import pandas as pd
 import db_interactions
 import data_scalers
 
-# Split the dataset into training and test data
 def dataset_train_test_split(dataset_dataframe, test_size=0.10, validation_size=0.20, rs=1):
     """
     Split the dataset into training, validation, and test data with proper scaling for both x and y values.

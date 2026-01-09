@@ -1,4 +1,64 @@
-"""This module contains functions for fetching stock data using yfinance."""
+"""
+Stock Data Fetch Module
+
+This module provides comprehensive functions for fetching, processing, and managing stock market data
+using the yfinance library. It handles both price data and fundamental financial data for stocks and indices.
+
+Main Features:
+    - Import stock symbols from CSV files
+    - Fetch real-time and historical stock price data
+    - Calculate technical indicators (RSI, MACD, ATR, Bollinger Bands, Moving Averages)
+    - Calculate volume-based indicators (Volume SMA/EMA, VWAP, OBV)
+    - Calculate volatility metrics
+    - Fetch and process fundamental financial data (income statements, balance sheets, cash flow)
+    - Calculate financial ratios (P/E, P/B, P/S, P/FCF, ROE, ROA, etc.)
+    - Calculate period returns (1D, 1M, 3M, 6M, 9M, 1Y, 2Y, 3Y, 4Y, 5Y)
+    - Export/import data to/from Excel and CSV formats
+    - Database integration for storing and retrieving stock data
+
+Key Functions:
+    - import_tickers_from_csv: Load stock symbols from CSV file
+    - fetch_stock_standard_data: Get basic company information
+    - fetch_stock_price_data: Retrieve historical price data
+    - fetch_stock_financial_data: Get fundamental financial statements
+    - calculate_period_returns: Compute returns over multiple time periods
+    - add_technical_indicators: Add RSI, MACD, ATR indicators
+    - add_volume_indicators: Add volume-based technical indicators
+    - add_volatility_indicators: Calculate volatility metrics
+    - calculate_moving_averages: Compute SMA and EMA (5, 20, 40, 120, 200 periods)
+    - calculate_standard_diviation_value: Calculate rolling standard deviation
+    - calculate_bollinger_bands: Compute Bollinger Bands
+    - calculate_momentum: Calculate price momentum
+    - calculate_ratios: Compute valuation ratios (P/E, P/B, P/S, P/FCF)
+    - combine_stock_data: Merge price and financial data
+    - export_to_excel: Export data to Excel file
+    - import_excel: Import data from Excel file
+    - convert_excel_to_csv: Convert Excel data to CSV format
+
+Data Processing Pipeline:
+    1. Import ticker symbols from CSV
+    2. Fetch company info and price data
+    3. Calculate technical indicators and returns
+    4. Fetch fundamental financial data (for non-index securities)
+    5. Calculate financial ratios
+    6. Export to database or Excel/CSV
+
+Dependencies:
+    - yfinance: For fetching stock data from Yahoo Finance
+    - pandas: For data manipulation and analysis
+    - pandas_ta: For technical analysis indicators
+    - dateutil: For date calculations
+    - xlsxwriter: For Excel file export
+
+Note:
+    - All technical indicators are shifted by 1 period to avoid look-ahead bias
+    - NaN values in calculated features are preserved for ML pipeline handling
+    - Different calculation methods are used for banks, insurance, and biotechnology sectors
+    - Index securities (e.g., ^VIX, ^GSPC) skip certain calculations like volatility of volatility
+
+Author: Joern
+Last Modified: 2026
+"""
 import os
 import time
 import datetime
@@ -7,7 +67,6 @@ import pandas as pd
 import yfinance as yf
 import pandas_ta as ta
 
-# Import stock symbols from a CSV file
 def import_tickers_from_csv(csv_file):
     """
     Imports stock symbols from a CSV file and returns a pandas DataFrame.
@@ -47,7 +106,6 @@ def import_tickers_from_csv(csv_file):
     except FileNotFoundError as e:
         raise FileNotFoundError(f"CSV file '{csv_file}' does not exist.") from e
 
-# Fetch company information for given ticker using yfinance
 def fetch_stock_standard_data(stock_symbol = ""):
     """
     Fetches company information for the given stock symbols and returns a pandas DataFrame.
@@ -100,7 +158,6 @@ def fetch_stock_standard_data(stock_symbol = ""):
     except KeyError as e:
         raise KeyError("Could not transform stock_info to a pandas dataframe") from e
 
-# Import stock data using yfinance and a list of stock symbols
 def fetch_stock_price_data(stock_ticker="", start_date=(datetime.datetime.now() - relativedelta(years=15))):
     """
     Fetches stock data using yfinance for the given stock symbols and returns a pandas DataFrame.
@@ -192,7 +249,6 @@ def fetch_stock_price_data(stock_ticker="", start_date=(datetime.datetime.now() 
     except KeyError as e:
         raise KeyError("Could not join stock_price_data_df with stock_info_df") from e
 
-# Calculate the period returns for the given stock data
 def calculate_period_returns(stock_price_data_df):
     """
     Calculates the period returns for the given stock data and returns a pandas DataFrame.
@@ -247,7 +303,6 @@ def calculate_period_returns(stock_price_data_df):
     except KeyError as e:
         raise KeyError("Could not shift the rows by 1.") from e
 
-# Adding technical indicators using pandas-ta
 def add_technical_indicators(stock_price_data_df):
     """
     Adds technical indicators (RSI, MACD, ATR) to the stock data DataFrame.
@@ -386,7 +441,6 @@ def add_volatility_indicators(stock_price_data_df):
     except KeyError as e:
         raise KeyError("Could not calculate volatility indicators from specified dataframe.") from e
 
-# Calculate the moving averages for the given stock data
 def calculate_moving_averages(stock_price_data_df):
     """
     Calculates the moving averages for the given stock data and returns a pandas DataFrame.
@@ -450,7 +504,6 @@ def calculate_moving_averages(stock_price_data_df):
     except KeyError as e:
         raise KeyError("Could not calculate moving averages from specified DataFrame.") from e
 
-# Calculate the standard deviation of the stock price
 def calculate_standard_diviation_value(stock_price_data_df):
     """
     Calculates the standard deviation of the stock price and returns a pandas DataFrame.
@@ -500,7 +553,6 @@ def calculate_standard_diviation_value(stock_price_data_df):
     except KeyError as e:
         raise KeyError("Could not calculate standard deviation of the stock price.") from e
 
-# Calculate the stock price momentum
 def calculate_bollinger_bands(stock_price_data_df):
     """
     Calculates the Bollinger Bands for the given stock data and returns a pandas DataFrame.
@@ -546,7 +598,6 @@ def calculate_bollinger_bands(stock_price_data_df):
     except KeyError as e:
         raise KeyError("Could not calculate Bollinger Bands from specified DataFrame.") from e
 
-# Calculate the stock price momentum
 def calculate_momentum(stock_price_data_df):
     """
     Calculates the momentum for the given stock data and returns a pandas DataFrame.
@@ -622,7 +673,6 @@ def calculate_momentum(stock_price_data_df):
     except KeyError as e:
         raise KeyError("Could not shift the rows by 1.") from e
 
-# Import financial stock data using yfinance and a list of stock symbols
 def fetch_stock_financial_data(stock_symbol = ""):
     """
     Fetches financial stock data using yfinance and a list of stock symbols.
@@ -1356,7 +1406,6 @@ def fetch_stock_financial_data(stock_symbol = ""):
     except KeyError as e:
         raise KeyError(f"Stock symbol '{symbol}' is invalid or not found.") from e
 
-# Create a function the combines dataframe from fetch_stock_price_data with full_stock_financial_data_df from fetch_stock_financial_data
 def combine_stock_data(stock_price_data_df, full_stock_financial_data_df):
     """
     Combines stock data with financial stock data.
@@ -1397,7 +1446,6 @@ def combine_stock_data(stock_price_data_df, full_stock_financial_data_df):
     except ValueError as e:
         raise ValueError(f"Error combining stock data: {e}") from e
 
-# Create a function that calculates P/S, P/E, P/B and P/FCF ratios
 def calculate_ratios(combined_stock_data_df):
     """
     Calculates P/S, P/E, P/B and P/FCF ratios.
@@ -1434,7 +1482,6 @@ def calculate_ratios(combined_stock_data_df):
     except ValueError as e:
         raise ValueError(f"Error calculating ratios: {e}") from e
 
-# Drop rows with NaN values in combined_stock_data_df
 def drop_nan_values(combined_stock_data_df):
     """
     Drops rows with NaN values in the given DataFrame.
@@ -1460,7 +1507,6 @@ def drop_nan_values(combined_stock_data_df):
     combined_stock_data_df = combined_stock_data_df.reset_index(drop=True)
     return combined_stock_data_df
 
-# Create a function that exports the dataframes to an Excel file
 def export_to_excel(dataframes, excel_file):
     """
     Exports the given dataframes to an Excel file with separate sheets.
@@ -1501,7 +1547,6 @@ def export_to_excel(dataframes, excel_file):
     except ValueError as e:
         raise ValueError(f"Error exporting to Excel: {e}") from e
 
-# Import stock symbols from a xlsx file
 def import_excel(excel_file):
     """
     Imports the data from the given Excel file.
@@ -1539,7 +1584,6 @@ def import_excel(excel_file):
     except ValueError as e:
         raise ValueError(f"Error importing from Excel: {e}") from e
 
-# Convert the Excel file to a CSV file
 def convert_excel_to_csv(dataframe, file_name):
     """
     Converts the given Excel file to a CSV file.

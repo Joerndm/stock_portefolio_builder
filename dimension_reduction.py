@@ -1,3 +1,32 @@
+"""
+Dimension Reduction Module for Stock Portfolio Builder.
+
+This module provides functions for reducing the dimensionality of stock market datasets
+using various feature selection and transformation techniques. It supports three main approaches:
+
+1. SelectKBest: Statistical feature selection using r_regression scores
+2. Random Forest: Feature selection based on tree-based feature importance
+3. PCA: Principal Component Analysis for dimensionality reduction
+
+The module ensures proper train/validation/test separation to prevent data leakage
+during the feature selection process.
+
+Functions:
+    feature_selection: Reduce dimensions using SelectKBest with r_regression.
+    feature_selection_rf: Reduce dimensions using Random Forest feature importance.
+    pca_dataset_transformation: Reduce dimensions using Principal Component Analysis.
+
+Example:
+    >>> import dimension_reduction as dr
+    >>> x_train, x_val, x_test, x_pred, selector, features = dr.feature_selection(
+    ...     30, x_training_data, x_val_data, x_test_data,
+    ...     y_training_data, y_val_data, y_test_data,
+    ...     prediction_data, dataset_df
+    ... )
+
+Author: Stock Portfolio Builder Team
+"""
+
 import pandas as pd
 import numpy as np
 from sklearn.feature_selection import SelectKBest
@@ -8,7 +37,6 @@ from sklearn.ensemble import RandomForestRegressor
 import db_interactions
 import split_dataset
 
-# Create a function to reduce the dataset dimensions with SelectKBest
 def feature_selection(dimensions, x_training_data, x_val_data, x_test_data, y_training_data, y_val_data, y_test_data, prediction_data, dataset_df):
     """
     Reduce the dataset dimensions with SelectKBest.
@@ -86,7 +114,6 @@ def feature_selection(dimensions, x_training_data, x_val_data, x_test_data, y_tr
 
     return reduced_training_dataset, reduced_val_dataset, reduced_test_dataset, reduced_prediction_dataset, selected_features, selected_features_list
 
-# Create a function to reduce the dataset dimensions with RandomForest feature importance
 def feature_selection_rf(dimensions, x_training_data, x_val_data, x_test_data, y_training_data, y_val_data, y_test_data, prediction_data, dataset_df):
     """
     Reduce the dataset dimensions using RandomForest feature importance.
@@ -180,7 +207,6 @@ def feature_selection_rf(dimensions, x_training_data, x_val_data, x_test_data, y
     
     return reduced_training_dataset, reduced_val_dataset, reduced_test_dataset, reduced_prediction_dataset, rf_selector, selected_features_list
 
-# Create a function to reduce the dataset dimensions with PCA
 def pca_dataset_transformation(x_training_data, x_val_data, x_test_data, prediction_data, component_amount):
     """
     Reduce the dataset dimensions with PCA.

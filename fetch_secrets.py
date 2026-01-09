@@ -1,5 +1,13 @@
-""""""
+"""
+Module for fetching secret environment variables.
 
+This module provides functionality to load and retrieve database configuration
+secrets from a .env file. It uses the python-dotenv library to load environment
+variables and returns them for use in database connections.
+
+Functions:
+    secret_import: Loads and returns database configuration from environment variables.
+"""
 import os
 from dotenv import load_dotenv
 

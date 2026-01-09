@@ -1,0 +1,40 @@
+{
+  "version": "1.0",
+  "date_created": "2025-12-17",
+  "description": "Baseline metrics for regression testing",
+  "ensemble_metrics": {
+    "r2": 0.75,
+    "mse": 0.15,
+    "mae": 0.30,
+    "note": "These are placeholder values. Run actual tests to generate real baseline."
+  },
+  "individual_models": {
+    "lstm": {
+      "r2": 0.70,
+      "mse": 0.18,
+      "mae": 0.35
+    },
+    "random_forest": {
+      "r2": 0.72,
+      "mse": 0.16,
+      "mae": 0.32
+    },
+    "xgboost": {
+      "r2": 0.74,
+      "mse": 0.15,
+      "mae": 0.31
+    }
+  },
+  "performance_metrics": {
+    "rf_training_time": 30.0,
+    "xgb_training_time": 25.0,
+    "lstm_training_time": 45.0,
+    "feature_calculation_time": 1.5,
+    "data_processing_time": 0.05
+  },
+  "data_quality": {
+    "overfitting_score_threshold": 0.15,
+    "early_stopping_max_attempts": 3,
+    "min_samples_per_feature": 10
+  }
+}

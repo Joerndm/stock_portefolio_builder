@@ -1,3 +1,160 @@
+"""
+Machine Learning Model Builder for Stock Price Prediction
+
+This module provides comprehensive machine learning infrastructure for predicting stock price changes
+using ensemble methods combining LSTM, Random Forest, and XGBoost models. It includes automated
+hyperparameter tuning, overfitting detection, model retraining, and performance analysis.
+
+Key Features:
+-------------
+- **Multi-Model Ensemble**: Combines LSTM (deep learning), Random Forest, and XGBoost predictions
+- **Automated Hyperparameter Tuning**: Uses Keras Tuner with Bayesian Optimization and Hyperband
+- **Overfitting Detection**: Multi-metric detection system with automatic retraining
+- **Adaptive Training**: Dynamically adjusts search space when overfitting is detected
+- **Early Stopping**: Prevents wasted computation when hyperparameter search converges
+- **Sequence Modeling**: LSTM with bidirectional layers and batch normalization
+- **Feature Importance Analysis**: Identifies most predictive features
+- **Data Health Diagnostics**: Pre-training validation of dataset quality
+- **Future Price Prediction**: Day-by-day forecasting with dynamic feature recalculation
+- **Performance Analysis**: Comprehensive comparison of predicted vs actual values
+
+Models:
+-------
+1. **LSTM (Long Short-Term Memory)**:
+   - Bidirectional architecture with multiple stacked layers
+   - Batch normalization for training stability
+   - L2 regularization and dropout for overfitting prevention
+   - Tunable loss functions (MAE, MSE, Huber, MAPE)
+   - Gradient clipping to prevent exploding gradients
+   - Operates on scaled data (MinMaxScaler)
+
+2. **Random Forest Regressor**:
+   - Ensemble of decision trees with bagging
+   - Feature importance ranking
+   - Tunable max_depth, min_samples_split, max_features
+   - Bootstrap sampling for generalization
+   - Operates on unscaled data (scale-invariant)
+
+3. **XGBoost Regressor**:
+   - Gradient boosting with regularization
+   - L1/L2 regularization for feature selection
+   - Tunable learning rate, subsample, colsample_bytree
+   - Histogram-based tree construction for speed
+   - Operates on unscaled data
+
+Hyperparameter Tuning:
+---------------------
+- **LSTM**: Bayesian Optimization with up to 50 trials
+  - Layer count, units per layer, dropout rates
+  - Learning rate, optimizer (Adam/RMSprop), clipnorm
+  - Loss function, batch size, early stopping patience
+
+- **Random Forest**: Hyperband with up to 100 trials
+  - n_estimators, max_depth, min_samples_split/leaf
+  - max_features, bootstrap, max_samples
+  - Criterion (squared_error, absolute_error, friedman_mse)
+
+- **XGBoost**: Bayesian Optimization with up to 60 trials
+  - n_estimators, max_depth, learning_rate
+  - subsample, colsample_bytree, min_child_weight
+  - gamma, reg_alpha (L1), reg_lambda (L2)
+
+Overfitting Detection:
+---------------------
+Multi-metric system comparing train/validation/test performance:
+- **MSE Degradation**: Tracks increase from train→val→test
+- **R² Degradation**: Tracks decrease from train→val→test
+- **MAE Degradation**: Tracks increase from train→val→test
+- **Consistency Score**: Detects metric disagreement
+- **Combined Score**: Weighted average (35% MSE + 25% R² + 30% MAE + 10% consistency)
+
+If overfitting detected (score > threshold):
+1. Apply constrained search space (stricter regularization)
+2. Increase hyperparameter trials
+3. Retrain up to max_retrains times (default: 150)
+4. Early stop if hyperparameters converge (3 consecutive identical)
+
+Data Requirements:
+-----------------
+- **Training**: Minimum 15% of dataset (default: 70%)
+- **Validation**: 15-25% of dataset (default: 20%)
+- **Test**: 5-15% of dataset (default: 10%)
+- **LSTM Sequences**: Minimum time_steps + 1 samples (default: 31)
+- **Features**: Automatically selected via Random Forest feature importance
+
+Prediction Workflow:
+-------------------
+1. **Historical Predictions**: Re-predict on test set using pre-scaled data
+2. **Future Predictions**: Day-by-day forecasting with feature recalculation
+   - Dynamic features: Returns, moving averages, RSI, MACD, volatility
+   - Static features: Fundamental ratios (P/E, P/S, P/B, P/FCF)
+   - Ensemble: Weighted average of LSTM, RF, XGBoost predictions
+
+Performance Metrics:
+-------------------
+- **MSE** (Mean Squared Error): Lower is better
+- **MAE** (Mean Absolute Error): Lower is better
+- **R²** (R-squared): Higher is better (max 1.0)
+- **Direction Accuracy**: % of correct up/down predictions
+- **Price Error**: Absolute and percentage error in price predictions
+
+Usage Example:
+-------------
+>>> # Train models with automatic overfitting detection
+>>> models, history, lstm_data = train_and_validate_models(
+...     stock_symbol='AAPL',
+...     x_train=x_train_scaled,
+...     x_val=x_val_scaled,
+...     x_test=x_test_scaled,
+...     y_train_scaled=y_train_scaled,
+...     y_val_scaled=y_val_scaled,
+...     y_test_scaled=y_test_scaled,
+...     y_train_unscaled=y_train_unscaled,
+...     y_val_unscaled=y_val_unscaled,
+...     y_test_unscaled=y_test_unscaled,
+...     time_steps=30,
+...     max_retrains=150,
+...     overfitting_threshold=0.15
+... )
+>>>
+>>> # Predict future prices
+>>> forecast = predict_future_price_changes(
+...     ticker='AAPL',
+...     scaler_x=scaler_x,
+...     scaler_y=scaler_y,
+...     model={'lstm': models['lstm'], 'rf': models['rf'], 'xgb': models['xgb']},
+...     selected_features_list=features,
+...     stock_df=stock_data,
+...     prediction_days=90,
+...     time_steps=30
+... )
+
+Dependencies:
+------------
+- pandas, numpy: Data manipulation
+- yfinance: Stock data download
+- scikit-learn: ML models, metrics, preprocessing
+- tensorflow/keras: Deep learning (LSTM)
+- keras-tuner: Hyperparameter optimization
+- xgboost: Gradient boosting
+- matplotlib: Visualization
+
+Authors:
+--------
+Joern (joerndm)
+
+License:
+--------
+See repository license
+
+Notes:
+------
+- GPU acceleration recommended for LSTM training
+- Tuning results cached in 'tuning_dir' for resumable training
+- Historical predictions use pre-scaled test data for consistency
+- Future predictions recalculate dynamic features day-by-day
+- Ensemble weights optimized on validation set performance
+"""
 import os, shutil, time, io, sys
 import time
 import datetime
@@ -46,389 +203,6 @@ import monte_carlo_sim
 # Force UTF-8 logging globally
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="ignore")
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="ignore")
-
-# # Fits a linear regression model to the traning dataset and predicts the stock price
-# def linear_model(traning_dataset, test_dataset, prediction_dataset, stock_df):
-#     """
-#     Predicts the stock price using a linear regression model.
-    
-#     Parameters:
-#     - traning_dataset (pandas.DataFrame): A DataFrame containing the traning dataset.
-#     - test_dataset (pandas.DataFrame): A DataFrame containing the test dataset.
-#     - prediction_dataset (pandas.DataFrame): A DataFrame containing the prediction dataset.
-#     - stock_df (pandas.DataFrame): A DataFrame containing the stock data.
-    
-#     Returns:
-#     pandas.DataFrame: A DataFrame containing the predicted stock prices.
-    
-#     Raises:
-#     None
-#     """
-#     x_training_df = traning_dataset.drop(["Price"], axis=1)
-#     y_training_df = traning_dataset["Price"]
-#     # Convert the DataFrame to a numpy array
-#     x_training = np.array(x_training_df)
-#     y_training = np.array(y_training_df)
-#     x_test_df = test_dataset.drop(["Price"], axis=1)
-#     y_test_df = test_dataset["Price"]
-#     # Convert the DataFrame to a numpy array
-#     x_test = np.array(x_test_df)
-#     y_test = np.array(y_test_df)
-#     # Convert the DataFrame to a numpy array
-#     x_prediction = np.array(prediction_dataset)
-#     lr = LinearRegression()
-#     lr.fit(x_training, y_training)
-#     lr_confidence = lr.score(x_test, y_test)
-#     lr_mean_absolute_error = mean_absolute_error(y_test, lr.predict(x_test))
-#     lr_mean_squared_error = mean_squared_error(y_test, lr.predict(x_test))
-#     predict_precision_df = pd.DataFrame({"Model": ["Linear Regression"],
-#         "Confidence": [lr_confidence],
-#         "Mean Absolute Error": [lr_mean_absolute_error],
-#         "Mean Squared Error": [lr_mean_squared_error]
-#     })
-#     print(predict_precision_df)
-#     # Print the fitted model's weight and intercept
-#     # print(f"Weight: {lr.coef_}")
-#     # print(f"Intercept: {lr.intercept_}")
-#     # # Print the model's equation
-#     # print("The equation of the price prediction model is: ")
-#     # print("y = ")
-#     # for feature in range(len(lr.coef_)):
-#     #     print(f"{lr.coef_[feature]} * pca component number {x_training_df.columns[feature]+1} + ")
-        
-
-#     # print(f"{lr.intercept_}")
-#     forecast_set_lr = lr.predict(x_prediction)
-#     date_list = []
-#     for i in range(len(x_prediction)):
-#         x = len(x_prediction) - i
-#         date = stock_df["Date"].values[-x]
-#         date = datetime.datetime.strptime(date, '%Y-%m-%d')
-#         date_list.append(date)
-
-
-#     forecast_dict = {"Date":date_list, "Prediction_lr":forecast_set_lr
-#     }
-#     forecast_df = pd.DataFrame(forecast_dict)
-#     forecast_df = forecast_df.set_index("Date")
-#     # print(forecast_df)
-#     predicted_return = ((forecast_df.iloc[-1]["Prediction_lr"] / forecast_df.iloc[0]["Prediction_lr"]) - 1) * 100
-#     if predicted_return > 0:
-#         print(f"The prediction expects a profitable return on: {predicted_return}%, over the next {len(forecast_df)} days.")
-#     elif predicted_return < 0:
-#         print(f"The prediction expects a loss of: {predicted_return}%, over the next {len(forecast_df)} days.")
-#     else:
-#         print(f"The prediction expects no return over the next {len(forecast_df)} days.")
-
-
-#     return forecast_df
-
-# # Fits a ridge model to the traning dataset and predicts the stock price
-# def ridge_model(traning_dataset, test_dataset, prediction_dataset, stock_df):
-#     x_training_df = traning_dataset.drop(["Price"], axis=1)
-#     y_training_df = traning_dataset["Price"]
-#     # Convert the DataFrame to a numpy array
-#     x_training = np.array(x_training_df)
-#     y_training = np.array(y_training_df)
-#     x_test_df = test_dataset.drop(["Price"], axis=1)
-#     y_test_df = test_dataset["Price"]
-#     # Convert the DataFrame to a numpy array
-#     x_test = np.array(x_test_df)
-#     y_test = np.array(y_test_df)
-#     # Convert the DataFrame to a numpy array
-#     x_prediction = np.array(prediction_dataset)
-#     rg = Ridge()
-#     rg.fit(x_training, y_training)
-#     rg_confidence = rg.score(x_test, y_test)
-#     rg_mean_absolute_error = mean_absolute_error(y_test, rg.predict(x_test))
-#     rg_mean_squared_error = mean_squared_error(y_test, rg.predict(x_test))
-#     predict_precision_df = pd.DataFrame({"Model": ["Ridge Regression"],
-#         "Confidence": [rg_confidence],
-#         "Mean Absolute Error": [rg_mean_absolute_error],
-#         "Mean Squared Error": [rg_mean_squared_error]
-#     })
-#     print(predict_precision_df)
-#     # Print the fitted model's weight and intercept
-#     # print(f"Weight: {rg.coef_}")
-#     # print(f"Intercept: {rg.intercept_}")
-#     # # Print the model's equation
-#     # print("The equation of the price prediction model is: ")
-#     # print("y = ")
-#     # for feature in range(len(rg.coef_)):
-#     #     print(f"{rg.coef_[feature]} * pca component number {x_training_df.columns[feature]+1} + ")
-        
-
-#     # print(f"{rg.intercept_}")
-#     forecast_set_rg = rg.predict(x_prediction)
-#     date_list = []
-#     for i in range(len(x_prediction)):
-#         x = len(x_prediction) - i
-#         date = stock_df["Date"].values[-x]
-#         date = datetime.datetime.strptime(date, '%Y-%m-%d')
-#         date_list.append(date)
-
-
-#     forecast_dict = {"Date":date_list, "Prediction_rg":forecast_set_rg
-#     }
-#     forecast_df = pd.DataFrame(forecast_dict)
-#     forecast_df = forecast_df.set_index("Date")
-#     # print(forecast_df)
-#     predicted_return = ((forecast_df.iloc[-1]["Prediction_rg"] / forecast_df.iloc[0]["Prediction_rg"]) - 1) * 100
-#     if predicted_return > 0:
-#         print(f"The prediction expects a profitable return on: {predicted_return}%, over the next {len(forecast_df)} days.")
-#     elif predicted_return < 0:
-#         print(f"The prediction expects a loss of: {predicted_return}%, over the next {len(forecast_df)} days.")
-#     else:
-#         print(f"The prediction expects no return over the next {len(forecast_df)} days.")
-
-
-#     return forecast_df
-
-# # Fits a support vector machine model to the traning dataset and predicts the stock price
-# def svm_model(traning_dataset, test_dataset, prediction_dataset, stock_df, kernel_type):
-#     """
-#     Predicts the stock price using a support vector machine model.
-
-#     Parameters:
-#     - traning_dataset (pandas.DataFrame): A DataFrame containing the traning dataset.
-#     - test_dataset (pandas.DataFrame): A DataFrame containing the test dataset.
-#     - prediction_dataset (pandas.DataFrame): A DataFrame containing the prediction dataset.
-#     - stock_df (pandas.DataFrame): A DataFrame containing the stock data.
-#     - kernel_type (str): The kernel type.
-
-#     Returns:
-#     pandas.DataFrame: A DataFrame containing the predicted stock prices.
-
-#     Raises:
-#     None    
-#     """
-#     x_training_df = traning_dataset.drop(["Price"], axis=1)
-#     y_training_df = traning_dataset["Price"]
-#     # Convert the DataFrame to a numpy array
-#     x_training = np.array(x_training_df)
-#     y_training = np.array(y_training_df)
-#     x_test_df = test_dataset.drop(["Price"], axis=1)
-#     y_test_df = test_dataset["Price"]
-#     # Convert the DataFrame to a numpy array
-#     x_test = np.array(x_test_df)
-#     y_test = np.array(y_test_df)
-#     # Convert the DataFrame to a numpy array
-#     x_prediction = np.array(prediction_dataset)
-#     svm = SVR(kernel=kernel_type)
-#     svm.fit(x_training, y_training)
-#     svm_confidence = svm.score(x_test, y_test)
-#     svm_mean_absolute_error = mean_absolute_error(y_test, svm.predict(x_test))
-#     svm_mean_squared_error = mean_squared_error(y_test, svm.predict(x_test))
-#     predict_precision_df = pd.DataFrame({"Model": ["Support Vector Machine"],
-#         "Confidence": [svm_confidence],
-#         "Mean Absolute Error": [svm_mean_absolute_error],
-#         "Mean Squared Error": [svm_mean_squared_error]
-#     })
-#     print(predict_precision_df)
-#     forecast_set_svm = svm.predict(x_prediction)
-#     date_list = []
-#     for i in range(len(x_prediction)):
-#         x = len(x_prediction) - i
-#         date = stock_df["Date"].values[-x]
-#         date = datetime.datetime.strptime(date, '%Y-%m-%d')
-#         date_list.append(date)
-
-
-#     forecast_dict = {"Date":date_list, "Prediction_svm":forecast_set_svm
-#     }
-#     forecast_df = pd.DataFrame(forecast_dict)
-#     forecast_df = forecast_df.set_index("Date")
-#     # print(forecast_df)
-#     predicted_return = ((forecast_df.iloc[-1]["Prediction_svm"] / forecast_df.iloc[0]["Prediction_svm"]) - 1) * 100
-#     if predicted_return > 0:
-#         print(f"The prediction expects a profitable return on: {predicted_return}%, over the next {len(forecast_df)} days.")
-#     elif predicted_return < 0:
-#         print(f"The prediction expects a loss of: {predicted_return}%, over the next {len(forecast_df)} days.")
-#     else:
-#         print(f"The prediction expects no return over the next {len(forecast_df)} days.")
-
-
-#     return forecast_df
-
-# # Fits a decision tree model to the traning dataset and predicts the stock price
-# def decision_tree_model(traning_dataset, test_dataset, prediction_dataset, stock_df):
-#     """
-#     Predicts the stock price using a decision tree model.
-
-#     Parameters:
-#     - traning_dataset (pandas.DataFrame): A DataFrame containing the traning dataset.
-#     - test_dataset (pandas.DataFrame): A DataFrame containing the test dataset.
-#     - prediction_dataset (pandas.DataFrame): A DataFrame containing the prediction dataset.
-#     - stock_df (pandas.DataFrame): A DataFrame containing the stock data.
-
-#     Returns:
-#     pandas.DataFrame: A DataFrame containing the predicted stock prices.
-
-#     Raises:
-#     None
-#     """
-#     x_training_df = traning_dataset.drop(["price"], axis=1)
-#     y_training_df = traning_dataset["price"]
-#     # Convert the DataFrame to a numpy array
-#     x_training = np.array(x_training_df)
-#     y_training = np.array(y_training_df)
-#     x_test_df = test_dataset.drop(["price"], axis=1)
-#     y_test_df = test_dataset["price"]
-#     # Convert the DataFrame to a numpy array
-#     x_test = np.array(x_test_df)
-#     y_test = np.array(y_test_df)
-#     # Convert the DataFrame to a numpy array
-#     x_prediction = np.array(prediction_dataset)
-#     dt = tree.DecisionTreeRegressor(max_depth=10)
-#     dt.fit(x_training, y_training)
-#     dt_confidence = dt.score(x_test, y_test)
-#     dt_mean_absolute_error = mean_absolute_error(y_test, dt.predict(x_test))
-#     dt_mean_squared_error = mean_squared_error(y_test, dt.predict(x_test))
-#     predict_precision_df = pd.DataFrame({"Model": ["Decision Tree"],
-#         "Confidence": [dt_confidence],
-#         "Mean Absolute Error": [dt_mean_absolute_error],
-#         "Mean Squared Error": [dt_mean_squared_error]
-#     })
-#     print(predict_precision_df)
-#     forecast_set_dt = dt.predict(x_prediction)
-#     date_list = []
-#     for i in range(len(x_prediction)):
-#         x = len(x_prediction) - i
-#         date = stock_df["date"].values[-x]
-#         date = datetime.datetime.strptime(date, '%Y-%m-%d')
-#         date_list.append(date)
-
-
-#     forecast_dict = {"date":date_list, "prediction_dt":forecast_set_dt
-#     }
-#     forecast_df = pd.DataFrame(forecast_dict)
-#     forecast_df = forecast_df.set_index("date")
-#     # print(forecast_df)
-#     predicted_return = ((forecast_df.iloc[-1]["prediction_dt"] / forecast_df.iloc[0]["prediction_dt"]) - 1) * 100
-#     if predicted_return > 0:
-#         print(f"The prediction expects a profitable return on: {predicted_return}%, over the next {len(forecast_df)} days.")
-#     elif predicted_return < 0:
-#         print(f"The prediction expects a loss of: {predicted_return}%, over the next {len(forecast_df)} days.")
-#     else:
-#         print(f"The prediction expects no return over the next {len(forecast_df)} days.")
-
-
-#     return forecast_df
-
-# # Fits a neural network model to the traning dataset and predicts the stock price
-# def neural_network_model(traning_dataset, test_dataset, hiddenLayer_1, hiddenLayer_2, hiddenLayer_3, hiddenLayer_4, iterations, randomState):
-#     """
-#     Predicts the stock price using a neural network model.
-
-#     Parameters:
-#     - traning_dataset (pandas.DataFrame): A DataFrame containing the traning dataset.
-#     - test_dataset (pandas.DataFrame): A DataFrame containing the test dataset.
-#     - prediction_dataset (pandas.DataFrame): A DataFrame containing the prediction dataset.
-#     - hiddenLayer_1 (int): The number of neurons in the first hidden layer.
-#     - hiddenLayer_2 (int): The number of neurons in the second hidden layer.
-#     - hiddenLayer_3 (int): The number of neurons in the third hidden layer.
-#     - hiddenLayer_4 (int): The number of neurons in the fourth hidden layer.
-#     - iterations (int): The number of iterations.
-#     - randomState (int): The random state.
-
-#     Returns:
-#     pandas.DataFrame: A DataFrame containing the predicted stock prices.
-
-#     Raises:
-#     - ValueError: If the model could not be generated.
-#     """
-
-#     try:
-#         x_training_df = traning_dataset.drop(["prediction"], axis=1)
-#         y_training_df = traning_dataset["prediction"]
-#         # Convert the DataFrame to a numpy array
-#         x_training = np.array(x_training_df)
-#         y_training = np.array(y_training_df)
-#         x_test_df = test_dataset.drop(["prediction"], axis=1)
-#         y_test_df = test_dataset["prediction"]
-#         # Convert the DataFrame to a numpy array
-#         x_test = np.array(x_test_df)
-#         y_test = np.array(y_test_df)
-#         nn = MLPRegressor(alpha=1e-5, hidden_layer_sizes=(hiddenLayer_1, hiddenLayer_2, hiddenLayer_3, hiddenLayer_4), max_iter=iterations, random_state=randomState,)
-#         nn.fit(x_training, y_training)
-#         nn_confidence = nn.score(x_test, y_test)
-#         nn_mean_absolute_error = mean_absolute_error(y_test, nn.predict(x_test))
-#         nn_mean_squared_error = mean_squared_error(y_test, nn.predict(x_test))
-#         nn_r2_score = r2_score(y_test, nn.predict(x_test))
-#         predict_precision_df = pd.DataFrame({"Model": ["Neural Network"],
-#             "Confidence": [nn_confidence],
-#             "Mean Absolute Error": [nn_mean_absolute_error],
-#             "Mean Squared Error": [nn_mean_squared_error],
-#             "R2 Score": [nn_r2_score]
-#         }).transpose()
-#         print(predict_precision_df)
-#         # # Create variable storing the model's equation
-#         # model_equation = "y = "
-#         # for feature in range(len(nn.coefs_[0])):
-#         #     model_equation += f"{nn.coefs_[0][feature]} * {x_training_df.columns[feature]} + "
-#         # model_equation += f"{nn.intercepts_[0]}"
-#         # # Print the model's equation
-#         # print("The equation of the price prediction model is: ")
-#         # print(model_equation)
-#         return nn
-
-#     except ValueError as e:
-#         raise ValueError("The model could not be generated.Please check the input data.") from e
-
-# # Fits an LSTM model to the traning dataset and predicts the stock price
-# def lstm_model(traning_dataset, test_dataset, epochs=500, batch_size=128):
-#     """
-#     Builds and trains an LSTM model.
-
-#     Parameters:
-#     - traning_dataset (pandas.DataFrame): A DataFrame containing the training dataset.
-#     - test_dataset (pandas.DataFrame): A DataFrame containing the test dataset.
-#     - epochs (int): The number of epochs to train the model.
-#     - batch_size (int): The batch size for training.
-
-#     Returns:
-#     tensorflow.keras.Model: The trained LSTM model.
-#     """
-#     # Split the training dataset into features and labels
-#     x_train = traning_dataset.drop(["prediction"], axis=1).values
-#     y_train = traning_dataset["prediction"].values
-
-#     # Split the test dataset into features and labels
-#     x_test = test_dataset.drop(["prediction"], axis=1).values
-#     y_test = test_dataset["prediction"].values
-
-#     # Reshape the data to fit the LSTM input requirements
-#     x_train = x_train.reshape((x_train.shape[0], 1, x_train.shape[1]))
-#     x_test = x_test.reshape((x_test.shape[0], 1, x_test.shape[1]))
-
-#     model = Sequential()
-#     model.add(Input(shape=(x_train.shape[1], x_train.shape[2])))
-#     model.add(LSTM(units=250, return_sequences=True))
-#     model.add(Dropout(0.2))
-#     model.add(LSTM(units=250, return_sequences=False))
-#     model.add(Dropout(0.2))
-#     model.add(Dense(units=1))
-
-#     model.compile(optimizer=Adam(learning_rate=0.0001), loss='mean_squared_error')
-
-#     model.fit(x_train, y_train, epochs=epochs, batch_size=batch_size, validation_data=(x_test, y_test))
-
-#     trainScore = model.evaluate(x_train, y_train, verbose=0)
-#     print('Train Score: %.2f MSE (%.2f RMSE)' % (trainScore, math.sqrt(trainScore)))
-#     testScore = model.evaluate(x_test, y_test, verbose=0)
-#     print('Test Score: %.2f MSE (%.2f RMSE)' % (testScore, math.sqrt(testScore)))
-
-#     return model
-
-#     # Example usage:
-#     # Assuming traning_dataset and test_dataset are already defined and preprocessed
-#     # traning_dataset and test_dataset should be pandas DataFrames with a "Price" column for labels
-
-#     # traning_dataset, test_dataset = ...# Your data here
-
-#     # lstm_model = build_lstm_model(traning_dataset, test_dataset, epochs=50, batch_size=32)
-
-#     # Predicts the future stock price
 
 def build_random_forest_model(hp, constrain_for_overfitting=False):
     """
@@ -805,6 +579,15 @@ def evaluate_xgboost_model(model, x_train, y_train, x_val, y_val, x_test, y_test
     return train_metrics, val_metrics, test_metrics
 
 def build_svm_model(hp):
+    """
+    Builds an SVR model with tunable hyperparameters.
+
+    Parameters:
+    - hp: Keras Tuner hyperparameters object
+
+    Returns:
+    - model: Configured SVR model
+    """
     kernel_choice = hp.Choice('kernel', ['linear', 'rbf', 'poly'])
     model = SVR(
         kernel=kernel_choice,
@@ -815,6 +598,17 @@ def build_svm_model(hp):
     return model
 
 def tune_svm_model(stock_symbol, training_dataset_df, max_trials=20):
+    """
+    Tunes an SVM model using Keras Tuner.
+
+    Parameters:
+    - stock_symbol (str): The stock ticker symbol
+    - training_dataset_df (pd.DataFrame): Training data with features and target
+    - max_trials (int): Maximum number of tuning trials
+
+    Returns:
+    - best_svm_model: The tuned SVM model
+    """
     x_train = training_dataset_df.drop(["prediction"], axis=1).values
     y_train = training_dataset_df["prediction"].values
 
@@ -940,6 +734,37 @@ def prepare_lstm_datasets(x_train, y_train, x_val, y_val, x_test, y_test, time_s
     }
 
 def build_lstm_model(hp, input_shape):
+    """
+    Builds a Bidirectional LSTM model with tunable hyperparameters for time series prediction.
+    
+    The model consists of:
+    - Multiple stacked Bidirectional LSTM layers with L2 regularization
+    - BatchNormalization layers after each LSTM layer for training stability
+    - Dropout layers for regularization
+    - Dense layers with tunable activation functions
+    - Linear output layer for regression
+    
+    Parameters:
+    - hp (keras_tuner.HyperParameters): Keras Tuner hyperparameters object for tuning
+    - input_shape (tuple): Shape of input sequences (time_steps, num_features)
+    
+    Returns:
+    - keras.Sequential: Compiled LSTM model ready for training
+    
+    Hyperparameters tuned:
+    - n_layers: Number of LSTM layers (1 to 5)
+    - input_units: Units in first LSTM layer (32-512, step=16)
+    - units_{i}: Units in subsequent LSTM layers (32-512, step=16)
+    - l2_reg_{i}: L2 regularization strength (1e-6 to 1e-3, log scale)
+    - dropout_{i}: Dropout rate (0.1-0.6, step=0.1)
+    - dense_1/dense_2: Dense layer units
+    - dense_1_activation: Activation function (relu, tanh)
+    - dense_2_activation: Activation function (relu, sigmoid)
+    - optimizer: Optimizer choice (adam, rmsprop)
+    - learning_rate: Learning rate (1e-5 to 1e-3, log scale)
+    - clipnorm: Gradient clipping norm (0.5-2.0, step=0.5)
+    - loss: Loss function (MAE, MSE, Huber, MAPE)
+    """
     model = Sequential()
     # First LSTM layer
     model.add(
@@ -2857,7 +2682,6 @@ def analyze_prediction_performance(stock_df, forecast_df, historical_prediction_
     
     print("\n" + "="*80)
 
-# Combines the predicted stock prices from different models
 def calculate_predicted_profit(forecast_df, prediction_days):
     """
     Predicts the stock price using different models.
@@ -2887,7 +2711,6 @@ def calculate_predicted_profit(forecast_df, prediction_days):
     except ValueError:
         print(f"The model could not predict an expected return over the next {prediction_days} days.")
 
-# Plots a graph of the stock data
 def plot_graph(stock_data_df, forecast_data_df):
     """
     Plots a graph of the stock data.

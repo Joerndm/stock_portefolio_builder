@@ -1,3 +1,36 @@
+"""
+Efficient Frontier Portfolio Optimization Module
+
+This module provides functionality for calculating and visualizing the efficient frontier
+of a portfolio using Monte Carlo simulation. The efficient frontier represents the set of
+optimal portfolios that offer the highest expected return for a given level of risk.
+
+The module performs the following operations:
+- Calculates log returns from historical stock price data
+- Runs Monte Carlo simulations (750,000 iterations) to generate random portfolio weights
+- Computes portfolio returns and volatilities for each simulation
+- Visualizes the efficient frontier through scatter plots
+- Optionally reduces the efficient frontier to show only the optimal risk-return combinations
+
+Functions:
+    efficient_frontier_sim: Main function that performs the efficient frontier calculation
+                           and generates visualization graphs.
+
+Example:
+    >>> import yfinance as yf
+    >>> prices = yf.download(["AAPL", "GOOGL", "MSFT"])["Open"]
+    >>> portfolio_df = efficient_frontier_sim(prices)
+    >>> print(portfolio_df.head())
+
+Dependencies:
+    - pandas: Data manipulation and analysis
+    - numpy: Numerical computations
+    - scipy: Optimization algorithms
+    - matplotlib: Plotting and visualization
+    - yfinance: Downloading stock price data
+
+Author: Joern
+"""
 import os
 import pandas as pd
 import numpy as np
@@ -141,6 +174,7 @@ def efficient_frontier_sim(price_df):
     
     return portefolio_df
 
+# Example usage
 if __name__ == "__main__":
     # Download stock prices for specified symbols
     prices = yf.download(["AMBU-B.CO", "ROCK-B.CO", "TRYG.CO", "DEMANT.CO", "GN.CO", "JYSK.CO", "RBREW.CO"])["Open"]

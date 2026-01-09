@@ -1,3 +1,27 @@
+"""
+Monte Carlo Simulation for Stock Price Forecasting.
+
+This module provides functionality to perform Monte Carlo simulations for stock price
+predictions using Geometric Brownian Motion (GBM). The simulation generates multiple
+potential price paths based on historical return distributions and calculates
+statistical percentiles for future price predictions.
+
+The module includes:
+- Statistical analysis of return distributions (Shapiro-Wilk test)
+- Multiple simulation runs using random walk with drift
+- Percentile-based confidence intervals (5th, 16th, 84th, 95th)
+- Visualization of Monte Carlo results
+- Graph generation and export functionality
+
+Typical usage:
+    price_df, monte_carlo_df = monte_carlo_analysis(
+        seed_number=42,
+        stock_data_df=historical_data,
+        forecast_df=forecast_data,
+        years=5,
+        sim_amount=1000
+    )
+"""
 import os
 import numpy as np
 import pandas as pd
@@ -7,6 +31,39 @@ from scipy import stats
 pd.set_option('future.no_silent_downcasting', True)
 
 def monte_carlo_analysis(seed_number, stock_data_df, forecast_df, years, sim_amount):
+    """
+    Perform Monte Carlo simulation for stock price forecasting using Geometric Brownian Motion.
+    
+    This function simulates multiple potential future price paths based on historical return
+    distributions. It uses the Shapiro-Wilk test to determine the distribution characteristics
+    and calculates drift and shock parameters for the GBM model. The results include percentile-
+    based confidence intervals and visualization of the simulation outcomes.
+    
+    Args:
+        seed_number (int): Random seed for reproducibility of simulation results.
+        stock_data_df (pd.DataFrame): Historical stock data containing at least closing prices
+            in the 5th column (index 4) and a 'ticker' column.
+        forecast_df (pd.DataFrame): Forecast data containing a 'close_Price' column used to
+            calculate return statistics.
+        years (int): Number of years to forecast into the future.
+        sim_amount (int): Number of Monte Carlo simulation runs to perform.
+    
+    Returns:
+        tuple: A tuple containing:
+            - price_df (pd.DataFrame): Transposed DataFrame where each row represents a
+              simulation run and columns represent daily prices over the forecast period.
+            - monte_carlo_df (pd.DataFrame): DataFrame indexed by year containing statistical
+              percentiles (5th, 16th, Mean, 84th, 95th) of simulated prices.
+    
+    Raises:
+        FileNotFoundError: If the generated graph cannot be saved to the specified path.
+    
+    Notes:
+        - Uses 252 trading days per year for calculations.
+        - Applies Shapiro-Wilk test (α=0.05) to determine if returns are Gaussian.
+        - Generates and saves a visualization graph to 'generated_graphs' directory.
+        - Progress messages are printed every 250 simulation runs.
+    """
     # print("seed_number", seed_number)
     # print("stock_data_df", stock_data_df)
     # print("forecast_df", forecast_df)
