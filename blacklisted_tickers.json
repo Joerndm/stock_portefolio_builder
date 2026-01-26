@@ -1,0 +1,50 @@
+{
+  "FISV": {
+    "reason": "delisted",
+    "details": "\"Stock symbol 'FISV' is invalid or not found.\"",
+    "date_added": "2026-01-26T16:28:59.324612",
+    "active": true
+  },
+  "ML.PA": {
+    "reason": "delisted",
+    "details": "\"Stock symbol 'ML.PA' is invalid or not found.\"",
+    "date_added": "2026-01-26T19:30:25.007626",
+    "active": true
+  },
+  "PCT.L": {
+    "reason": "delisted",
+    "details": "\"Stock symbol 'PCT.L' is invalid or not found.\"",
+    "date_added": "2026-01-26T19:38:05.865250",
+    "active": true
+  },
+  "FCIT.L": {
+    "reason": "delisted",
+    "details": "\"Stock symbol 'FCIT.L' is invalid or not found.\"",
+    "date_added": "2026-01-26T19:42:55.429859",
+    "active": true
+  },
+  "ALW.L": {
+    "reason": "delisted",
+    "details": "\"Stock symbol 'ALW.L' is invalid or not found.\"",
+    "date_added": "2026-01-26T19:43:38.211378",
+    "active": true
+  },
+  "SMT.L": {
+    "reason": "delisted",
+    "details": "\"Stock symbol 'SMT.L' is invalid or not found.\"",
+    "date_added": "2026-01-26T19:43:38.647380",
+    "active": true
+  },
+  "PSH.L": {
+    "reason": "delisted",
+    "details": "\"Stock symbol 'PSH.L' is invalid or not found.\"",
+    "date_added": "2026-01-26T19:53:56.308563",
+    "active": true
+  },
+  "PUIG.MC": {
+    "reason": "delisted",
+    "details": "\"Stock symbol 'PUIG.MC' is invalid or not found.\"",
+    "date_added": "2026-01-26T19:56:27.145217",
+    "active": true
+  }
+}

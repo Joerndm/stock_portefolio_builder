@@ -11,7 +11,7 @@ Tables:
     - stock_income_stmt_data: Income statement financial data
     - stock_balancesheet_data: Balance sheet financial data
     - stock_cash_flow_data: Cash flow statement data
-    - stock_ratio_data: Financial ratios and metrics
+    - stock_ratio_data: Financial ratios and metrics (TTM preferred, annual fallback)
     - stock_prediction_data: Stock prediction data
 
 Functions:
@@ -20,6 +20,10 @@ Functions:
     - import_stock_*: Imports data from various tables
     - export_stock_*: Exports data to various tables
     - import_stock_dataset: Combines and imports complete stock dataset
+
+Note:
+    TTM ratio calculations happen at data fetch time via calculate_ratios_ttm_with_fallback()
+    in ttm_financial_calculator.py. The single stock_ratio_data table stores the result.
 
 Dependencies:
     - pandas: For data manipulation and SQL operations
@@ -642,10 +646,8 @@ def export_stock_price_data(stock_price_data_df=""):
         raise KeyError(f"Could not establish connection to the database. Error: {e}") from e
 
     try:
-        # Step 1: Remove duplicate columns (keep first occurrence)
-        stock_price_data_df = stock_price_data_df.loc[:, ~stock_price_data_df.columns.duplicated()]
-        
-        # Step 2: Rename columns to match database schema (case-sensitive)
+        # Step 1: Rename columns to match database schema (case-sensitive) BEFORE removing duplicates
+        # This ensures we keep the right version of each column
         column_rename_map = {
             'RSI_14': 'rsi_14',
             'ATR_14': 'atr_14',
@@ -653,6 +655,9 @@ def export_stock_price_data(stock_price_data_df=""):
             'ATRl_14': 'atr_14'   # Handle all ATR variations
         }
         stock_price_data_df = stock_price_data_df.rename(columns=column_rename_map)
+        
+        # Step 2: Remove duplicate columns (keep first occurrence) AFTER renaming
+        stock_price_data_df = stock_price_data_df.loc[:, ~stock_price_data_df.columns.duplicated()]
         
         # Step 3: Define all expected database columns (from ddl.sql)
         db_columns = [
@@ -681,7 +686,31 @@ def export_stock_price_data(stock_price_data_df=""):
         raise KeyError(f"Could not prepare stock_price_data_df columns for database export. Error: {e}") from e
 
     try:
+        # Use UPSERT (INSERT ... ON DUPLICATE KEY UPDATE) to handle existing records
+        from sqlalchemy import text
+        
+        # For better performance with many rows, use batch insert with duplicate handling
+        ticker = stock_price_data_df['ticker'].iloc[0] if len(stock_price_data_df) > 0 else ''
+        min_date = stock_price_data_df['date'].min()
+        max_date = stock_price_data_df['date'].max()
+        
+        # Delete existing records in the date range for this ticker
+        with db_con.begin() as connection:
+            delete_query = text("""
+                DELETE FROM stock_price_data 
+                WHERE ticker = :ticker 
+                AND date >= :min_date 
+                AND date <= :max_date
+            """)
+            connection.execute(delete_query, {
+                'ticker': ticker,
+                'min_date': min_date,
+                'max_date': max_date
+            })
+        
+        # Now insert the new data
         stock_price_data_df.to_sql(name="stock_price_data", con=db_con, index=False, if_exists="append")
+        print(f"✓ Exported {len(stock_price_data_df)} price records for {ticker}")
 
     except Exception as e:
         raise KeyError(f"Could not export from stock_price_data_df to stock_price_data in the database. Error: {e}") from e
@@ -890,9 +919,32 @@ def export_stock_financial_data(stock_financial_data_df=""):
         raise KeyError(f"Could not create stock_cash_flow_data_df from stock_price_data_df. Error: {e}") from e
 
     try:
+        from sqlalchemy import text
+        
+        ticker = stock_income_stmt_data_df['ticker'].iloc[0] if len(stock_income_stmt_data_df) > 0 else ''
+        
+        # Delete existing financial data for this ticker, then insert new data
+        with db_con.begin() as connection:
+            # Delete from income statement table
+            connection.execute(text("""
+                DELETE FROM stock_income_stmt_data WHERE ticker = :ticker
+            """), {'ticker': ticker})
+            
+            # Delete from balance sheet table
+            connection.execute(text("""
+                DELETE FROM stock_balancesheet_data WHERE ticker = :ticker
+            """), {'ticker': ticker})
+            
+            # Delete from cash flow table
+            connection.execute(text("""
+                DELETE FROM stock_cash_flow_data WHERE ticker = :ticker
+            """), {'ticker': ticker})
+        
+        # Now insert the new data
         stock_income_stmt_data_df.to_sql(name="stock_income_stmt_data", con=db_con, index=False, if_exists="append")
         stock_balancesheet_data_df.to_sql(name="stock_balancesheet_data", con=db_con, index=False, if_exists="append")
         stock_cash_flow_data_df.to_sql(name="stock_cash_flow_data", con=db_con, index=False, if_exists="append")
+        print(f"✓ Exported financial data for {ticker}")
 
     except Exception as e:
         raise KeyError(f"Could not export from stock_financial_data_df to stock_income_stmt_data, stock_balancesheet_data and stock_cash_flow_data in the database. Error: {e}") from e
@@ -1012,10 +1064,242 @@ def export_stock_ratio_data(stock_ratio_data_df=""):
         raise KeyError(f"Could not establish connection to the database. Error: {e}") from e
 
     try:
+        # Remove duplicates within the DataFrame itself (keep last occurrence)
+        stock_ratio_data_df = stock_ratio_data_df.drop_duplicates(subset=['date', 'ticker'], keep='last')
+        
+        # Delete existing records for the same date-ticker combinations to avoid duplicates
+        # Build a bulk delete query for better performance
+        if len(stock_ratio_data_df) > 0:
+            # Get unique ticker and date range for efficient deletion
+            ticker = stock_ratio_data_df['ticker'].iloc[0]  # Assuming all rows are for same ticker
+            min_date = stock_ratio_data_df['date'].min()
+            max_date = stock_ratio_data_df['date'].max()
+            
+            # Use text() for raw SQL execution with SQLAlchemy
+            from sqlalchemy import text
+            
+            delete_query = text("""
+                DELETE FROM stock_ratio_data 
+                WHERE ticker = :ticker 
+                AND date >= :min_date 
+                AND date <= :max_date
+            """)
+            
+            with db_con.begin() as connection:
+                result = connection.execute(delete_query, {
+                    'ticker': ticker,
+                    'min_date': min_date,
+                    'max_date': max_date
+                })
+                print(f"Deleted {result.rowcount} existing records for {ticker} between {min_date} and {max_date}")
+        
+    except Exception as e:
+        print(f"⚠️  WARNING: Could not delete existing records: {e}")
+        # Continue anyway - the error will be caught in the insert if it's critical
+
+    try:
         stock_ratio_data_df.to_sql(name="stock_ratio_data", con=db_con, index=False, if_exists="append")
 
     except Exception as e:
         raise KeyError(f"Could not export from stock_ratio_data_df to stock_price_data in the database. Error: {e}") from e
+
+
+# Define valid columns for quarterly tables based on database schema
+QUARTERLY_INCOME_COLUMNS = [
+    'fiscal_quarter_end', 'fiscal_year', 'fiscal_quarter', 'date_published', 'ticker',
+    'revenue_q', 'gross_profit_q', 'operating_income_q', 'net_income_q',
+    'eps_basic_q', 'eps_diluted_q', 'shares_diluted', 'ebitda_q',
+    'revenue_ttm', 'gross_profit_ttm', 'operating_income_ttm', 'net_income_ttm',
+    'eps_basic_ttm', 'eps_diluted_ttm', 'ebitda_ttm',
+    'gross_margin_ttm', 'operating_margin_ttm', 'net_margin_ttm', 'ebitda_margin_ttm',
+    'revenue_growth_yoy', 'gross_profit_growth_yoy', 'operating_income_growth_yoy',
+    'net_income_growth_yoy', 'eps_growth_yoy', 'revenue_growth_qoq', 'net_income_growth_qoq'
+]
+
+QUARTERLY_BALANCESHEET_COLUMNS = [
+    'fiscal_quarter_end', 'fiscal_year', 'fiscal_quarter', 'date_published', 'ticker',
+    'total_assets', 'current_assets', 'cash_and_equivalents', 'cash_and_investments',
+    'accounts_receivable', 'inventory', 'goodwill', 'intangible_assets',
+    'total_liabilities', 'current_liabilities', 'accounts_payable',
+    'total_debt', 'short_term_debt', 'long_term_debt',
+    'total_equity', 'retained_earnings',
+    'current_ratio', 'quick_ratio', 'cash_ratio', 'debt_to_equity', 'debt_to_assets',
+    'book_value_per_share', 'tangible_book_per_share',
+    'roa_ttm', 'roe_ttm', 'roic_ttm',
+    'assets_growth_yoy', 'equity_growth_yoy', 'book_value_growth_yoy'
+]
+
+QUARTERLY_CASHFLOW_COLUMNS = [
+    'fiscal_quarter_end', 'fiscal_year', 'fiscal_quarter', 'date_published', 'ticker',
+    'operating_cash_flow_q', 'capex_q', 'free_cash_flow_q',
+    'investing_cash_flow_q', 'financing_cash_flow_q',
+    'dividends_paid_q', 'share_repurchases_q',
+    'operating_cash_flow_ttm', 'capex_ttm', 'free_cash_flow_ttm',
+    'dividends_paid_ttm', 'share_repurchases_ttm',
+    'fcf_per_share_ttm', 'ocf_per_share_ttm',
+    'fcf_margin_ttm', 'capex_to_revenue_ttm', 'fcf_conversion_ttm',
+    'fcf_growth_yoy', 'ocf_growth_yoy'
+]
+
+
+def _filter_to_valid_columns(df, valid_columns):
+    """Filter DataFrame to only include columns that exist in the database schema."""
+    existing_valid = [col for col in df.columns if col in valid_columns]
+    return df[existing_valid].copy()
+
+
+def export_quarterly_income_stmt(quarterly_income_df):
+    """
+    Export quarterly income statement data to the stock_income_stmt_quarterly table.
+    
+    Args:
+        quarterly_income_df: DataFrame with quarterly income statement data
+        
+    Raises:
+        ValueError: If required columns missing
+        KeyError: If database operations fail
+    """
+    if quarterly_income_df.empty:
+        raise ValueError("Income statement DataFrame cannot be empty")
+    
+    required_cols = ['fiscal_quarter_end', 'ticker']
+    for col in required_cols:
+        if col not in quarterly_income_df.columns:
+            raise ValueError(f"Missing required column: {col}")
+    
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+        
+        # Delete existing records for this ticker before inserting
+        from sqlalchemy import text
+        ticker = quarterly_income_df['ticker'].iloc[0]
+        
+        with db_con.begin() as connection:
+            connection.execute(text("""
+                DELETE FROM stock_income_stmt_quarterly WHERE ticker = :ticker
+            """), {'ticker': ticker})
+        
+        # Filter to only valid columns that exist in database schema
+        filtered_df = _filter_to_valid_columns(quarterly_income_df, QUARTERLY_INCOME_COLUMNS)
+        
+        if filtered_df.empty or len(filtered_df.columns) < 2:
+            print(f"   ↳ No valid quarterly income columns to export")
+            return
+        
+        filtered_df.to_sql(
+            name="stock_income_stmt_quarterly",
+            con=db_con,
+            index=False,
+            if_exists="append"
+        )
+        print(f"   ✓ Exported {len(filtered_df)} quarterly income statement records")
+        
+    except Exception as e:
+        raise KeyError(f"Could not export quarterly income statement: {e}") from e
+
+
+def export_quarterly_balancesheet(quarterly_bs_df):
+    """
+    Export quarterly balance sheet data to the stock_balancesheet_quarterly table.
+    
+    Args:
+        quarterly_bs_df: DataFrame with quarterly balance sheet data
+        
+    Raises:
+        ValueError: If required columns missing
+        KeyError: If database operations fail
+    """
+    if quarterly_bs_df.empty:
+        raise ValueError("Balance sheet DataFrame cannot be empty")
+    
+    required_cols = ['fiscal_quarter_end', 'ticker']
+    for col in required_cols:
+        if col not in quarterly_bs_df.columns:
+            raise ValueError(f"Missing required column: {col}")
+    
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+        
+        # Delete existing records for this ticker before inserting
+        from sqlalchemy import text
+        ticker = quarterly_bs_df['ticker'].iloc[0]
+        
+        with db_con.begin() as connection:
+            connection.execute(text("""
+                DELETE FROM stock_balancesheet_quarterly WHERE ticker = :ticker
+            """), {'ticker': ticker})
+        
+        # Filter to only valid columns that exist in database schema
+        filtered_df = _filter_to_valid_columns(quarterly_bs_df, QUARTERLY_BALANCESHEET_COLUMNS)
+        
+        if filtered_df.empty or len(filtered_df.columns) < 2:
+            print(f"   ↳ No valid quarterly balance sheet columns to export")
+            return
+        
+        filtered_df.to_sql(
+            name="stock_balancesheet_quarterly",
+            con=db_con,
+            index=False,
+            if_exists="append"
+        )
+        print(f"   ✓ Exported {len(filtered_df)} quarterly balance sheet records")
+        
+    except Exception as e:
+        raise KeyError(f"Could not export quarterly balance sheet: {e}") from e
+
+
+def export_quarterly_cashflow(quarterly_cf_df):
+    """
+    Export quarterly cash flow data to the stock_cashflow_quarterly table.
+    
+    Args:
+        quarterly_cf_df: DataFrame with quarterly cash flow data
+        
+    Raises:
+        ValueError: If required columns missing
+        KeyError: If database operations fail
+    """
+    if quarterly_cf_df.empty:
+        raise ValueError("Cash flow DataFrame cannot be empty")
+    
+    required_cols = ['fiscal_quarter_end', 'ticker']
+    for col in required_cols:
+        if col not in quarterly_cf_df.columns:
+            raise ValueError(f"Missing required column: {col}")
+    
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+        
+        # Delete existing records for this ticker before inserting
+        from sqlalchemy import text
+        ticker = quarterly_cf_df['ticker'].iloc[0]
+        
+        with db_con.begin() as connection:
+            connection.execute(text("""
+                DELETE FROM stock_cashflow_quarterly WHERE ticker = :ticker
+            """), {'ticker': ticker})
+        
+        # Filter to only valid columns that exist in database schema
+        filtered_df = _filter_to_valid_columns(quarterly_cf_df, QUARTERLY_CASHFLOW_COLUMNS)
+        
+        if filtered_df.empty or len(filtered_df.columns) < 2:
+            print(f"   ↳ No valid quarterly cash flow columns to export")
+            return
+        
+        filtered_df.to_sql(
+            name="stock_cashflow_quarterly",
+            con=db_con,
+            index=False,
+            if_exists="append"
+        )
+        print(f"   ✓ Exported {len(filtered_df)} quarterly cash flow records")
+        
+    except Exception as e:
+        raise KeyError(f"Could not export quarterly cash flow: {e}") from e
+
 
 def import_stock_dataset(stock_ticker=""):
     """
@@ -1147,6 +1431,7 @@ def import_stock_dataset(stock_ticker=""):
 
     except Exception as e:
         raise KeyError(f"Could not import from stock_ratio_data in the database to stock_ratio_data_df with a specific ticker. Error: {e}") from e
+
 
 # Run the main function
 if __name__ == "__main__":

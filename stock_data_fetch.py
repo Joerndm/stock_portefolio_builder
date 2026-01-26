@@ -67,6 +67,13 @@ import pandas as pd
 import yfinance as yf
 import pandas_ta as ta
 
+from dynamic_index_fetcher import dynamic_fetch_index_data
+from ttm_financial_calculator import (
+    TTMFinancialCalculator,
+    calculate_ratios_ttm_with_fallback,
+    get_financial_data_with_ttm_preference
+)
+
 def import_tickers_from_csv(csv_file):
     """
     Imports stock symbols from a CSV file and returns a pandas DataFrame.
@@ -1402,6 +1409,11 @@ def fetch_stock_financial_data(stock_symbol = ""):
                 "Debt to Equity growth": "debt_To_Equity_Growth", "Free Cash Flow": "free_Cash_Flow", "Free Cash Flow growth": "free_Cash_Flow_Growth",
                 "Free Cash Flow per share": "free_Cash_Flow_Per_Share", "Free Cash Flow per share growth": "free_Cash_Flow_Per_Share_Growth"
                 })
+            
+            # Replace infinity values with NaN (MySQL cannot store inf values)
+            import numpy as np
+            full_stock_financial_data_df = full_stock_financial_data_df.replace([np.inf, -np.inf], np.nan)
+            
             return full_stock_financial_data_df
     except KeyError as e:
         raise KeyError(f"Stock symbol '{symbol}' is invalid or not found.") from e
@@ -1446,17 +1458,26 @@ def combine_stock_data(stock_price_data_df, full_stock_financial_data_df):
     except ValueError as e:
         raise ValueError(f"Error combining stock data: {e}") from e
 
-def calculate_ratios(combined_stock_data_df):
+def calculate_ratios(combined_stock_data_df, stock_symbol=None, prefer_ttm=True):
     """
-    Calculates P/S, P/E, P/B and P/FCF ratios.
+    Calculates P/S, P/E, P/B and P/FCF ratios using TTM data when available.
 
-    The function calculates the P/S, P/E, P/B and P/FCF ratios and adds them to the DataFrame.
+    The function calculates the P/S, P/E, P/B and P/FCF ratios using:
+    - TTM (Trailing Twelve Months) data when 4+ quarters are available (preferred)
+    - Annual report data as fallback when insufficient quarterly data exists
+    
+    Adds metadata columns to track which data source was used:
+    - ratio_data_source: 'ttm' or 'annual'
+    - quarters_available: Number of quarterly reports available
 
     Parameters:
     - combined_stock_data_df (pd.DataFrame): A DataFrame with combined stock data.
+    - stock_symbol (str, optional): Stock ticker symbol for TTM lookup. If None,
+      will attempt to get from 'ticker' column in DataFrame.
+    - prefer_ttm (bool): Whether to prefer TTM over annual data (default: True)
 
     Returns:
-    - combined_stock_data_df (pd.DataFrame): A DataFrame with the ratios added.
+    - combined_stock_data_df (pd.DataFrame): A DataFrame with the ratios and source metadata added.
 
     Raises:
     - ValueError: If the combined_stock_data_df parameter is empty.
@@ -1465,7 +1486,30 @@ def calculate_ratios(combined_stock_data_df):
     # Checking if the combined_stock_data_df parameter is empty
     if combined_stock_data_df.empty:
         raise ValueError("No stock data provided.")
+    
+    # Get symbol from DataFrame if not provided
+    if stock_symbol is None:
+        if 'ticker' in combined_stock_data_df.columns:
+            stock_symbol = combined_stock_data_df['ticker'].iloc[0]
+        else:
+            print("⚠️ No stock symbol provided, falling back to annual ratio calculation")
+            prefer_ttm = False
+    
+    if prefer_ttm and stock_symbol:
+        try:
+            # Use TTM-enhanced ratio calculation
+            result = calculate_ratios_ttm_with_fallback(
+                combined_stock_data_df, 
+                symbol=stock_symbol,
+                prefer_ttm=True
+            )
+            print(f"Ratios calculated using {result['ratio_data_source'].iloc[0]} data for {stock_symbol}")
+            return result
+            
+        except Exception as e:
+            print(f"⚠️ TTM calculation failed for {stock_symbol}, falling back to annual: {e}")
 
+    # Fallback to original annual-based calculation
     try:
         # Calculate the P/S ratio
         combined_stock_data_df["P/S"] = combined_stock_data_df["close_Price"] / (combined_stock_data_df["revenue"] / combined_stock_data_df["average_shares"])
@@ -1475,8 +1519,13 @@ def calculate_ratios(combined_stock_data_df):
         combined_stock_data_df["P/B"] = combined_stock_data_df["close_Price"] / combined_stock_data_df["book_Value_Per_Share"]
         # Calculate the P/FCF ratio
         combined_stock_data_df["P/FCF"] = combined_stock_data_df["close_Price"] / combined_stock_data_df["free_Cash_Flow_Per_Share"]
-        print("Ratios have been calculated successfully, and added to the dataframe.")
+        print("Ratios have been calculated successfully using annual data, and added to the dataframe.")
         combined_stock_data_df[["P/S", "P/E", "P/B", "P/FCF"]] = combined_stock_data_df[["P/S", "P/E", "P/B", "P/FCF"]].shift(1)
+        
+        # Add source tracking for consistency
+        combined_stock_data_df['ratio_data_source'] = 'annual'
+        combined_stock_data_df['quarters_available'] = 0
+        
         return combined_stock_data_df
 
     except ValueError as e:
@@ -1615,153 +1664,187 @@ def convert_excel_to_csv(dataframe, file_name):
 
 # Run the main function
 if __name__ == "__main__":
+    """
+    Main execution block for stock data fetching.
+    
+    For the full modular orchestration with blacklist management, TTM support,
+    and comprehensive error handling, use stock_orchestrator.py instead:
+    
+        python stock_orchestrator.py --indices C25 SP500 --include-market-indices --export-csv
+        python stock_orchestrator.py --tickers NOVO-B.CO MAERSK-B.CO
+        python stock_orchestrator.py --indices C25 --years 10
+    
+    This main block provides backward compatibility with the existing workflow.
+    """
     import fetch_secrets
     import db_connectors
     import db_interactions
+    from blacklist_manager import BlacklistManager
+    
     db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
     db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
     start_time = time.time()
-    # stock_tickers_df = import_tickers_from_csv("index_symbol_list_single_stock.csv")
-    stock_tickers_df = import_tickers_from_csv('index_symbol_list_multiple_stocks.csv')
-    stock_tickers_list = stock_tickers_df["Symbol"].tolist()
+    
+    # Initialize blacklist manager
+    blacklist = BlacklistManager()
+
+    # Fetch C25 and S&P 500 dynamically
+    symbols_df = dynamic_fetch_index_data(
+        indices=['C25', 'SP500'],
+        include_market_indices=True,  # Adds ^VIX, ^GSPC
+        export_csv=True
+    )
+    stock_tickers_list = symbols_df["Symbol"].tolist()
+    
+    # Filter out blacklisted tickers
+    stock_tickers_list = blacklist.filter_tickers(stock_tickers_list)
+    print(f"Processing {len(stock_tickers_list)} tickers after filtering blacklist")
+
+    # Process stock info data
     for ticker in stock_tickers_list:
-        # print(ticker)
-        if db_interactions.does_stock_exists_stock_info_data(ticker) is False:
-            print("Stock info data does not exist")
-            # Fetch stock data for the imported stock symbols
-            print("Fetching stock info data")
-            stock_info_data_df = fetch_stock_standard_data(ticker)
-            db_interactions.export_stock_info_data(stock_info_data_df)
-            print("Stock info data has been fetched and exported to the database")
-        elif db_interactions.does_stock_exists_stock_price_data(ticker) is True:
-            print(f"Stock info data already exists for stock ticker: {ticker}")
+        try:
+            if db_interactions.does_stock_exists_stock_info_data(ticker) is False:
+                print(f"Fetching stock info data for {ticker}")
+                stock_info_data_df = fetch_stock_standard_data(ticker)
+                db_interactions.export_stock_info_data(stock_info_data_df)
+                print(f"✓ Stock info data exported for {ticker}")
+            else:
+                print(f"Stock info data already exists for {ticker}")
+        except Exception as e:
+            print(f"❌ Error processing stock info for {ticker}: {e}")
+            if "No data found" in str(e) or "delisted" in str(e).lower():
+                blacklist.add_ticker(ticker, f"Stock info error: {e}")
+            continue
 
+    # Process price, financial, and ratio data for all tickers in database
     ticker_list = db_interactions.import_ticker_list()
+    ticker_list = blacklist.filter_tickers(ticker_list)
+    
     for ticker in ticker_list:
-        print(ticker)
-        stock_info = yf.Ticker(ticker).info
-        if db_interactions.does_stock_exists_stock_price_data(ticker) is False:
-            print("Stock data does not exist")
-            print(f"Fetching stock data for {ticker}")
-            # Fetch stock data for the imported stock symbols
-            stock_price_data_df = fetch_stock_price_data(ticker)
-            stock_price_data_df = calculate_period_returns(stock_price_data_df)
-            stock_price_data_df = add_technical_indicators(stock_price_data_df)
-            stock_price_data_df = add_volume_indicators(stock_price_data_df)
-            # Skip volatility indicators for indices (e.g., ^VIX, ^GSPC) - calculating "volatility of volatility" is redundant
-            if stock_info["typeDisp"] != "Index":
-                stock_price_data_df = add_volatility_indicators(stock_price_data_df)
-            stock_price_data_df = calculate_moving_averages(stock_price_data_df)
-            stock_price_data_df = calculate_standard_diviation_value(stock_price_data_df)
-            stock_price_data_df = calculate_bollinger_bands(stock_price_data_df)
-            stock_price_data_df = calculate_momentum(stock_price_data_df)
-            # Drop rows with NaN only in critical columns (not all columns) to preserve data
-            # Critical columns: price data, date, ticker - allow NaN in calculated features
-            critical_cols = ['date', 'ticker', 'close_Price', 'open_Price', 'high_Price', 'low_Price']
-            stock_price_data_df = stock_price_data_df.dropna(subset=critical_cols)
-            print(f"After dropna(): {len(stock_price_data_df)} rows remaining")
-            if not stock_price_data_df.empty:
-                db_interactions.export_stock_price_data(stock_price_data_df)
-            else:
-                print("⚠️  WARNING: DataFrame is empty after dropna(), skipping export")
-            print("Stock data has been fetched and exported to the database")
-        elif db_interactions.does_stock_exists_stock_price_data(ticker) is True:
-            print("Some stock data already exists")
-            print(f"Checking if today's price data has already been fetched for {ticker}")
-            stock_price_data_df = db_interactions.import_stock_price_data(stock_ticker=ticker)
-            date = stock_price_data_df.iloc[0]["date"]
-            if str(date) == datetime.datetime.now().strftime("%Y-%m-%d"):
-                print(f"Today's price data has already been fetched for {ticker}")
-            else:
-                print("Fetching stock data")
-                new_date = date + relativedelta(days=1)
-                if new_date.weekday() == 5:
-                    new_date = new_date + datetime.timedelta(days=2)
-                elif new_date.weekday() == 6:
-                    new_date = new_date + datetime.timedelta(days=1)
-
-                stock_price_data_df = db_interactions.import_stock_price_data(amount=252*5+1, stock_ticker=ticker)
-                stock_price_data_df["date"] = pd.to_datetime(stock_price_data_df["date"])
-                print(f"New date is: {new_date}")
-                new_stock_price_data_df = fetch_stock_price_data(ticker, new_date)
-                
-                # Check if new data was actually fetched
-                if new_stock_price_data_df.empty:
-                    print(f"No new data available for {ticker} from {new_date}")
-                    print("Stock data is already up to date")
-                    continue
-                
-                # print("new_stock_price_data_df")
-                # print(new_stock_price_data_df)
-                stock_price_data_df = pd.concat([stock_price_data_df, new_stock_price_data_df], axis=0, ignore_index=True)
-                # print("stock_price_data_df")
-                # print(stock_price_data_df)
+        print(f"\n{'='*60}")
+        print(f"Processing: {ticker}")
+        print('='*60)
+        
+        try:
+            stock_info = yf.Ticker(ticker).info
+            is_index = stock_info.get("typeDisp") == "Index"
+        except Exception as e:
+            print(f"⚠️  Could not get stock info for {ticker}, assuming not an index: {e}")
+            is_index = str(ticker).startswith('^') if isinstance(ticker, str) else False
+        
+        # Process price data
+        try:
+            if db_interactions.does_stock_exists_stock_price_data(ticker) is False:
+                print("Stock price data does not exist - fetching new data")
+                stock_price_data_df = fetch_stock_price_data(ticker)
                 stock_price_data_df = calculate_period_returns(stock_price_data_df)
                 stock_price_data_df = add_technical_indicators(stock_price_data_df)
                 stock_price_data_df = add_volume_indicators(stock_price_data_df)
-                # Skip volatility indicators for indices (e.g., ^VIX, ^GSPC) - calculating "volatility of volatility" is redundant
-                if stock_info["typeDisp"] != "Index":
+                if not is_index:
                     stock_price_data_df = add_volatility_indicators(stock_price_data_df)
                 stock_price_data_df = calculate_moving_averages(stock_price_data_df)
                 stock_price_data_df = calculate_standard_diviation_value(stock_price_data_df)
                 stock_price_data_df = calculate_bollinger_bands(stock_price_data_df)
                 stock_price_data_df = calculate_momentum(stock_price_data_df)
-                stock_price_data_df = stock_price_data_df.loc[stock_price_data_df["date"] >= new_stock_price_data_df.loc[0, "date"]]
-                # Drop rows with NaN only in critical columns (not all columns) to preserve data
+                
+                # Drop rows with NaN only in critical columns
                 critical_cols = ['date', 'ticker', 'close_Price', 'open_Price', 'high_Price', 'low_Price']
                 stock_price_data_df = stock_price_data_df.dropna(subset=critical_cols)
-                print(f"After dropna(): {len(stock_price_data_df)} rows remaining")
+                
                 if not stock_price_data_df.empty:
                     db_interactions.export_stock_price_data(stock_price_data_df)
+                    print(f"✓ Exported {len(stock_price_data_df)} price records")
                 else:
-                    print("⚠️  WARNING: DataFrame is empty after dropna(), skipping export")
-                print("Stock data has been fetched and exported to the database")
+                    print("⚠️  No valid price data to export")
+            else:
+                print("Checking for new price data...")
+                stock_price_data_df = db_interactions.import_stock_price_data(stock_ticker=ticker)
+                last_db_date = stock_price_data_df.iloc[0]["date"]
+                
+                if hasattr(last_db_date, 'date'):
+                    last_db_date = last_db_date.date()
+                elif isinstance(last_db_date, str):
+                    last_db_date = datetime.datetime.strptime(last_db_date, "%Y-%m-%d").date()
+                
+                from market_hours_utils import should_fetch_new_data
+                should_fetch, new_date, reason = should_fetch_new_data(last_db_date, ticker)
+                print(f"  {reason}")
+                
+                if should_fetch:
+                    print(f"Fetching new data from {new_date}")
+                    stock_price_data_df = db_interactions.import_stock_price_data(amount=252*5+1, stock_ticker=ticker)
+                    stock_price_data_df["date"] = pd.to_datetime(stock_price_data_df["date"])
+                    new_stock_price_data_df = fetch_stock_price_data(ticker, new_date)
+                    
+                    if not new_stock_price_data_df.empty:
+                        stock_price_data_df = pd.concat([stock_price_data_df, new_stock_price_data_df], axis=0, ignore_index=True)
+                        stock_price_data_df = calculate_period_returns(stock_price_data_df)
+                        stock_price_data_df = add_technical_indicators(stock_price_data_df)
+                        stock_price_data_df = add_volume_indicators(stock_price_data_df)
+                        if not is_index:
+                            stock_price_data_df = add_volatility_indicators(stock_price_data_df)
+                        stock_price_data_df = calculate_moving_averages(stock_price_data_df)
+                        stock_price_data_df = calculate_standard_diviation_value(stock_price_data_df)
+                        stock_price_data_df = calculate_bollinger_bands(stock_price_data_df)
+                        stock_price_data_df = calculate_momentum(stock_price_data_df)
+                        stock_price_data_df = stock_price_data_df.loc[stock_price_data_df["date"] >= new_stock_price_data_df.loc[0, "date"]]
+                        
+                        critical_cols = ['date', 'ticker', 'close_Price', 'open_Price', 'high_Price', 'low_Price']
+                        stock_price_data_df = stock_price_data_df.dropna(subset=critical_cols)
+                        
+                        if not stock_price_data_df.empty:
+                            db_interactions.export_stock_price_data(stock_price_data_df)
+                            print(f"✓ Exported {len(stock_price_data_df)} new price records")
+                    else:
+                        print("No new data available")
+        except ValueError as e:
+            if "Columns must be same length" in str(e):
+                print(f"⚠️  Skipping {ticker}: Column length mismatch (likely index ticker with different structure)")
+            else:
+                print(f"❌ Error fetching price data for {ticker}: {e}")
+        except Exception as e:
+            print(f"❌ Error processing price data for {ticker}: {e}")
+            continue
 
-        if stock_info["typeDisp"] != "Index":
+        # Skip financial and ratio data for index tickers
+        if is_index:
+            print(f"Skipping financial/ratio data for index ticker {ticker}")
+            continue
+
+        # Process financial data
+        try:
             if db_interactions.does_stock_exists_stock_income_stmt_data(ticker) is False:
-                print("Financial stock data does not exist")
-                print(f"Fetching stock financial data for {ticker}")
-                # Fetch stock financial data for the imported stock symbols
+                print("Financial data does not exist - fetching")
                 full_stock_financial_data_df = fetch_stock_financial_data(ticker)
-                # Export the stock financial data to the database
                 db_interactions.export_stock_financial_data(full_stock_financial_data_df)
-                print("Financial stock data has been fetched and exported to the database")
-            elif db_interactions.does_stock_exists_stock_income_stmt_data(ticker) is True:
-                print("Some financial stock data already exists")
-                print(f"Checking if today's financial data has already been fetched for {ticker}")
-                # Import the latest stock financial data from the database for the spicific stock ticker
+                print("✓ Financial data exported")
+            else:
+                print("Checking for new financial data...")
                 full_stock_financial_data_df = db_interactions.import_stock_financial_data(stock_ticker=ticker)
                 db_date = full_stock_financial_data_df.iloc[0]["date"]
                 full_stock_financial_data_df = fetch_stock_financial_data(ticker)
                 source_date = full_stock_financial_data_df["date"].dt.date.iloc[-1]
-                if db_date == source_date:
-                    print(f"The lastest financial data has already been fetched for {ticker}")
-                else:
-                    # Fetch stock financial data for the imported stock symbols
-                    print("Fetching stock financial data")
-                    full_stock_financial_data_df = fetch_stock_financial_data(ticker)
+                if db_date != source_date:
                     full_stock_financial_data_df = full_stock_financial_data_df.loc[full_stock_financial_data_df["date"].dt.date > db_date]
-                    # Export the stock financial data to the database
                     db_interactions.export_stock_financial_data(full_stock_financial_data_df)
-                    print("Financial stock data has been fetched and exported to the database")
+                    print("✓ New financial data exported")
+                else:
+                    print("Financial data is up to date")
+        except Exception as e:
+            print(f"❌ Error processing financial data for {ticker}: {e}")
 
+        # Process ratio data
+        try:
             if db_interactions.does_stock_exists_stock_ratio_data(ticker) is False:
-                print("Stock ratio data does not exist")
-                print("Importing stock financial data to calculate stock ratio data")
+                print("Ratio data does not exist - calculating")
                 TABEL_NAME = "stock_income_stmt_data"
-                quary = f"""SELECT COUNT(financial_Statement_Date)
-                            FROM {TABEL_NAME}
-                            WHERE ticker = '{ticker}'
-                            """
+                quary = f"""SELECT COUNT(financial_Statement_Date) FROM {TABEL_NAME} WHERE ticker = '{ticker}'"""
                 entry_amount = pd.read_sql(sql=quary, con=db_con)
                 full_stock_financial_data_df = db_interactions.import_stock_financial_data(amount=entry_amount.loc[0, entry_amount.columns[0]], stock_ticker=ticker)
                 full_stock_financial_data_df = full_stock_financial_data_df.dropna(axis=1)
                 date = full_stock_financial_data_df.iloc[0]["date"]
                 TABEL_NAME = "stock_price_data"
-                quary = f"""SELECT *
-                            FROM {TABEL_NAME}
-                            WHERE ticker = '{ticker}' AND date >= '{date}'
-                            """
+                quary = f"""SELECT * FROM {TABEL_NAME} WHERE ticker = '{ticker}' AND date >= '{date}'"""
                 stock_price_data_df = pd.read_sql(sql=quary, con=db_con)
                 combined_stock_data_df = combine_stock_data(stock_price_data_df, full_stock_financial_data_df)
                 combined_stock_data_df = calculate_ratios(combined_stock_data_df)
@@ -1769,23 +1852,17 @@ if __name__ == "__main__":
                 stock_ratio_data_df = stock_ratio_data_df.rename(columns={"P/S": "p_s", "P/E": "p_e", "P/B": "p_b", "P/FCF": "p_fcf"})
                 stock_ratio_data_df = drop_nan_values(stock_ratio_data_df)
                 db_interactions.export_stock_ratio_data(stock_ratio_data_df)
-                print("Stock ratio data has been calculated and exported to the database")
-            elif db_interactions.does_stock_exists_stock_ratio_data(ticker) is True:
-                print("Some stock ratio data already exists")
-                print(f"Checking if today's price ratio data has already been calculated for {ticker}")
+                print("✓ Ratio data exported")
+            else:
+                print("Checking for new ratio data...")
                 stock_ratio_data_df = db_interactions.import_stock_ratio_data(stock_ticker=ticker)
                 date = stock_ratio_data_df.iloc[0]["date"]
-                if str(date) == datetime.datetime.now().strftime("%Y-%m-%d"):
-                    print(f"Today's price ratio data has already been calculated for {ticker}")
-                else:
-                    print("Importing stock financial data to calculate stock ratio data")
+                if str(date) != datetime.datetime.now().strftime("%Y-%m-%d"):
+                    print("Calculating new ratio data")
                     full_stock_financial_data_df = db_interactions.import_stock_financial_data(amount=1, stock_ticker=ticker)
                     full_stock_financial_data_df = full_stock_financial_data_df.dropna(axis=1)
                     TABEL_NAME = "stock_price_data"
-                    quary = f"""SELECT *
-                                FROM {TABEL_NAME}
-                                WHERE ticker = '{ticker}' AND date >= '{date}'
-                                """
+                    quary = f"""SELECT * FROM {TABEL_NAME} WHERE ticker = '{ticker}' AND date >= '{date}'"""
                     stock_price_data_df = pd.read_sql(sql=quary, con=db_con)
                     combined_stock_data_df = combine_stock_data(stock_price_data_df, full_stock_financial_data_df)
                     combined_stock_data_df = calculate_ratios(combined_stock_data_df)
@@ -1793,9 +1870,17 @@ if __name__ == "__main__":
                     stock_ratio_data_df = stock_ratio_data_df.rename(columns={"P/S": "p_s", "P/E": "p_e", "P/B": "p_b", "P/FCF": "p_fcf"})
                     stock_ratio_data_df = drop_nan_values(stock_ratio_data_df)
                     db_interactions.export_stock_ratio_data(stock_ratio_data_df)
-                    print("Stock ratio data has been calculated and exported to the database")
+                    print("✓ Ratio data exported")
+                else:
+                    print("Ratio data is up to date")
+        except Exception as e:
+            print(f"❌ Error processing ratio data for {ticker}: {e}")
 
     # Calculate the execution time
     end_time = time.time()
     execution_time = end_time - start_time
-    print(f"Execution time: {execution_time} seconds to build dataset.")
+    print(f"\n{'='*60}")
+    print(f"Execution completed in {execution_time:.2f} seconds")
+    blacklisted_tickers = blacklist.get_blacklist()
+    print(f"Blacklisted tickers: {len(blacklisted_tickers)}")
+    print('='*60)

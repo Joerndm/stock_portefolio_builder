@@ -6,12 +6,9 @@ FROM stock_portefolio_builder.stock_price_data
 ORDER BY date DESC;
 
 SELECT *
-FROM stock_portefolio_builder.stock_ratio_data
-ORDER BY date DESC;
-
-SELECT *
 FROM stock_portefolio_builder.stock_price_data
-WHERE ticker = "DEMANT.CO";
+WHERE ticker = "Q"
+ORDER BY date DESC;
 
 SELECT *
 FROM stock_portefolio_builder.stock_price_data
@@ -26,7 +23,7 @@ ORDER BY date ASC;
 
 SELECT *
 FROM stock_portefolio_builder.stock_income_stmt_data
-WHERE ticker = "NOVO-B.CO";
+WHERE ticker= "ACS.MC";
 
 SELECT *
 FROM stock_portefolio_builder.stock_income_stmt_data
@@ -36,9 +33,23 @@ SELECT COUNT(financial_statement_date)
 FROM stock_portefolio_builder.stock_income_stmt_data
 WHERE ticker = "NOVO-B.CO";
 
+SELECT financial_Statement_Date
+FROM stock_portefolio_builder.stock_income_stmt_data
+WHERE ticker = "NOVO-B.CO"
+ORDER BY financial_Statement_Date DESC
+LIMIT 1;
+
+SELECT *
+FROM stock_portefolio_builder.stock_income_stmt_quarterly
+WHERE ticker= "ACS.MC";
+
+SELECT *
+FROM stock_portefolio_builder.stock_balancesheet_quarterly
+WHERE ticker= "FDR.MC";
+
 SELECT *
 FROM stock_portefolio_builder.stock_cash_flow_data
-WHERE ticker = "NOVO-B.CO";
+WHERE ticker = "FDR.MC";
 
 SELECT COUNT(financial_Statement_Date)
 FROM stock_portefolio_builder.stock_cash_flow_data
@@ -54,11 +65,30 @@ ORDER BY financial_statement_date ASC;
 
 SELECT *
 FROM stock_portefolio_builder.stock_ratio_data
-WHERE ticker = "NOVO-B.CO" AND `date` > "2024-03-27";
+ORDER BY date DESC;
 
 SELECT *
 FROM stock_portefolio_builder.stock_ratio_data
-WHERE ticker = "AMBU-B.CO" AND `date` > "2024-03-27";
+WHERE ticker = "NOVO-B.CO";
+
+SELECT *
+FROM stock_portefolio_builder.stock_ratio_data
+WHERE ticker = "NOVO-B.CO"
+ORDER BY date DESC;
+
+SELECT *
+FROM stock_portefolio_builder.stock_ratio_data
+WHERE ticker = "NOVO-B.CO"
+ORDER BY date DESC;
+
+SELECT *
+FROM stock_portefolio_builder.stock_ratio_data_ttm
+WHERE ticker = "NOVO-B.CO"
+ORDER BY date DESC;
+
+SELECT *
+FROM stock_portefolio_builder.stock_ratio_data
+WHERE ticker = "NOVO-B.CO" AND `date` > "2024-03-27";
 
 SELECT *
 FROM stock_portefolio_builder.stock_ratio_data
@@ -68,29 +98,3 @@ or ticker = "AMBU-B.CO" AND `date` > "2024-03-21";
 SELECT COUNT(date)
 FROM stock_portefolio_builder.stock_ratio_data
 WHERE ticker = "NOVO-B.CO";
-
-SELECT * FROM
-(SELECT * FROM stock_price_data
-WHERE ticker = "NOVO-B.CO"
-AND `date` >= "2021-12-31"
-ORDER BY date DESC) AS temp
-ORDER BY date ASC;
-
-SELECT * FROM stock_price_data
-WHERE ticker = "DANSKE.CO"
-AND `date` >= "2021-12-31"
-ORDER BY date DESC;
-
-SELECT financial_Statement_Date
-FROM stock_portefolio_builder.stock_income_stmt_data
-WHERE ticker = "NOVO-B.CO"
-ORDER BY financial_Statement_Date DESC
-LIMIT 1;
-
-SELECT * FROM stock_price_data
-WHERE ticker = "GMAB.CO"
-AND `date` >= (SELECT financial_Statement_Date
-FROM stock_portefolio_builder.stock_income_stmt_data
-WHERE ticker = "GMAB.CO"
-LIMIT 1)
-ORDER BY date DESC;
