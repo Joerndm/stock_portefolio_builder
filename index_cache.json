@@ -27,7 +27,7 @@
       "BAVA.CO",
       "NETC.CO"
     ],
-    "timestamp": "2026-01-26T05:40:07.320552",
+    "timestamp": "2026-01-28T20:26:12.615338",
     "source": "fallback"
   },
   "SP500": {
@@ -536,7 +536,7 @@
       "ZBH",
       "ZTS"
     ],
-    "timestamp": "2026-01-26T16:27:04.417537",
+    "timestamp": "2026-01-28T20:26:02.277848",
     "source": "wikipedia"
   },
   "CAC40": {
@@ -582,7 +582,7 @@
       "VIE.PA",
       "DG.PA"
     ],
-    "timestamp": "2026-01-26T19:16:48.614313",
+    "timestamp": "2026-01-28T20:26:04.384649",
     "source": "wikipedia"
   },
   "FTSE100": {
@@ -688,7 +688,7 @@
       "WEIR.L",
       "WTB.L"
     ],
-    "timestamp": "2026-01-26T19:16:49.697117",
+    "timestamp": "2026-01-28T20:26:05.461786",
     "source": "wikipedia"
   },
   "IBEX35": {
@@ -729,7 +729,7 @@
       "TEF.MC",
       "UNI.MC"
     ],
-    "timestamp": "2026-01-26T19:16:53.787379",
+    "timestamp": "2026-01-28T20:26:09.566898",
     "source": "wikipedia"
   },
   "AEX25": {
@@ -832,7 +832,7 @@
       "UCG.MI",
       "UNI.MI"
     ],
-    "timestamp": "2026-01-26T23:05:22.315811",
+    "timestamp": "2026-01-28T20:26:08.523216",
     "source": "wikipedia"
   },
   "BEL20": {

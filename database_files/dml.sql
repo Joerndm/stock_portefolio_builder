@@ -23,7 +23,7 @@ ORDER BY date ASC;
 
 SELECT *
 FROM stock_portefolio_builder.stock_income_stmt_data
-WHERE ticker= "ACS.MC";
+WHERE ticker = "ACS.MC";
 
 SELECT *
 FROM stock_portefolio_builder.stock_income_stmt_data

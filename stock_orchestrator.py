@@ -24,10 +24,13 @@ Last Modified: 2026
 """
 import os
 import sys
+import json
 import time
 import datetime
 import argparse
 import traceback
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple, Set
 from dateutil.relativedelta import relativedelta
 import pandas as pd
@@ -61,6 +64,12 @@ import fetch_secrets
 import db_connectors
 import db_interactions
 
+# Cache file to track when Wikipedia was last fetched
+MONTHLY_FETCH_CACHE_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "monthly_index_fetch_cache.json"
+)
+
 
 class StockDataOrchestrator:
     """
@@ -79,9 +88,12 @@ class StockDataOrchestrator:
     # Default indices to fetch
     DEFAULT_INDICES = ['C25', 'SP500', 'DAX40', 'CAC40', 'FTSE100', 'AEX25', 'SMI', 'FTSEMIB', 'IBEX35', 'BEL20', 'ATX']
 
-    
     # Error tracking for auto-blacklisting
     MAX_CONSECUTIVE_ERRORS = 3
+    
+    # Parallel processing defaults
+    DEFAULT_MAX_WORKERS = 5  # Conservative to avoid API rate limits
+    MAX_WORKERS_LIMIT = 10   # Upper limit to prevent overwhelming APIs
     
     def __init__(self, indices: List[str] = None, include_market_indices: bool = True):
         """
@@ -106,6 +118,7 @@ class StockDataOrchestrator:
         
         # Tracking
         self.processed_tickers = set()
+        self.failed_tickers = []  # List of (ticker, error_message) tuples
         self.error_counts = {}
         self.processing_stats = {
             'total': 0,
@@ -114,6 +127,64 @@ class StockDataOrchestrator:
             'errors': 0,
             'blacklisted': 0
         }
+        
+        # Thread-safe lock for parallel processing
+        self._stats_lock = threading.Lock()
+        self._processed_lock = threading.Lock()
+        
+        # Monthly fetch tracking
+        self._monthly_fetch_cache = self._load_monthly_fetch_cache()
+    
+    def _load_monthly_fetch_cache(self) -> Dict:
+        """Load the monthly fetch cache from file."""
+        if os.path.exists(MONTHLY_FETCH_CACHE_FILE):
+            try:
+                with open(MONTHLY_FETCH_CACHE_FILE, 'r') as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, IOError):
+                return {}
+        return {}
+    
+    def _save_monthly_fetch_cache(self):
+        """Save the monthly fetch cache to file."""
+        try:
+            with open(MONTHLY_FETCH_CACHE_FILE, 'w') as f:
+                json.dump(self._monthly_fetch_cache, f, indent=2)
+        except IOError as e:
+            print(f"Warning: Could not save monthly fetch cache: {e}")
+    
+    def _should_fetch_from_wikipedia(self) -> bool:
+        """
+        Determine if we should fetch fresh data from Wikipedia.
+        
+        Returns True if:
+        - No cache exists
+        - Last fetch was in a different month
+        - Cache is corrupted or invalid
+        """
+        if not self._monthly_fetch_cache:
+            return True
+        
+        last_fetch_str = self._monthly_fetch_cache.get('last_wikipedia_fetch')
+        if not last_fetch_str:
+            return True
+        
+        try:
+            last_fetch = datetime.datetime.fromisoformat(last_fetch_str)
+            now = datetime.datetime.now()
+            
+            # Check if same month and year
+            if last_fetch.year == now.year and last_fetch.month == now.month:
+                return False  # Already fetched this month
+            return True  # New month, should fetch
+        except (ValueError, TypeError):
+            return True  # Invalid date format, fetch fresh
+    
+    def _update_wikipedia_fetch_timestamp(self):
+        """Update the timestamp of last Wikipedia fetch."""
+        self._monthly_fetch_cache['last_wikipedia_fetch'] = datetime.datetime.now().isoformat()
+        self._monthly_fetch_cache['indices_fetched'] = self.indices
+        self._save_monthly_fetch_cache()
     
     def _connect_database(self):
         """Establish database connection."""
@@ -127,12 +198,17 @@ class StockDataOrchestrator:
             print(f"⚠️  Database connection failed: {e}")
             self.db_con = None
     
-    def get_symbols(self, use_cache: bool = True) -> pd.DataFrame:
+    def get_symbols(self, use_cache: bool = True, force_wikipedia: bool = False) -> pd.DataFrame:
         """
         Fetch stock symbols from configured indices.
         
+        Uses a monthly caching strategy:
+        - First run of each month: Fetch fresh from Wikipedia
+        - Rest of the month: Use database tickers only (faster)
+        
         Args:
-            use_cache: Whether to use cached index data
+            use_cache: Whether to use cached index data (24h cache)
+            force_wikipedia: Force Wikipedia fetch regardless of monthly cache
             
         Returns:
             DataFrame with Symbol, Index, Exchange columns
@@ -141,11 +217,50 @@ class StockDataOrchestrator:
         print(f"Fetching symbols from indices: {', '.join(self.indices)}")
         print(f"{'='*60}")
         
-        symbols_df = dynamic_fetch_index_data(
-            indices=self.indices,
-            include_market_indices=self.include_market_indices,
-            use_cache=use_cache
-        )
+        should_fetch_wikipedia = force_wikipedia or self._should_fetch_from_wikipedia()
+        
+        if should_fetch_wikipedia:
+            print("\n📡 Monthly Wikipedia fetch: Fetching fresh index constituents...")
+            symbols_df = dynamic_fetch_index_data(
+                indices=self.indices,
+                include_market_indices=self.include_market_indices,
+                use_cache=use_cache
+            )
+            
+            # Update the monthly fetch timestamp
+            self._update_wikipedia_fetch_timestamp()
+            print(f"   ✓ Wikipedia fetch complete, cached for this month")
+        else:
+            # Use database tickers instead of Wikipedia
+            print("\n📁 Using database tickers (Wikipedia already fetched this month)...")
+            try:
+                db_tickers = db_interactions.import_ticker_list()
+                symbols_df = pd.DataFrame({
+                    'Symbol': db_tickers,
+                    'Index': 'Database',
+                    'Exchange': 'various'
+                })
+                print(f"   ✓ Loaded {len(db_tickers)} tickers from database")
+                
+                # Add market indices if requested
+                if self.include_market_indices:
+                    market_indices_df = pd.DataFrame({
+                        'Symbol': list(MARKET_INDICES.values()),
+                        'Index': 'Market Index',
+                        'Exchange': 'us'
+                    })
+                    symbols_df = pd.concat([symbols_df, market_indices_df], ignore_index=True)
+                    symbols_df = symbols_df.drop_duplicates(subset=['Symbol'])
+                    
+            except Exception as e:
+                print(f"   ⚠️  Could not load from database: {e}")
+                print("   → Falling back to Wikipedia fetch...")
+                symbols_df = dynamic_fetch_index_data(
+                    indices=self.indices,
+                    include_market_indices=self.include_market_indices,
+                    use_cache=use_cache
+                )
+                self._update_wikipedia_fetch_timestamp()
         
         # Filter blacklisted tickers
         valid_symbols, blacklisted = self.blacklist.filter_tickers(
@@ -161,10 +276,49 @@ class StockDataOrchestrator:
         
         return symbols_df
     
+    def force_wikipedia_refresh(self):
+        """
+        Force a fresh Wikipedia fetch, clearing the monthly cache.
+        
+        Use this when you want to update index constituents mid-month.
+        """
+        self._monthly_fetch_cache = {}
+        self._save_monthly_fetch_cache()
+        print("✓ Monthly cache cleared. Next run will fetch from Wikipedia.")
+    
+    def get_monthly_fetch_status(self) -> Dict:
+        """
+        Get information about the last Wikipedia fetch.
+        
+        Returns:
+            Dictionary with last fetch date and status
+        """
+        if not self._monthly_fetch_cache:
+            return {'status': 'never_fetched', 'last_fetch': None, 'will_fetch': True}
+        
+        last_fetch_str = self._monthly_fetch_cache.get('last_wikipedia_fetch')
+        indices_fetched = self._monthly_fetch_cache.get('indices_fetched', [])
+        
+        try:
+            last_fetch = datetime.datetime.fromisoformat(last_fetch_str)
+            will_fetch = self._should_fetch_from_wikipedia()
+            return {
+                'status': 'cached',
+                'last_fetch': last_fetch.strftime('%Y-%m-%d %H:%M:%S'),
+                'last_fetch_month': last_fetch.strftime('%B %Y'),
+                'indices_fetched': indices_fetched,
+                'will_fetch_wikipedia': will_fetch
+            }
+        except (ValueError, TypeError):
+            return {'status': 'invalid_cache', 'last_fetch': None, 'will_fetch': True}
+    
     def _handle_ticker_error(self, ticker: str, error: Exception, 
                               error_type: str = "error") -> bool:
         """
         Handle errors for a ticker, potentially blacklisting if too many errors.
+        
+        If a ticker is blacklisted as 'delisted', also removes its data from the database
+        to keep the database clean and prevent orphaned data.
         
         Args:
             ticker: Stock ticker symbol
@@ -217,6 +371,18 @@ class StockDataOrchestrator:
             )
             self.processing_stats['blacklisted'] += 1
             print(f"   ↳ Added {ticker} to blacklist (reason: {blacklist_reason})")
+            
+            # If delisted, also remove from database to keep it clean
+            if blacklist_reason == 'delisted':
+                print(f"   ↳ Cleaning up database for delisted ticker {ticker}...")
+                try:
+                    deleted = self.blacklist.cleanup_database(ticker, self.db_con)
+                    if deleted:
+                        total_deleted = sum(deleted.values())
+                        print(f"   ↳ Removed {total_deleted} records from database")
+                except Exception as cleanup_error:
+                    print(f"   ⚠️ Database cleanup failed: {cleanup_error}")
+            
             return True
         
         return False
@@ -566,60 +732,133 @@ class StockDataOrchestrator:
             # Don't blacklist for financial data errors - company might just not have reports
             return False, None
     
-    def _fetch_and_export_quarterly_data(self, ticker: str) -> bool:
+    def _fetch_and_export_quarterly_data(self, ticker: str, force_fetch: bool = False) -> bool:
         """
         Fetch and export quarterly financial data for TTM calculations.
         
+        This method implements a smart caching approach:
+        1. Check if data is fresh (fetched within 30 days AND recent quarter < 100 days old)
+        2. If fresh: skip API fetch, use existing database data
+        3. If stale: fetch from yfinance, merge, and export
+        4. Update fetch metadata after successful export
+        
         Args:
             ticker: Stock ticker symbol
+            force_fetch: If True, bypass freshness check and always fetch from API
             
         Returns:
-            True if quarterly data was successfully exported
+            True if quarterly data was successfully processed (either from cache or fresh fetch)
         """
+        from enhanced_financial_fetcher import (
+            transform_quarterly_to_db_schema,
+            calculate_ttm_from_quarterly,
+            merge_quarterly_data
+        )
+        
         try:
-            print(f"   → Fetching quarterly data for {ticker}")
+            print(f"   → Processing quarterly data for {ticker}")
             
-            # Fetch quarterly income statement
+            # Check if we should fetch from API or use cached data
+            if not force_fetch:
+                should_fetch, reason = db_interactions.should_fetch_quarterly_data(ticker)
+                if not should_fetch:
+                    print(f"   ↳ Using cached quarterly data ({reason})")
+                    return True
+                else:
+                    print(f"   ↳ Fetching from API: {reason}")
+            else:
+                print(f"   ↳ Force fetch enabled - bypassing cache")
+            
+            # Track the latest quarter and count for metadata update
+            latest_quarter_end = None
+            total_quarters = 0
+            
+            # 1. Fetch quarterly income statement from yfinance
             quarterly_income = self.quarterly_fetcher.fetch_quarterly_income_statement(ticker)
             if not quarterly_income.empty:
-                # Prepare for database export
-                quarterly_income['ticker'] = ticker
-                quarterly_income = quarterly_income.reset_index()
-                quarterly_income = quarterly_income.rename(columns={'index': 'fiscal_quarter_end'})
+                # Get existing database data
+                db_income = db_interactions.import_quarterly_income_data(ticker)
+                existing_quarters = len(db_income)
                 
-                # Ensure fiscal_quarter_end is datetime
-                quarterly_income['fiscal_quarter_end'] = pd.to_datetime(quarterly_income['fiscal_quarter_end'])
+                # Transform yfinance data to database schema
+                transformed_income = transform_quarterly_to_db_schema(
+                    quarterly_income, ticker, statement_type='income'
+                )
                 
+                # Merge with existing data (keeping unique quarters)
+                merged_income = merge_quarterly_data(db_income, transformed_income, ticker)
+                
+                # Calculate TTM values if we have at least 4 quarters
+                if len(merged_income) >= 4:
+                    merged_income = calculate_ttm_from_quarterly(
+                        merged_income, ticker, statement_type='income'
+                    )
+                
+                # Export to database (delete-then-insert pattern already in export function)
                 try:
-                    db_interactions.export_quarterly_income_stmt(quarterly_income)
+                    if not merged_income.empty:
+                        db_interactions.export_quarterly_income_stmt(merged_income)
+                        new_quarters = len(merged_income) - existing_quarters
+                        if new_quarters > 0:
+                            print(f"   ↳ Added {new_quarters} new quarters (total: {len(merged_income)})")
+                        
+                        # Track for metadata
+                        total_quarters = len(merged_income)
+                        if 'fiscal_quarter_end' in merged_income.columns:
+                            latest_quarter_end = merged_income['fiscal_quarter_end'].max()
+                            # Convert to date if it's a datetime/timestamp
+                            if hasattr(latest_quarter_end, 'date'):
+                                latest_quarter_end = latest_quarter_end.date()
+                            elif hasattr(latest_quarter_end, 'to_pydatetime'):
+                                latest_quarter_end = latest_quarter_end.to_pydatetime().date()
                 except Exception as e:
                     print(f"   ↳ Could not export quarterly income: {e}")
             
-            # Fetch quarterly balance sheet
+            # 2. Fetch quarterly balance sheet from yfinance
             quarterly_bs = self.quarterly_fetcher.fetch_quarterly_balance_sheet(ticker)
             if not quarterly_bs.empty:
-                quarterly_bs['ticker'] = ticker
-                quarterly_bs = quarterly_bs.reset_index()
-                quarterly_bs = quarterly_bs.rename(columns={'index': 'fiscal_quarter_end'})
-                quarterly_bs['fiscal_quarter_end'] = pd.to_datetime(quarterly_bs['fiscal_quarter_end'])
+                db_bs = db_interactions.import_quarterly_balancesheet_data(ticker)
+                
+                transformed_bs = transform_quarterly_to_db_schema(
+                    quarterly_bs, ticker, statement_type='balancesheet'
+                )
+                
+                merged_bs = merge_quarterly_data(db_bs, transformed_bs, ticker)
                 
                 try:
-                    db_interactions.export_quarterly_balancesheet(quarterly_bs)
+                    if not merged_bs.empty:
+                        db_interactions.export_quarterly_balancesheet(merged_bs)
                 except Exception as e:
                     print(f"   ↳ Could not export quarterly balance sheet: {e}")
             
-            # Fetch quarterly cash flow
+            # 3. Fetch quarterly cash flow from yfinance
             quarterly_cf = self.quarterly_fetcher.fetch_quarterly_cash_flow(ticker)
             if not quarterly_cf.empty:
-                quarterly_cf['ticker'] = ticker
-                quarterly_cf = quarterly_cf.reset_index()
-                quarterly_cf = quarterly_cf.rename(columns={'index': 'fiscal_quarter_end'})
-                quarterly_cf['fiscal_quarter_end'] = pd.to_datetime(quarterly_cf['fiscal_quarter_end'])
+                db_cf = db_interactions.import_quarterly_cashflow_data(ticker)
+                
+                transformed_cf = transform_quarterly_to_db_schema(
+                    quarterly_cf, ticker, statement_type='cashflow'
+                )
+                
+                merged_cf = merge_quarterly_data(db_cf, transformed_cf, ticker)
+                
+                if len(merged_cf) >= 4:
+                    merged_cf = calculate_ttm_from_quarterly(
+                        merged_cf, ticker, statement_type='cashflow'
+                    )
                 
                 try:
-                    db_interactions.export_quarterly_cashflow(quarterly_cf)
+                    if not merged_cf.empty:
+                        db_interactions.export_quarterly_cashflow(merged_cf)
                 except Exception as e:
                     print(f"   ↳ Could not export quarterly cash flow: {e}")
+            
+            # Update fetch metadata after successful processing
+            db_interactions.update_quarterly_fetch_metadata(
+                ticker=ticker,
+                last_quarter_end=latest_quarter_end,
+                quarters_count=total_quarters
+            )
             
             return True
             
@@ -686,7 +925,10 @@ class StockDataOrchestrator:
             
             # Get the date range for price data
             if ratio_exists:
-                date = last_date
+                # Start from the day AFTER last_date to avoid re-calculating existing
+                from datetime import timedelta
+                start_date = pd.to_datetime(last_date) + timedelta(days=1)
+                date = start_date.strftime('%Y-%m-%d')
             else:
                 date = full_stock_financial_data_df.iloc[0]["date"]
             
@@ -766,8 +1008,10 @@ class StockDataOrchestrator:
             if not stock_info or stock_info.get('regularMarketPrice') is None:
                 raise ValueError(f"No data available for {ticker}")
         except Exception as e:
-            print(f"   ✗ Cannot access {ticker}: {e}")
+            error_msg = f"Cannot access: {str(e)[:60]}"
+            print(f"   ✗ {error_msg}")
             self._handle_ticker_error(ticker, e, "info")
+            self._add_failed_ticker(ticker, error_msg)
             self.processing_stats['errors'] += 1
             return False
         
@@ -776,12 +1020,14 @@ class StockDataOrchestrator:
         # Step 1: Stock Info
         success, _ = self.process_stock_info(ticker)
         if not success:
+            self._add_failed_ticker(ticker, "Stock info processing failed")
             self.processing_stats['errors'] += 1
             return False
         
         # Step 2: Price Data
         success, _ = self.process_price_data(ticker, stock_info, force_full)
         if not success:
+            self._add_failed_ticker(ticker, "Price data processing failed")
             self.processing_stats['errors'] += 1
             return False
         
@@ -799,8 +1045,61 @@ class StockDataOrchestrator:
         self.processing_stats['success'] += 1
         return True
     
+    def _update_stats(self, stat_key: str, increment: int = 1):
+        """
+        Thread-safe update of processing statistics.
+        
+        Args:
+            stat_key: Key in processing_stats dict
+            increment: Value to add (default 1)
+        """
+        with self._stats_lock:
+            self.processing_stats[stat_key] += increment
+    
+    def _add_processed_ticker(self, ticker: str):
+        """Thread-safe addition of processed ticker."""
+        with self._processed_lock:
+            self.processed_tickers.add(ticker)
+    
+    def _add_failed_ticker(self, ticker: str, error_msg: str):
+        """Thread-safe addition of failed ticker with error message."""
+        with self._processed_lock:
+            self.failed_tickers.append((ticker, error_msg))
+    
+    def _process_ticker_worker(self, ticker: str, force_full: bool, 
+                                prefer_ttm: bool, progress_info: str) -> Tuple[str, bool, Optional[str]]:
+        """
+        Worker function for parallel ticker processing.
+        
+        This is a wrapper around process_ticker that's safe for thread pool execution.
+        Each thread gets its own database connection for thread safety.
+        
+        Args:
+            ticker: Stock ticker symbol
+            force_full: Force full data fetch
+            prefer_ttm: Prefer TTM financial data
+            progress_info: Progress string like "[1/100]"
+            
+        Returns:
+            Tuple of (ticker, success, error_message or None)
+        """
+        try:
+            # Print progress (thread-safe via GIL for simple prints)
+            print(f"\n{progress_info} Starting: {ticker}")
+            
+            success = self.process_ticker(ticker, force_full, prefer_ttm)
+            return (ticker, success, None)
+            
+        except Exception as e:
+            error_msg = str(e)
+            print(f"\n{progress_info} ✗ {ticker}: {error_msg}")
+            self._update_stats('errors')
+            self._add_failed_ticker(ticker, error_msg)
+            return (ticker, False, error_msg)
+    
     def run(self, tickers: List[str] = None, force_full: bool = False,
-            prefer_ttm: bool = True) -> Dict:
+            prefer_ttm: bool = True, force_wikipedia: bool = False,
+            parallel: bool = False, max_workers: int = None) -> Dict:
         """
         Run the complete data pipeline.
         
@@ -808,11 +1107,19 @@ class StockDataOrchestrator:
             tickers: Optional list of specific tickers (None = fetch from indices)
             force_full: Force full data fetch for all tickers
             prefer_ttm: Prefer TTM financial data
+            force_wikipedia: Force fresh Wikipedia fetch (ignore monthly cache)
+            parallel: Enable parallel processing with ThreadPoolExecutor
+            max_workers: Number of parallel workers (default: 5, max: 10)
             
         Returns:
             Dictionary with processing statistics
         """
         start_time = time.time()
+        
+        # Validate max_workers
+        if max_workers is None:
+            max_workers = self.DEFAULT_MAX_WORKERS
+        max_workers = min(max(1, max_workers), self.MAX_WORKERS_LIMIT)
         
         print("\n" + "=" * 60)
         print("STOCK DATA ORCHESTRATOR")
@@ -820,11 +1127,12 @@ class StockDataOrchestrator:
         print(f"Started: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"Indices: {', '.join(self.indices)}")
         print(f"TTM Preferred: {prefer_ttm}")
+        print(f"Parallel Mode: {'Enabled (' + str(max_workers) + ' workers)' if parallel else 'Disabled'}")
         print("=" * 60)
         
         # Get tickers
         if tickers is None:
-            symbols_df = self.get_symbols()
+            symbols_df = self.get_symbols(force_wikipedia=force_wikipedia)
             tickers = symbols_df['Symbol'].tolist()
         else:
             # Filter provided tickers against blacklist
@@ -844,18 +1152,10 @@ class StockDataOrchestrator:
         
         print(f"\nProcessing {len(tickers)} tickers...")
         
-        # Process each ticker
-        for i, ticker in enumerate(tickers, 1):
-            try:
-                print(f"\n[{i}/{len(tickers)}]", end="")
-                self.process_ticker(ticker, force_full, prefer_ttm)
-            except KeyboardInterrupt:
-                print("\n\n⚠️  Interrupted by user")
-                break
-            except Exception as e:
-                print(f"\n   ✗ Unexpected error: {e}")
-                traceback.print_exc()
-                self.processing_stats['errors'] += 1
+        if parallel:
+            self._run_parallel(tickers, force_full, prefer_ttm, max_workers)
+        else:
+            self._run_sequential(tickers, force_full, prefer_ttm)
         
         # Summary
         elapsed_time = time.time() - start_time
@@ -865,6 +1165,8 @@ class StockDataOrchestrator:
         print("=" * 60)
         print(f"Finished: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"Duration: {elapsed_time:.1f} seconds ({elapsed_time/60:.1f} minutes)")
+        if parallel:
+            print(f"Mode: Parallel ({max_workers} workers)")
         print(f"\nStatistics:")
         print(f"  Total processed: {self.processing_stats['total']}")
         print(f"  Successful:      {self.processing_stats['success']}")
@@ -880,7 +1182,98 @@ class StockDataOrchestrator:
             for reason, count in bl_summary['by_reason'].items():
                 print(f"  {reason}: {count}")
         
+        # Show failed tickers for troubleshooting
+        if self.failed_tickers:
+            print(f"\n" + "-" * 60)
+            print(f"FAILED TICKERS ({len(self.failed_tickers)}):")
+            print("-" * 60)
+            for ticker, error_msg in self.failed_tickers:
+                # Truncate long error messages
+                if len(error_msg) > 80:
+                    error_msg = error_msg[:77] + "..."
+                print(f"  {ticker}: {error_msg}")
+            print("-" * 60)
+        
+        # Add failed tickers to stats for programmatic access
+        self.processing_stats['failed_tickers'] = self.failed_tickers.copy()
+        
         return self.processing_stats
+    
+    def _run_sequential(self, tickers: List[str], force_full: bool, prefer_ttm: bool):
+        """
+        Run pipeline sequentially (original behavior).
+        
+        Args:
+            tickers: List of ticker symbols
+            force_full: Force full data fetch
+            prefer_ttm: Prefer TTM financial data
+        """
+        for i, ticker in enumerate(tickers, 1):
+            try:
+                print(f"\n[{i}/{len(tickers)}]", end="")
+                self.process_ticker(ticker, force_full, prefer_ttm)
+            except KeyboardInterrupt:
+                print("\n\n⚠️  Interrupted by user")
+                break
+            except Exception as e:
+                error_msg = str(e)
+                print(f"\n   ✗ Unexpected error: {error_msg}")
+                traceback.print_exc()
+                self._add_failed_ticker(ticker, f"Unexpected: {error_msg[:50]}")
+                self.processing_stats['errors'] += 1
+    
+    def _run_parallel(self, tickers: List[str], force_full: bool, 
+                      prefer_ttm: bool, max_workers: int):
+        """
+        Run pipeline with parallel processing using ThreadPoolExecutor.
+        
+        This provides significant speedup for I/O-bound operations like
+        fetching data from yfinance and writing to the database.
+        
+        Args:
+            tickers: List of ticker symbols
+            force_full: Force full data fetch
+            prefer_ttm: Prefer TTM financial data
+            max_workers: Number of parallel workers
+        """
+        total = len(tickers)
+        completed = 0
+        
+        print(f"\n🚀 Starting parallel processing with {max_workers} workers...")
+        print(f"   (Note: Output may be interleaved due to parallel execution)\n")
+        
+        try:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # Submit all tasks with progress info
+                future_to_ticker = {
+                    executor.submit(
+                        self._process_ticker_worker, 
+                        ticker, 
+                        force_full, 
+                        prefer_ttm,
+                        f"[{i}/{total}]"
+                    ): ticker 
+                    for i, ticker in enumerate(tickers, 1)
+                }
+                
+                # Process results as they complete
+                for future in as_completed(future_to_ticker):
+                    ticker = future_to_ticker[future]
+                    completed += 1
+                    
+                    try:
+                        ticker_result, success, error_msg = future.result()
+                        if success:
+                            print(f"   ✓ {ticker_result} completed ({completed}/{total})")
+                        elif error_msg:
+                            print(f"   ✗ {ticker_result} failed: {error_msg[:50]}")
+                    except Exception as e:
+                        print(f"   ✗ {ticker} exception: {e}")
+                        self._update_stats('errors')
+                        
+        except KeyboardInterrupt:
+            print("\n\n⚠️  Interrupted by user - waiting for running tasks to complete...")
+            # ThreadPoolExecutor will wait for running tasks on context exit
 
 
 def main():
@@ -891,7 +1284,7 @@ def main():
     parser.add_argument(
         '--indices', '-i',
         nargs='+',
-        default=['C25', 'SP500'],
+        default=['C25', 'SP500', 'DAX40', 'CAC40', 'FTSE100', 'AEX25', 'SMI', 'FTSEMIB', 'IBEX35', 'BEL20', 'ATX'],
         help='Index codes to fetch (e.g., C25 SP500 DAX40)'
     )
     parser.add_argument(
@@ -929,10 +1322,47 @@ def main():
         action='store_true',
         help='Show blacklisted tickers and exit'
     )
+    parser.add_argument(
+        '--force-wikipedia',
+        action='store_true',
+        help='Force fresh Wikipedia fetch (ignore monthly cache)'
+    )
+    parser.add_argument(
+        '--show-fetch-status',
+        action='store_true',
+        help='Show Wikipedia fetch status and exit'
+    )
+    parser.add_argument(
+        '--no-parallel',
+        action='store_true',
+        help='Disable parallel processing (parallel is enabled by default)'
+    )
+    parser.add_argument(
+        '--workers', '-w',
+        type=int,
+        default=5,
+        help='Number of parallel workers (default: 5, max: 10)'
+    )
     
     args = parser.parse_args()
     
     # Handle info commands
+    if args.show_fetch_status:
+        orchestrator = StockDataOrchestrator(indices=args.indices)
+        status = orchestrator.get_monthly_fetch_status()
+        print("\n" + "="*60)
+        print("WIKIPEDIA FETCH STATUS")
+        print("="*60)
+        print(f"Status: {status['status']}")
+        if status.get('last_fetch'):
+            print(f"Last fetch: {status['last_fetch']}")
+            print(f"Month: {status.get('last_fetch_month', 'N/A')}")
+            print(f"Indices fetched: {', '.join(status.get('indices_fetched', []))}")
+        print(f"Will fetch Wikipedia on next run: {'Yes' if status.get('will_fetch_wikipedia', status.get('will_fetch', True)) else 'No (using database)'}")
+        print("="*60)
+        print("\nTo force a fresh Wikipedia fetch, use: --force-wikipedia")
+        return
+    
     if args.list_indices:
         print("\n" + "="*60)
         print("AVAILABLE STOCK INDICES")
@@ -1020,11 +1450,15 @@ def main():
     orchestrator.run(
         tickers=tickers,
         force_full=args.force_full,
-        prefer_ttm=not args.no_ttm
+        prefer_ttm=not args.no_ttm,
+        force_wikipedia=args.force_wikipedia,
+        parallel=not args.no_parallel,
+        max_workers=args.workers
     )
 
 
-def run_with_indices(indices=None, tickers=None, force_full=False, prefer_ttm=True):
+def run_with_indices(indices=None, tickers=None, force_full=False, prefer_ttm=True, 
+                     force_wikipedia=False, parallel=True, max_workers=5):
     """
     Run the orchestrator programmatically with specific indices.
     
@@ -1036,6 +1470,9 @@ def run_with_indices(indices=None, tickers=None, force_full=False, prefer_ttm=Tr
         tickers: Optional list of specific tickers to process (overrides indices)
         force_full: Force full data fetch (not incremental)
         prefer_ttm: Prefer TTM financial data (default: True)
+        force_wikipedia: Force fresh Wikipedia fetch (ignore monthly cache)
+        parallel: Enable parallel processing for faster execution (default: True)
+        max_workers: Number of parallel workers (default: 5, max: 10)
         
     Returns:
         Dictionary with processing statistics
@@ -1050,9 +1487,18 @@ def run_with_indices(indices=None, tickers=None, force_full=False, prefer_ttm=Tr
         
         # Run specific tickers:
         stats = run_with_indices(tickers=['AAPL', 'MSFT', 'GOOGL'])
+        
+        # Force Wikipedia refresh:
+        stats = run_with_indices(force_wikipedia=True)
+        
+        # Run with parallel processing (faster):
+        stats = run_with_indices(parallel=True, max_workers=5)
+        
+        # Run specific tickers in parallel:
+        stats = run_with_indices(tickers=['AAPL', 'MSFT', 'GOOGL', 'AMZN'], parallel=True)
     """
     if indices is None:
-        indices = ['SP500', 'DAX40', 'CAC40', 'FTSE100', 'AEX25', 'SMI', 'FTSEMIB', 'IBEX35', 'BEL20', 'ATX']
+        indices = ['C25', 'SP500', 'DAX40', 'CAC40', 'FTSE100', 'AEX25', 'SMI', 'FTSEMIB', 'IBEX35', 'BEL20', 'ATX']
     
     orchestrator = StockDataOrchestrator(
         indices=indices,
@@ -1062,7 +1508,10 @@ def run_with_indices(indices=None, tickers=None, force_full=False, prefer_ttm=Tr
     return orchestrator.run(
         tickers=tickers,
         force_full=force_full,
-        prefer_ttm=prefer_ttm
+        prefer_ttm=prefer_ttm,
+        force_wikipedia=force_wikipedia,
+        parallel=parallel,
+        max_workers=max_workers
     )
 
 

@@ -214,6 +214,8 @@ class BlacklistManager:
         Returns:
             Dictionary with counts of deleted rows per table
         """
+        from sqlalchemy import text
+        
         if db_con is None:
             try:
                 import fetch_secrets
@@ -246,24 +248,25 @@ class BlacklistManager:
         for table in tables:
             try:
                 # Check if table exists
-                check_query = f"""
+                check_query = text(f"""
                     SELECT COUNT(*) as cnt FROM information_schema.tables 
-                    WHERE table_schema = DATABASE() AND table_name = '{table}'
-                """
-                result = pd.read_sql(check_query, db_con)
+                    WHERE table_schema = DATABASE() AND table_name = :table_name
+                """)
+                result = pd.read_sql(check_query, db_con, params={'table_name': table})
                 
                 if result['cnt'].iloc[0] == 0:
                     continue
                 
                 # Count rows to delete
-                count_query = f"SELECT COUNT(*) as cnt FROM {table} WHERE ticker = '{ticker}'"
-                count_result = pd.read_sql(count_query, db_con)
+                count_query = text(f"SELECT COUNT(*) as cnt FROM {table} WHERE ticker = :ticker")
+                count_result = pd.read_sql(count_query, db_con, params={'ticker': ticker})
                 rows_to_delete = count_result['cnt'].iloc[0]
                 
                 if rows_to_delete > 0:
-                    # Delete rows
-                    delete_query = f"DELETE FROM {table} WHERE ticker = '{ticker}'"
-                    db_con.execute(delete_query)
+                    # Delete rows using proper SQLAlchemy transaction
+                    delete_query = text(f"DELETE FROM {table} WHERE ticker = :ticker")
+                    with db_con.begin() as connection:
+                        connection.execute(delete_query, {'ticker': ticker})
                     deleted_counts[table] = rows_to_delete
                     print(f"  Deleted {rows_to_delete} rows from {table}")
                     

@@ -1067,35 +1067,44 @@ def export_stock_ratio_data(stock_ratio_data_df=""):
         # Remove duplicates within the DataFrame itself (keep last occurrence)
         stock_ratio_data_df = stock_ratio_data_df.drop_duplicates(subset=['date', 'ticker'], keep='last')
         
-        # Delete existing records for the same date-ticker combinations to avoid duplicates
-        # Build a bulk delete query for better performance
+        # Check which dates already exist in the database and only insert new ones
         if len(stock_ratio_data_df) > 0:
-            # Get unique ticker and date range for efficient deletion
-            ticker = stock_ratio_data_df['ticker'].iloc[0]  # Assuming all rows are for same ticker
+            ticker = stock_ratio_data_df['ticker'].iloc[0]
+            
+            # Convert all dates to datetime.date for consistent comparison
+            stock_ratio_data_df['date'] = pd.to_datetime(stock_ratio_data_df['date']).dt.date
+            
+            # Get existing dates for this ticker in the date range
+            from sqlalchemy import text
             min_date = stock_ratio_data_df['date'].min()
             max_date = stock_ratio_data_df['date'].max()
             
-            # Use text() for raw SQL execution with SQLAlchemy
-            from sqlalchemy import text
-            
-            delete_query = text("""
-                DELETE FROM stock_ratio_data 
+            existing_query = text("""
+                SELECT date FROM stock_ratio_data 
                 WHERE ticker = :ticker 
                 AND date >= :min_date 
                 AND date <= :max_date
             """)
             
-            with db_con.begin() as connection:
-                result = connection.execute(delete_query, {
-                    'ticker': ticker,
-                    'min_date': min_date,
-                    'max_date': max_date
-                })
-                print(f"Deleted {result.rowcount} existing records for {ticker} between {min_date} and {max_date}")
+            existing_dates = pd.read_sql(existing_query, db_con, params={
+                'ticker': ticker,
+                'min_date': str(min_date),  # Convert to string for SQL
+                'max_date': str(max_date)
+            })
+            
+            if not existing_dates.empty:
+                # Convert to set for fast lookup
+                existing_date_set = set(pd.to_datetime(existing_dates['date']).dt.date)
+                # Filter to only new records
+                stock_ratio_data_df = stock_ratio_data_df[~stock_ratio_data_df['date'].isin(existing_date_set)]
+                
+                if stock_ratio_data_df.empty:
+                    print(f"   ↳ No new ratio records to insert (all {len(existing_date_set)} dates already exist)")
+                    return
         
     except Exception as e:
-        print(f"⚠️  WARNING: Could not delete existing records: {e}")
-        # Continue anyway - the error will be caught in the insert if it's critical
+        print(f"⚠️  WARNING: Could not check existing records: {e}")
+        # Continue anyway - duplicates will be caught by database constraints if any
 
     try:
         stock_ratio_data_df.to_sql(name="stock_ratio_data", con=db_con, index=False, if_exists="append")
@@ -1146,6 +1155,317 @@ def _filter_to_valid_columns(df, valid_columns):
     """Filter DataFrame to only include columns that exist in the database schema."""
     existing_valid = [col for col in df.columns if col in valid_columns]
     return df[existing_valid].copy()
+
+
+# ============================================
+# QUARTERLY FETCH METADATA FUNCTIONS
+# ============================================
+# Functions to track when quarterly data was last fetched
+# Used to implement smart caching and reduce unnecessary API calls
+
+def get_quarterly_fetch_metadata(ticker: str) -> dict:
+    """
+    Get quarterly fetch metadata for a ticker.
+    
+    Args:
+        ticker: Stock ticker symbol
+        
+    Returns:
+        Dictionary with keys: last_fetch_date, last_quarter_end, quarters_count
+        Returns None values if no metadata exists
+    """
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+        
+        query = f"""
+            SELECT last_fetch_date, last_quarter_end, quarters_count
+            FROM quarterly_fetch_metadata 
+            WHERE ticker = '{ticker}'
+        """
+        df = pd.read_sql(sql=query, con=db_con)
+        
+        if df.empty:
+            return {
+                'last_fetch_date': None,
+                'last_quarter_end': None,
+                'quarters_count': 0
+            }
+        
+        row = df.iloc[0]
+        return {
+            'last_fetch_date': pd.to_datetime(row['last_fetch_date']).date() if pd.notna(row['last_fetch_date']) else None,
+            'last_quarter_end': pd.to_datetime(row['last_quarter_end']).date() if pd.notna(row['last_quarter_end']) else None,
+            'quarters_count': int(row['quarters_count']) if pd.notna(row['quarters_count']) else 0
+        }
+        
+    except Exception as e:
+        # Table might not exist yet - return empty metadata
+        print(f"   ↳ Note: Could not get quarterly fetch metadata: {e}")
+        return {
+            'last_fetch_date': None,
+            'last_quarter_end': None,
+            'quarters_count': 0
+        }
+
+
+def update_quarterly_fetch_metadata(ticker: str, last_quarter_end=None, quarters_count: int = 0) -> bool:
+    """
+    Update quarterly fetch metadata after a successful fetch.
+    
+    Args:
+        ticker: Stock ticker symbol
+        last_quarter_end: Most recent fiscal quarter end date (datetime.date or None)
+        quarters_count: Number of quarterly records in database
+        
+    Returns:
+        True if update was successful
+    """
+    from datetime import date
+    
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+        
+        from sqlalchemy import text
+        
+        today = date.today()
+        last_quarter_str = f"'{last_quarter_end}'" if last_quarter_end else "NULL"
+        
+        with db_con.begin() as connection:
+            # Use INSERT ... ON DUPLICATE KEY UPDATE for upsert
+            connection.execute(text(f"""
+                INSERT INTO quarterly_fetch_metadata 
+                    (ticker, last_fetch_date, last_quarter_end, quarters_count)
+                VALUES 
+                    ('{ticker}', '{today}', {last_quarter_str}, {quarters_count})
+                ON DUPLICATE KEY UPDATE
+                    last_fetch_date = '{today}',
+                    last_quarter_end = {last_quarter_str},
+                    quarters_count = {quarters_count}
+            """))
+        
+        return True
+        
+    except Exception as e:
+        print(f"   ↳ Warning: Could not update quarterly fetch metadata: {e}")
+        return False
+
+
+def should_fetch_quarterly_data(ticker: str, max_days_since_fetch: int = 30, 
+                                 max_days_since_quarter: int = 100) -> tuple:
+    """
+    Determine if quarterly data should be fetched from yfinance API.
+    
+    Implements smart caching logic:
+    - If never fetched before: fetch
+    - If last fetch was > max_days_since_fetch days ago: fetch  
+    - If most recent quarter is > max_days_since_quarter days old: fetch
+    - Otherwise: skip fetch and use existing database data
+    
+    Args:
+        ticker: Stock ticker symbol
+        max_days_since_fetch: Maximum days since last API fetch (default: 30)
+        max_days_since_quarter: Maximum days since most recent quarter end (default: 100)
+            100 days allows for ~45 day reporting delay + buffer
+        
+    Returns:
+        Tuple of (should_fetch: bool, reason: str)
+    """
+    from datetime import date
+    
+    metadata = get_quarterly_fetch_metadata(ticker)
+    today = date.today()
+    
+    # Never fetched - must fetch
+    if metadata['last_fetch_date'] is None:
+        return True, "never fetched before"
+    
+    days_since_fetch = (today - metadata['last_fetch_date']).days
+    
+    # Check if it's been too long since last fetch
+    if days_since_fetch >= max_days_since_fetch:
+        return True, f"last fetch was {days_since_fetch} days ago (threshold: {max_days_since_fetch})"
+    
+    # Check if we have recent quarter data
+    if metadata['last_quarter_end'] is None:
+        return True, "no quarter data in database"
+    
+    days_since_quarter = (today - metadata['last_quarter_end']).days
+    
+    # If most recent quarter is too old, a new quarter might be available
+    if days_since_quarter >= max_days_since_quarter:
+        return True, f"most recent quarter is {days_since_quarter} days old (threshold: {max_days_since_quarter})"
+    
+    # Check if we have enough quarters for TTM (at least 4)
+    if metadata['quarters_count'] < 4:
+        return True, f"only {metadata['quarters_count']} quarters in database (need 4 for TTM)"
+    
+    # All checks passed - no need to fetch
+    return False, f"data is fresh (fetched {days_since_fetch} days ago, latest quarter: {metadata['last_quarter_end']})"
+
+
+def get_existing_quarterly_dates(ticker: str, table_type: str = 'income') -> list:
+    """
+    Get list of fiscal quarter end dates already in database for a ticker.
+    
+    Args:
+        ticker: Stock ticker symbol
+        table_type: 'income', 'balancesheet', or 'cashflow'
+        
+    Returns:
+        List of datetime.date objects for existing quarters
+    """
+    table_map = {
+        'income': 'stock_income_stmt_quarterly',
+        'balancesheet': 'stock_balancesheet_quarterly',
+        'cashflow': 'stock_cashflow_quarterly'
+    }
+    table_name = table_map.get(table_type, 'stock_income_stmt_quarterly')
+    
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+        
+        query = f"""
+            SELECT DISTINCT fiscal_quarter_end 
+            FROM {table_name} 
+            WHERE ticker = '{ticker}'
+            ORDER BY fiscal_quarter_end
+        """
+        df = pd.read_sql(sql=query, con=db_con)
+        
+        if df.empty:
+            return []
+        
+        # Convert to list of dates
+        dates = pd.to_datetime(df['fiscal_quarter_end']).dt.date.tolist()
+        return dates
+        
+    except Exception as e:
+        print(f"Warning: Could not check existing quarterly dates: {e}")
+        return []
+
+
+def import_quarterly_income_data(ticker: str) -> pd.DataFrame:
+    """
+    Import quarterly income statement data from database for a ticker.
+    
+    Args:
+        ticker: Stock ticker symbol
+        
+    Returns:
+        DataFrame with quarterly income data, sorted by fiscal_quarter_end
+    """
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+        
+        query = f"""
+            SELECT * FROM stock_income_stmt_quarterly 
+            WHERE ticker = '{ticker}'
+            ORDER BY fiscal_quarter_end DESC
+        """
+        df = pd.read_sql(sql=query, con=db_con)
+        return df
+        
+    except Exception as e:
+        print(f"Warning: Could not import quarterly income data: {e}")
+        return pd.DataFrame()
+
+
+def import_quarterly_balancesheet_data(ticker: str) -> pd.DataFrame:
+    """
+    Import quarterly balance sheet data from database for a ticker.
+    
+    Args:
+        ticker: Stock ticker symbol
+        
+    Returns:
+        DataFrame with quarterly balance sheet data, sorted by fiscal_quarter_end
+    """
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+        
+        query = f"""
+            SELECT * FROM stock_balancesheet_quarterly 
+            WHERE ticker = '{ticker}'
+            ORDER BY fiscal_quarter_end DESC
+        """
+        df = pd.read_sql(sql=query, con=db_con)
+        return df
+        
+    except Exception as e:
+        print(f"Warning: Could not import quarterly balance sheet data: {e}")
+        return pd.DataFrame()
+
+
+def import_quarterly_cashflow_data(ticker: str) -> pd.DataFrame:
+    """
+    Import quarterly cash flow data from database for a ticker.
+    
+    Args:
+        ticker: Stock ticker symbol
+        
+    Returns:
+        DataFrame with quarterly cash flow data, sorted by fiscal_quarter_end
+    """
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+        
+        query = f"""
+            SELECT * FROM stock_cashflow_quarterly 
+            WHERE ticker = '{ticker}'
+            ORDER BY fiscal_quarter_end DESC
+        """
+        df = pd.read_sql(sql=query, con=db_con)
+        return df
+        
+    except Exception as e:
+        print(f"Warning: Could not import quarterly cash flow data: {e}")
+        return pd.DataFrame()
+
+
+def count_quarterly_reports(ticker: str) -> int:
+    """
+    Count how many quarterly income reports exist in database for a ticker.
+    
+    Args:
+        ticker: Stock ticker symbol
+        
+    Returns:
+        Number of quarterly reports available
+    """
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+        
+        query = f"""
+            SELECT COUNT(*) as cnt FROM stock_income_stmt_quarterly 
+            WHERE ticker = '{ticker}'
+        """
+        df = pd.read_sql(sql=query, con=db_con)
+        return int(df['cnt'].iloc[0])
+        
+    except Exception as e:
+        print(f"Warning: Could not count quarterly reports: {e}")
+        return 0
+
+
+def has_sufficient_quarterly_data(ticker: str, min_quarters: int = 4) -> bool:
+    """
+    Check if ticker has enough quarterly reports for TTM calculation.
+    
+    Args:
+        ticker: Stock ticker symbol
+        min_quarters: Minimum quarters needed (default 4 for TTM)
+        
+    Returns:
+        True if sufficient data exists
+    """
+    return count_quarterly_reports(ticker) >= min_quarters
 
 
 def export_quarterly_income_stmt(quarterly_income_df):

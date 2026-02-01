@@ -174,23 +174,33 @@ class TTMFinancialCalculator:
         self, 
         symbol: str, 
         prefer_ttm: bool = True,
-        years: int = 10
+        years: int = 10,
+        check_database_first: bool = True
     ) -> Dict[str, Any]:
         """
         Get the best available financial data (TTM if possible, annual as fallback).
+        
+        This method implements a database-first approach:
+        1. Check database quarterly tables for existing quarters
+        2. If enough quarters in database (>=4), use database data for TTM
+        3. Otherwise, fetch fresh from yfinance
+        4. Fall back to annual data if TTM not possible
         
         Args:
             symbol: Stock ticker symbol
             prefer_ttm: Whether to prefer TTM over annual (default: True)
             years: Years of historical data to consider
+            check_database_first: Whether to check database before yfinance (default: True)
             
         Returns:
             Dictionary containing:
                 - 'data': Financial data DataFrame
-                - 'source': 'ttm' or 'annual'
+                - 'source': 'ttm_db', 'ttm', or 'annual'
                 - 'quarters_available': Number of quarters found
                 - 'ttm_possible': Whether TTM calculation was possible
         """
+        import db_interactions
+        
         result = {
             'data': pd.DataFrame(),
             'source': 'none',
@@ -203,7 +213,29 @@ class TTMFinancialCalculator:
         }
         
         if prefer_ttm:
-            # Try quarterly/TTM first
+            # 1. Check database for existing quarterly data first
+            if check_database_first:
+                try:
+                    db_quarters = db_interactions.count_quarterly_reports(symbol)
+                    if db_quarters >= self.MIN_QUARTERS_FOR_TTM:
+                        # Use database quarterly data
+                        db_income = db_interactions.import_quarterly_income_data(symbol)
+                        if not db_income.empty:
+                            result['quarters_available'] = len(db_income)
+                            result['ttm_possible'] = True
+                            result['source'] = 'ttm_db'
+                            result['income_data'] = db_income
+                            
+                            # Also get balance sheet and cash flow from database
+                            result['balance_sheet'] = db_interactions.import_quarterly_balancesheet_data(symbol)
+                            result['cash_flow'] = db_interactions.import_quarterly_cashflow_data(symbol)
+                            
+                            print(f"✅ Using TTM data from database for {symbol} ({db_quarters} quarters available)")
+                            return result
+                except Exception as e:
+                    print(f"⚠️ Could not check database for {symbol}: {e}")
+            
+            # 2. Fetch fresh quarterly data from yfinance
             quarterly_data = fetch_quarterly_financial_data(symbol, years)
             
             income_q = quarterly_data.get('income_quarterly', pd.DataFrame())

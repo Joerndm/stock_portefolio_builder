@@ -658,6 +658,245 @@ def convert_quarterly_to_annual_compatible(quarterly_data: Dict[str, pd.DataFram
     return result
 
 
+def transform_quarterly_to_db_schema(quarterly_df: pd.DataFrame, ticker: str, 
+                                     statement_type: str = 'income') -> pd.DataFrame:
+    """
+    Transform quarterly data from yfinance format to database schema format.
+    
+    The database expects columns with _q suffix for quarterly values.
+    This function:
+    1. Renames columns to add _q suffix
+    2. Adds ticker and fiscal_quarter_end columns
+    3. Returns data ready for database export
+    
+    Args:
+        quarterly_df: DataFrame from fetch_quarterly_income_statement, etc.
+        ticker: Stock ticker symbol
+        statement_type: 'income', 'balancesheet', or 'cashflow'
+        
+    Returns:
+        DataFrame formatted for database export with _q suffixed columns
+    """
+    if quarterly_df.empty:
+        return pd.DataFrame()
+    
+    df = quarterly_df.copy()
+    
+    # Ensure index is datetime
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index)
+    
+    # Reset index to make date a column
+    df = df.reset_index()
+    df = df.rename(columns={'index': 'fiscal_quarter_end'})
+    
+    # Add ticker
+    df['ticker'] = ticker
+    
+    if statement_type == 'income':
+        # Map yfinance column names to database column names with _q suffix
+        # Handle net_income vs net_income_common - prefer net_income if both exist
+        column_mapping = {
+            'revenue': 'revenue_q',
+            'gross_profit': 'gross_profit_q',
+            'operating_income': 'operating_income_q',
+            'net_income': 'net_income_q',
+            'eps_basic': 'eps_basic_q',
+            'eps_diluted': 'eps_diluted_q',
+            'shares_diluted': 'shares_diluted',  # No _q suffix for shares
+            'ebitda': 'ebitda_q',
+            'ebit': 'ebit_q',
+            'interest_expense': 'interest_expense_q',
+            'rd_expense': 'rd_expense_q',
+            'sga_expense': 'sga_expense_q',
+            'cost_of_revenue': 'cost_of_revenue_q',
+        }
+        # If net_income doesn't exist but net_income_common does, use it
+        if 'net_income' not in df.columns and 'net_income_common' in df.columns:
+            column_mapping['net_income_common'] = 'net_income_q'
+    elif statement_type == 'balancesheet':
+        # Balance sheet items are point-in-time, typically don't need _q suffix
+        column_mapping = {
+            'total_assets': 'total_assets',
+            'total_liabilities': 'total_liabilities',
+            'total_equity': 'total_equity',
+            'stockholders_equity': 'stockholders_equity',
+            'current_assets': 'current_assets',
+            'current_liabilities': 'current_liabilities',
+            'cash': 'cash',
+            'cash_and_investments': 'cash_and_investments',
+            'total_debt': 'total_debt',
+            'long_term_debt': 'long_term_debt',
+            'short_term_debt': 'short_term_debt',
+            'inventory': 'inventory',
+            'accounts_receivable': 'accounts_receivable',
+            'accounts_payable': 'accounts_payable',
+            'goodwill': 'goodwill',
+            'intangible_assets': 'intangible_assets',
+        }
+    elif statement_type == 'cashflow':
+        # Cash flow items are flow metrics, need _q suffix
+        column_mapping = {
+            'operating_cash_flow': 'operating_cash_flow_q',
+            'capex': 'capex_q',
+            'free_cash_flow': 'free_cash_flow_q',
+            'investing_cash_flow': 'investing_cash_flow_q',
+            'financing_cash_flow': 'financing_cash_flow_q',
+            'dividends_paid': 'dividends_paid_q',
+            'share_repurchases': 'share_repurchases_q',
+            'stock_issuance': 'stock_issuance_q',
+            'debt_issuance': 'debt_issuance_q',
+            'debt_repayment': 'debt_repayment_q',
+        }
+    else:
+        column_mapping = {}
+    
+    # Rename columns that exist
+    existing_mappings = {k: v for k, v in column_mapping.items() if k in df.columns}
+    df = df.rename(columns=existing_mappings)
+    
+    # Ensure fiscal_quarter_end is date only (not datetime with time)
+    df['fiscal_quarter_end'] = pd.to_datetime(df['fiscal_quarter_end']).dt.date
+    
+    return df
+
+
+def calculate_ttm_from_quarterly(quarterly_df: pd.DataFrame, ticker: str,
+                                 statement_type: str = 'income') -> pd.DataFrame:
+    """
+    Calculate TTM (Trailing Twelve Months) values from quarterly data.
+    
+    For each quarter, sums the values from that quarter and the 3 preceding quarters.
+    
+    Args:
+        quarterly_df: DataFrame with quarterly data (already transformed with _q suffix)
+        ticker: Stock ticker symbol
+        statement_type: 'income', 'balancesheet', or 'cashflow'
+        
+    Returns:
+        DataFrame with TTM columns added (e.g., revenue_ttm = sum of 4 quarters of revenue_q)
+    """
+    if quarterly_df.empty or len(quarterly_df) < 4:
+        return quarterly_df
+    
+    df = quarterly_df.copy()
+    
+    # Sort by date
+    df['fiscal_quarter_end'] = pd.to_datetime(df['fiscal_quarter_end'])
+    df = df.sort_values('fiscal_quarter_end')
+    
+    # Columns that should be summed for TTM (flow metrics)
+    if statement_type == 'income':
+        ttm_columns = ['revenue_q', 'gross_profit_q', 'operating_income_q', 
+                       'net_income_q', 'ebitda_q', 'ebit_q', 
+                       'interest_expense_q', 'rd_expense_q', 'sga_expense_q',
+                       'cost_of_revenue_q']
+    elif statement_type == 'cashflow':
+        ttm_columns = ['operating_cash_flow_q', 'capex_q', 'free_cash_flow_q',
+                       'investing_cash_flow_q', 'financing_cash_flow_q',
+                       'dividends_paid_q', 'share_repurchases_q']
+    else:
+        # Balance sheet items are point-in-time, no TTM needed
+        return df
+    
+    # Calculate TTM for each flow column
+    for col in ttm_columns:
+        if col in df.columns:
+            ttm_col = col.replace('_q', '_ttm')
+            # Rolling sum of last 4 quarters
+            df[ttm_col] = df[col].rolling(window=4, min_periods=4).sum()
+    
+    # Calculate growth rates
+    if statement_type == 'income' and 'revenue_ttm' in df.columns:
+        # YoY growth (compare to 4 quarters ago)
+        df['revenue_growth_yoy'] = df['revenue_ttm'].pct_change(periods=4, fill_method=None)
+        if 'net_income_ttm' in df.columns:
+            df['net_income_growth_yoy'] = df['net_income_ttm'].pct_change(periods=4, fill_method=None)
+        
+        # QoQ growth (compare to 1 quarter ago)
+        df['revenue_growth_qoq'] = df['revenue_q'].pct_change(periods=1, fill_method=None)
+        if 'net_income_q' in df.columns:
+            df['net_income_growth_qoq'] = df['net_income_q'].pct_change(periods=1, fill_method=None)
+    
+    # Convert fiscal_quarter_end back to date
+    df['fiscal_quarter_end'] = df['fiscal_quarter_end'].dt.date
+    
+    return df
+
+
+def merge_quarterly_data(db_data: pd.DataFrame, yfinance_data: pd.DataFrame, 
+                         ticker: str) -> pd.DataFrame:
+    """
+    Merge existing database quarterly data with new yfinance data.
+    
+    For quarters that already exist in the database:
+    - Update with yfinance data (fills in NULL columns with actual values)
+    
+    For new quarters not in the database:
+    - Add them from yfinance
+    
+    Args:
+        db_data: Existing data from database (may be empty or have NULL columns)
+        yfinance_data: New data from yfinance (already transformed to db schema)
+        ticker: Stock ticker symbol
+        
+    Returns:
+        Merged DataFrame with updated and new quarters
+    """
+    if db_data.empty:
+        return yfinance_data
+    
+    if yfinance_data.empty:
+        return db_data
+    
+    # Convert dates to comparable format
+    db_data = db_data.copy()
+    yfinance_data = yfinance_data.copy()
+    
+    db_data['fiscal_quarter_end'] = pd.to_datetime(db_data['fiscal_quarter_end']).dt.date
+    yfinance_data['fiscal_quarter_end'] = pd.to_datetime(yfinance_data['fiscal_quarter_end']).dt.date
+    
+    # Get existing dates from database
+    existing_dates = set(db_data['fiscal_quarter_end'].tolist())
+    yf_dates = set(yfinance_data['fiscal_quarter_end'].tolist())
+    
+    # Identify new quarters (not in database)
+    new_dates = yf_dates - existing_dates
+    
+    # Identify quarters to update (exist in both but database may have NULL values)
+    update_dates = yf_dates & existing_dates
+    
+    result_parts = []
+    
+    # For existing quarters, use yfinance data (it has actual values vs database NULLs)
+    if update_dates:
+        # Use yfinance data for these dates - it has actual values
+        updated = yfinance_data[yfinance_data['fiscal_quarter_end'].isin(update_dates)]
+        result_parts.append(updated)
+    
+    # For quarters only in database (not in yfinance), keep database data
+    db_only_dates = existing_dates - yf_dates
+    if db_only_dates:
+        db_only = db_data[db_data['fiscal_quarter_end'].isin(db_only_dates)]
+        result_parts.append(db_only)
+    
+    # Add new quarters from yfinance
+    if new_dates:
+        new_quarters = yfinance_data[yfinance_data['fiscal_quarter_end'].isin(new_dates)]
+        result_parts.append(new_quarters)
+        print(f"  Found {len(new_quarters)} new quarters for {ticker}")
+    else:
+        print(f"  No new quarters to add for {ticker} (updating {len(update_dates)} existing)")
+    
+    # Combine all parts
+    if result_parts:
+        combined = pd.concat(result_parts, ignore_index=True)
+        combined = combined.sort_values('fiscal_quarter_end')
+        return combined
+    
+    return yfinance_data
+
+
 # Demo/testing code
 if __name__ == "__main__":
     print("Testing Enhanced Financial Data Fetcher")

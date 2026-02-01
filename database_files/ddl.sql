@@ -442,6 +442,26 @@ CREATE TABLE IF NOT EXISTS `index_membership` (
 
 
 -- ============================================
+-- SECTION 7B: QUARTERLY FETCH METADATA TABLE
+-- ============================================
+-- Tracks when quarterly data was last fetched for each ticker
+-- Used to implement smart caching and reduce unnecessary API calls
+
+CREATE TABLE IF NOT EXISTS `quarterly_fetch_metadata` (
+  `ticker` VARCHAR(255) NOT NULL COMMENT 'Stock ticker symbol',
+  `last_fetch_date` DATE NOT NULL COMMENT 'Date when quarterly data was last fetched from API',
+  `last_quarter_end` DATE COMMENT 'Most recent fiscal quarter end date in database',
+  `quarters_count` INT DEFAULT 0 COMMENT 'Number of quarterly records in database',
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT 'Record creation timestamp',
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'Last update timestamp',
+  PRIMARY KEY (`ticker`),
+  CONSTRAINT `fk_quarterly_fetch_metadata_ticker` 
+    FOREIGN KEY (`ticker`) REFERENCES `stock_info_data` (`ticker`)
+    ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Tracks quarterly data fetch timestamps for smart caching';
+
+
+-- ============================================
 -- SECTION 8: VIEWS FOR COMMON QUERIES
 -- ============================================
 
