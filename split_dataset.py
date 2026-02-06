@@ -51,7 +51,7 @@ def dataset_train_test_split(dataset_dataframe, test_size=0.10, validation_size=
 
     try:
         # Drop the columns that are not needed
-        drop_colum_list = ["date", "name", "date_published", "ticker", "currency"]
+        drop_colum_list = ["date", "name", "date_published", "ticker", "currency", "financial_date_used"]
         for column in drop_colum_list:
             if column in dataset_dataframe.columns:
                 dataset_dataframe = dataset_dataframe.drop([column], axis=1)

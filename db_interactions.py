@@ -1113,6 +1113,262 @@ def export_stock_ratio_data(stock_ratio_data_df=""):
         raise KeyError(f"Could not export from stock_ratio_data_df to stock_price_data in the database. Error: {e}") from e
 
 
+def delete_stock_ratio_data_from_date(stock_ticker: str, from_date: str) -> int:
+    """
+    Delete ratio data for a ticker from a specific date onwards.
+    
+    This is used when new financial data is available and ratios need to be recalculated.
+    
+    Args:
+        stock_ticker: Stock ticker symbol
+        from_date: Date string (YYYY-MM-DD) from which to delete ratios (inclusive)
+    
+    Returns:
+        Number of rows deleted
+    
+    Raises:
+        - ValueError: If stock_ticker or from_date is empty
+        - KeyError: If database connection fails
+    """
+    if not stock_ticker:
+        raise ValueError("stock_ticker cannot be empty")
+    if not from_date:
+        raise ValueError("from_date cannot be empty")
+    
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+    except Exception as e:
+        raise KeyError(f"Could not fetch the secrets. Error: {e}") from e
+    
+    try:
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+    except Exception as e:
+        raise KeyError(f"Could not establish connection to the database. Error: {e}") from e
+    
+    try:
+        from sqlalchemy import text
+        
+        # First count how many rows will be deleted
+        count_query = text("""
+            SELECT COUNT(*) as count FROM stock_ratio_data 
+            WHERE ticker = :ticker AND date >= :from_date
+        """)
+        result = pd.read_sql(count_query, db_con, params={
+            'ticker': stock_ticker,
+            'from_date': from_date
+        })
+        rows_to_delete = result['count'].iloc[0]
+        
+        if rows_to_delete > 0:
+            # Delete the rows
+            delete_query = text("""
+                DELETE FROM stock_ratio_data 
+                WHERE ticker = :ticker AND date >= :from_date
+            """)
+            with db_con.connect() as conn:
+                conn.execute(delete_query, {'ticker': stock_ticker, 'from_date': from_date})
+                conn.commit()
+        
+        return rows_to_delete
+        
+    except Exception as e:
+        raise KeyError(f"Could not delete ratio data for {stock_ticker} from {from_date}. Error: {e}") from e
+
+
+def get_newest_financial_date(stock_ticker: str, include_quarterly: bool = True) -> tuple:
+    """
+    Get the newest financial statement date for a ticker.
+    
+    Checks both annual and quarterly financial data to find the most recent
+    fiscal period end date.
+    
+    Args:
+        stock_ticker: Stock ticker symbol
+        include_quarterly: Whether to include quarterly data in the check
+    
+    Returns:
+        Tuple of (newest_date, source) where source is 'annual' or 'quarterly'
+        Returns (None, None) if no financial data exists
+    
+    Raises:
+        - KeyError: If database connection fails
+    """
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+    except Exception as e:
+        raise KeyError(f"Could not fetch the secrets. Error: {e}") from e
+    
+    try:
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+    except Exception as e:
+        raise KeyError(f"Could not establish connection to the database. Error: {e}") from e
+    
+    newest_date = None
+    source = None
+    
+    try:
+        # Check annual data
+        annual_query = f"""
+            SELECT MAX(financial_Statement_Date) as newest_date 
+            FROM stock_income_stmt_data 
+            WHERE ticker = '{stock_ticker}'
+        """
+        annual_result = pd.read_sql(sql=annual_query, con=db_con)
+        annual_date = annual_result['newest_date'].iloc[0]
+        
+        if annual_date is not None:
+            newest_date = pd.to_datetime(annual_date).date()
+            source = 'annual'
+        
+        # Check quarterly data if requested
+        if include_quarterly:
+            quarterly_query = f"""
+                SELECT MAX(fiscal_quarter_end) as newest_date 
+                FROM stock_income_stmt_quarterly 
+                WHERE ticker = '{stock_ticker}'
+            """
+            try:
+                quarterly_result = pd.read_sql(sql=quarterly_query, con=db_con)
+                quarterly_date = quarterly_result['newest_date'].iloc[0]
+                
+                if quarterly_date is not None:
+                    quarterly_date = pd.to_datetime(quarterly_date).date()
+                    if newest_date is None or quarterly_date > newest_date:
+                        newest_date = quarterly_date
+                        source = 'quarterly'
+            except Exception:
+                # Quarterly table might not exist
+                pass
+        
+        return newest_date, source
+        
+    except Exception as e:
+        print(f"Warning: Could not get newest financial date for {stock_ticker}: {e}")
+        return None, None
+
+
+def get_last_ratio_financial_date(stock_ticker: str) -> tuple:
+    """
+    Get the financial_date_used from the most recent ratio record for a ticker.
+    
+    This helps determine if new financial data is available that requires
+    ratio recalculation.
+    
+    Args:
+        stock_ticker: Stock ticker symbol
+    
+    Returns:
+        Tuple of (last_ratio_date, financial_date_used)
+        Returns (None, None) if no ratio data exists
+    
+    Raises:
+        - KeyError: If database connection fails
+    """
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+    except Exception as e:
+        raise KeyError(f"Could not fetch the secrets. Error: {e}") from e
+    
+    try:
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+    except Exception as e:
+        raise KeyError(f"Could not establish connection to the database. Error: {e}") from e
+    
+    try:
+        query = f"""
+            SELECT date, financial_date_used 
+            FROM stock_ratio_data 
+            WHERE ticker = '{stock_ticker}' 
+            ORDER BY date DESC 
+            LIMIT 1
+        """
+        result = pd.read_sql(sql=query, con=db_con)
+        
+        if result.empty:
+            return None, None
+        
+        last_ratio_date = pd.to_datetime(result['date'].iloc[0]).date()
+        financial_date_used = result['financial_date_used'].iloc[0]
+        
+        if financial_date_used is not None:
+            financial_date_used = pd.to_datetime(financial_date_used).date()
+        
+        return last_ratio_date, financial_date_used
+        
+    except Exception as e:
+        print(f"Warning: Could not get last ratio financial date for {stock_ticker}: {e}")
+        return None, None
+
+
+def get_all_financial_dates(stock_ticker: str, include_quarterly: bool = True) -> pd.DataFrame:
+    """
+    Get all financial statement dates for a ticker, sorted oldest to newest.
+    
+    This is used for initial population to calculate ratios from the earliest
+    financial statement onwards.
+    
+    Args:
+        stock_ticker: Stock ticker symbol
+        include_quarterly: Whether to include quarterly data
+    
+    Returns:
+        DataFrame with columns ['date', 'source'] sorted by date ascending
+    
+    Raises:
+        - KeyError: If database connection fails
+    """
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+    except Exception as e:
+        raise KeyError(f"Could not fetch the secrets. Error: {e}") from e
+    
+    try:
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+    except Exception as e:
+        raise KeyError(f"Could not establish connection to the database. Error: {e}") from e
+    
+    all_dates = []
+    
+    try:
+        # Get annual dates
+        annual_query = f"""
+            SELECT DISTINCT financial_Statement_Date as date, 'annual' as source
+            FROM stock_income_stmt_data 
+            WHERE ticker = '{stock_ticker}'
+        """
+        annual_result = pd.read_sql(sql=annual_query, con=db_con)
+        if not annual_result.empty:
+            all_dates.append(annual_result)
+        
+        # Get quarterly dates if requested
+        if include_quarterly:
+            quarterly_query = f"""
+                SELECT DISTINCT fiscal_quarter_end as date, 'quarterly' as source
+                FROM stock_income_stmt_quarterly 
+                WHERE ticker = '{stock_ticker}'
+            """
+            try:
+                quarterly_result = pd.read_sql(sql=quarterly_query, con=db_con)
+                if not quarterly_result.empty:
+                    all_dates.append(quarterly_result)
+            except Exception:
+                # Quarterly table might not exist
+                pass
+        
+        if not all_dates:
+            return pd.DataFrame(columns=['date', 'source'])
+        
+        result = pd.concat(all_dates, ignore_index=True)
+        result['date'] = pd.to_datetime(result['date'])
+        result = result.drop_duplicates(subset=['date']).sort_values('date')
+        
+        return result.reset_index(drop=True)
+        
+    except Exception as e:
+        print(f"Warning: Could not get financial dates for {stock_ticker}: {e}")
+        return pd.DataFrame(columns=['date', 'source'])
+
+
 # Define valid columns for quarterly tables based on database schema
 QUARTERLY_INCOME_COLUMNS = [
     'fiscal_quarter_end', 'fiscal_year', 'fiscal_quarter', 'date_published', 'ticker',

@@ -869,9 +869,22 @@ class StockDataOrchestrator:
     def process_ratio_data(self, ticker: str, prefer_ttm: bool = True
                            ) -> Tuple[bool, Optional[pd.DataFrame]]:
         """
-        Calculate and export financial ratios.
+        Calculate and export financial ratios with smart update logic.
         
-        Uses TTM data when available for more current metrics.
+        Logic:
+        1. INITIAL POPULATION (no ratio data exists):
+           - Get ALL financial statements for the ticker
+           - Calculate ratios from the earliest financial statement date onwards
+           - Store which financial date was used for each ratio calculation
+        
+        2. DAILY UPDATE (ratio data exists, no new financial reports):
+           - Only calculate ratios for new dates since last calculation
+           - Use the most recent financial data
+        
+        3. RECALCULATION (new financial report available):
+           - Detect new financial data (annual or quarterly)
+           - Delete ratio data from the new report's fiscal date onwards
+           - Recalculate with the new financial data
         
         Args:
             ticker: Stock ticker symbol
@@ -881,66 +894,148 @@ class StockDataOrchestrator:
             Tuple of (success, ratio_data_df or None)
         """
         from stock_data_fetch import combine_stock_data, calculate_ratios, drop_nan_values
+        from datetime import timedelta
         
         try:
-            # Check current status
+            # Check current ratio data status
             ratio_exists = db_interactions.does_stock_exists_stock_ratio_data(ticker)
             
-            if ratio_exists:
-                # Check if update needed
-                stock_ratio_data_df = db_interactions.import_stock_ratio_data(
-                    stock_ticker=ticker
-                )
-                last_date = stock_ratio_data_df.iloc[0]["date"]
+            # Get newest financial data date (annual + quarterly)
+            newest_financial_date, fin_source = db_interactions.get_newest_financial_date(
+                ticker, include_quarterly=prefer_ttm
+            )
+            
+            if newest_financial_date is None:
+                print(f"   [SKIP] No financial data available for ratio calculation")
+                return False, None
+            
+            # Determine which scenario we're in
+            if not ratio_exists:
+                # ========================================
+                # SCENARIO 1: INITIAL POPULATION
+                # ========================================
+                print(f"   [INIT] Initial ratio population for {ticker}")
                 
-                if str(last_date) == datetime.datetime.now().strftime("%Y-%m-%d"):
-                    print(f"   ↳ Ratio data is up to date")
-                    return True, stock_ratio_data_df
+                # Get ALL financial statement dates
+                all_fin_dates = db_interactions.get_all_financial_dates(ticker, include_quarterly=prefer_ttm)
                 
-                # Get financial data
-                full_stock_financial_data_df = db_interactions.import_stock_financial_data(
-                    amount=1, stock_ticker=ticker
-                )
-            else:
-                # Get all financial data
-                TABEL_NAME = "stock_income_stmt_data"
+                if all_fin_dates.empty:
+                    print(f"   [SKIP] No financial statement dates found")
+                    return False, None
+                
+                # Start from the earliest financial statement date
+                earliest_fin_date = all_fin_dates['date'].min()
+                start_date = pd.to_datetime(earliest_fin_date).strftime('%Y-%m-%d')
+                
+                # Get ALL financial data
                 query = f"""SELECT COUNT(financial_Statement_Date)
-                            FROM {TABEL_NAME}
+                            FROM stock_income_stmt_data
                             WHERE ticker = '{ticker}'"""
                 entry_amount = pd.read_sql(sql=query, con=self.db_con)
                 full_stock_financial_data_df = db_interactions.import_stock_financial_data(
                     amount=entry_amount.loc[0, entry_amount.columns[0]],
                     stock_ticker=ticker
                 )
+                
+                recalculate_from = start_date
+                
+            else:
+                # ========================================
+                # SCENARIO 2 or 3: UPDATE or RECALCULATION
+                # ========================================
+                
+                # Get the last ratio record's info
+                last_ratio_date, last_fin_date_used = db_interactions.get_last_ratio_financial_date(ticker)
+                
+                # Check if new financial data is available
+                needs_recalculation = False
+                if last_fin_date_used is not None and newest_financial_date > last_fin_date_used:
+                    needs_recalculation = True
+                    print(f"   [RECALC] New financial data detected: {newest_financial_date} > {last_fin_date_used}")
+                elif last_fin_date_used is None:
+                    # Old ratio data without financial_date_used tracking - needs recalculation
+                    needs_recalculation = True
+                    print(f"   [RECALC] Legacy ratio data without financial_date_used tracking")
+                
+                if needs_recalculation:
+                    # ========================================
+                    # SCENARIO 3: RECALCULATION NEEDED
+                    # ========================================
+                    
+                    all_fin_dates = db_interactions.get_all_financial_dates(ticker, include_quarterly=prefer_ttm)
+                    
+                    if last_fin_date_used is None:
+                        # Legacy data - delete all and recalculate from earliest financial date
+                        earliest_fin_date = all_fin_dates['date'].min()
+                        recalculate_from = pd.to_datetime(earliest_fin_date).strftime('%Y-%m-%d')
+                        print(f"   [RECALC] Starting from earliest financial date: {recalculate_from}")
+                    else:
+                        # Find the first financial date newer than what we've used
+                        fin_dates_after_used = all_fin_dates[all_fin_dates['date'] > pd.to_datetime(last_fin_date_used)]
+                        
+                        if not fin_dates_after_used.empty:
+                            # Recalculate from the first new financial date
+                            first_new_fin_date = fin_dates_after_used['date'].min()
+                            recalculate_from = pd.to_datetime(first_new_fin_date).strftime('%Y-%m-%d')
+                        else:
+                            # Fallback: start from day after last ratio
+                            recalculate_from = (pd.to_datetime(last_ratio_date) + timedelta(days=1)).strftime('%Y-%m-%d')
+                    
+                    # Delete ratios from the recalculation start date onwards
+                    deleted_count = db_interactions.delete_stock_ratio_data_from_date(
+                        ticker, recalculate_from
+                    )
+                    print(f"   [DELETE] Deleted {deleted_count} ratio records from {recalculate_from}")
+                    
+                    # Get ALL financial data for proper forward-fill
+                    query = f"""SELECT COUNT(financial_Statement_Date)
+                                FROM stock_income_stmt_data
+                                WHERE ticker = '{ticker}'"""
+                    entry_amount = pd.read_sql(sql=query, con=self.db_con)
+                    full_stock_financial_data_df = db_interactions.import_stock_financial_data(
+                        amount=entry_amount.loc[0, entry_amount.columns[0]],
+                        stock_ticker=ticker
+                    )
+                    
+                else:
+                    # ========================================
+                    # SCENARIO 2: SIMPLE DAILY UPDATE
+                    # ========================================
+                    
+                    # Check if already up to date
+                    today = datetime.datetime.now().strftime("%Y-%m-%d")
+                    if str(last_ratio_date) == today:
+                        print(f"   [OK] Ratio data is up to date")
+                        return True, None
+                    
+                    # Just calculate for new days
+                    recalculate_from = (pd.to_datetime(last_ratio_date) + timedelta(days=1)).strftime('%Y-%m-%d')
+                    print(f"   [UPDATE] Adding ratios from {recalculate_from}")
+                    
+                    # Only need the latest financial data
+                    full_stock_financial_data_df = db_interactions.import_stock_financial_data(
+                        amount=1, stock_ticker=ticker
+                    )
             
+            # Validate financial data
             if full_stock_financial_data_df is None or full_stock_financial_data_df.empty:
-                print(f"   ↳ No financial data for ratio calculation")
+                print(f"   [SKIP] No financial data for ratio calculation")
                 return False, None
             
             full_stock_financial_data_df = full_stock_financial_data_df.dropna(axis=1)
             
             if full_stock_financial_data_df.empty:
-                print(f"   ↳ Financial data empty after dropna")
+                print(f"   [SKIP] Financial data empty after dropna")
                 return False, None
             
-            # Get the date range for price data
-            if ratio_exists:
-                # Start from the day AFTER last_date to avoid re-calculating existing
-                from datetime import timedelta
-                start_date = pd.to_datetime(last_date) + timedelta(days=1)
-                date = start_date.strftime('%Y-%m-%d')
-            else:
-                date = full_stock_financial_data_df.iloc[0]["date"]
-            
-            # Get price data
-            TABEL_NAME = "stock_price_data"
+            # Get price data from the recalculate_from date
             query = f"""SELECT *
-                        FROM {TABEL_NAME}
-                        WHERE ticker = '{ticker}' AND date >= '{date}'"""
+                        FROM stock_price_data
+                        WHERE ticker = '{ticker}' AND date >= '{recalculate_from}'"""
             stock_price_data_df = pd.read_sql(sql=query, con=self.db_con)
             
             if stock_price_data_df.empty:
-                print(f"   ↳ No price data for ratio calculation")
+                print(f"   [SKIP] No price data for ratio calculation from {recalculate_from}")
                 return False, None
             
             # Combine and calculate ratios
@@ -953,27 +1048,38 @@ class StockDataOrchestrator:
                 prefer_ttm=prefer_ttm
             )
             
-            # Extract ratio columns
-            stock_ratio_data_df = combined_stock_data_df[
-                ['date', 'ticker', 'P/S', 'P/E', 'P/B', 'P/FCF']
-            ].copy()
+            # Extract ratio columns and add financial_date_used
+            ratio_columns = ['date', 'ticker', 'P/S', 'P/E', 'P/B', 'P/FCF']
+            stock_ratio_data_df = combined_stock_data_df[ratio_columns].copy()
             stock_ratio_data_df = stock_ratio_data_df.rename(columns={
                 "P/S": "p_s", "P/E": "p_e", "P/B": "p_b", "P/FCF": "p_fcf"
             })
+            
+            # Add financial_date_used column based on which financial data was applied
+            # For each price date, find which financial statement date was used
+            stock_ratio_data_df['financial_date_used'] = None
+            stock_ratio_data_df['date'] = pd.to_datetime(stock_ratio_data_df['date'])
+            fin_dates_sorted = sorted(full_stock_financial_data_df['date'].unique())
+            
+            for fin_date in fin_dates_sorted:
+                fin_date_ts = pd.to_datetime(fin_date)
+                mask = stock_ratio_data_df['date'] >= fin_date_ts
+                stock_ratio_data_df.loc[mask, 'financial_date_used'] = fin_date
+            
             stock_ratio_data_df = drop_nan_values(stock_ratio_data_df)
             
             if stock_ratio_data_df.empty:
-                print(f"   ↳ No valid ratio data to export")
+                print(f"   [SKIP] No valid ratio data to export")
                 return False, None
             
             # Export to database
             db_interactions.export_stock_ratio_data(stock_ratio_data_df)
-            print(f"   ✓ Exported {len(stock_ratio_data_df)} ratio records")
+            print(f"   [OK] Exported {len(stock_ratio_data_df)} ratio records")
             
             return True, stock_ratio_data_df
             
         except Exception as e:
-            print(f"   ✗ Error processing ratio data: {e}")
+            print(f"   [ERROR] Error processing ratio data: {e}")
             traceback.print_exc()
             return False, None
     

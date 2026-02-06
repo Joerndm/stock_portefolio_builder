@@ -82,7 +82,7 @@ def feature_selection(dimensions, x_training_data, x_val_data, x_test_data, y_tr
     
     # Check the shape of the selected data
     print(f"\n{'='*60}")
-    print("📊 FEATURE SELECTION RESULTS")
+    print("[DATA] FEATURE SELECTION RESULTS")
     print(f"{'='*60}")
     print(f"Shape of training dataset before feature selection: {x_training_data.shape}")
     print(f"Shape of validation dataset before feature selection: {x_val_data.shape}")
@@ -106,7 +106,7 @@ def feature_selection(dimensions, x_training_data, x_val_data, x_test_data, y_tr
         if selected_features.get_support()[i]:
             selected_features_list.append(dataset_column_list[i])
 
-    print(f"\n✅ Selected {len(selected_features_list)} features:")
+    print(f"\n[OK] Selected {len(selected_features_list)} features:")
     for i, feature in enumerate(selected_features_list, 1):
         print(f"   {i}.{feature}")
     
@@ -147,7 +147,7 @@ def feature_selection_rf(dimensions, x_training_data, x_val_data, x_test_data, y
         raise ValueError("The specified dimension amount is greater than the number of features in the dataset.")
 
     print(f"\n{'='*60}")
-    print("🌲 RANDOM FOREST FEATURE SELECTION")
+    print("[RF] RANDOM FOREST FEATURE SELECTION")
     print(f"{'='*60}")
     print(f"Training RF to identify {dimensions} most important features...")
     
@@ -197,12 +197,12 @@ def feature_selection_rf(dimensions, x_training_data, x_val_data, x_test_data, y
     selected_features_list = [dataset_column_list[i] for i in top_indices]
     
     # Print selected features with their importance scores
-    print(f"\n✅ Selected {len(selected_features_list)} features by importance:")
+    print(f"\n[OK] Selected {len(selected_features_list)} features by importance:")
     for i, (feature, importance) in enumerate(zip(selected_features_list, importances[top_indices]), 1):
         print(f"   {i}. {feature}: {importance:.6f}")
     
-    print(f"\nℹ️  Feature selection method: RandomForest importance (tree-based)")
-    print(f"   Advantages: Captures non-linear relationships and interactions")
+    print("\n[INFO] Feature selection method: RandomForest importance (tree-based)")
+    print("   Advantages: Captures non-linear relationships and interactions")
     print(f"{'='*60}\n")
     
     return reduced_training_dataset, reduced_val_dataset, reduced_test_dataset, reduced_prediction_dataset, rf_selector, selected_features_list
@@ -244,7 +244,7 @@ def pca_dataset_transformation(x_training_data, x_val_data, x_test_data, predict
     
     # Check the shape of the data
     print(f"\n{'='*60}")
-    print("📊 PCA TRANSFORMATION RESULTS")
+    print("[PCA] PCA TRANSFORMATION RESULTS")
     print(f"{'='*60}")
     print(f"Shape of training dataset before PCA transformation: {x_training_data.shape}")
     print(f"Shape of validation dataset before PCA transformation: {x_val_data.shape}")
@@ -257,7 +257,7 @@ def pca_dataset_transformation(x_training_data, x_val_data, x_test_data, predict
     print(f"Shape of prediction dataset after PCA transformation: {reduced_prediction_dataset.shape}")
     
     # Check how much variance is explained by each principal component
-    print("\n📈 Variance explained by each principal component:")
+    print("\n[VAR] Variance explained by each principal component:")
     for i, var in enumerate(pca_model.explained_variance_ratio_, 1):
         print(f"   PC{i}: {var:.4f} ({var*100:.2f}%)")
     

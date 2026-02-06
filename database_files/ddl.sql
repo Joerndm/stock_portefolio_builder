@@ -394,6 +394,9 @@ CREATE TABLE `stock_ratio_data` (
   `p_b` FLOAT COMMENT 'Price / Book value',
   `p_fcf` FLOAT COMMENT 'Price / Free cash flow',
   
+  -- Metadata for tracking which financial data was used
+  `financial_date_used` DATE COMMENT 'Fiscal period end date of the financial report used for calculation',
+  
   CONSTRAINT `PK_stock_ratio_data` PRIMARY KEY (`date`, `ticker`),
   FOREIGN KEY (`ticker`) REFERENCES `stock_info_data`(`ticker`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Daily valuation ratios (TTM preferred, annual fallback)';

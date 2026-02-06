@@ -7,7 +7,7 @@ ORDER BY date DESC;
 
 SELECT *
 FROM stock_portefolio_builder.stock_price_data
-WHERE ticker = "Q"
+WHERE ticker = "DEMANT.CO" and 5Y IS NOT NULL
 ORDER BY date DESC;
 
 SELECT *
@@ -23,7 +23,7 @@ ORDER BY date ASC;
 
 SELECT *
 FROM stock_portefolio_builder.stock_income_stmt_data
-WHERE ticker = "ACS.MC";
+WHERE ticker = "DEMANT.CO";
 
 SELECT *
 FROM stock_portefolio_builder.stock_income_stmt_data
@@ -41,7 +41,7 @@ LIMIT 1;
 
 SELECT *
 FROM stock_portefolio_builder.stock_income_stmt_quarterly
-WHERE ticker= "ACS.MC";
+WHERE ticker= "DEMANT.CO";
 
 SELECT *
 FROM stock_portefolio_builder.stock_balancesheet_quarterly
@@ -71,10 +71,11 @@ SELECT *
 FROM stock_portefolio_builder.stock_ratio_data
 WHERE ticker = "NOVO-B.CO";
 
-SELECT *
+
+SELECT Count("ticker")
 FROM stock_portefolio_builder.stock_ratio_data
-WHERE ticker = "NOVO-B.CO"
-ORDER BY date DESC;
+WHERE ticker = "DEMANT.CO"
+ORDER BY date ASC;
 
 SELECT *
 FROM stock_portefolio_builder.stock_ratio_data
