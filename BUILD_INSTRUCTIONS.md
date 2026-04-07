@@ -24,6 +24,8 @@ can be handed to an AI agent (or a developer) as a standalone, unambiguous task.
 13. [Phase 5 — Supporting Utilities](#phase-5--supporting-utilities)
 14. [ML Module Splitting Guide](#ml-module-splitting-guide)
 15. [Ridge & SVR Full Ensemble Integration](#ridge--svr-full-ensemble-integration)
+16. [Docker-Based Development](#16-docker-based-development)
+17. [Prerequisite Verification Prompts](#17-prerequisite-verification-prompts)
 
 ---
 
@@ -1383,6 +1385,530 @@ svr_hp = db_interactions.load_hyperparameters(ticker, 'svr', max_age_days, num_f
 | `test_db_model_type_enum` | `test_db_interactions.py` | 'ridge' and 'svr' accepted |
 | `test_required_model_types` | `test_model_trainer.py` | All 5 types in freshness check |
 
+### 15.11 Shared Model Integration Pattern (Applicable to All Sklearn Models)
+
+The Ridge and SVR integration in §15 is **not unique** — it follows the exact same
+contract that the existing Random Forest and XGBoost models already use.  Any future
+sklearn-based model can be added to the ensemble by implementing this same pattern.
+
+**Every sklearn-based model (RF, XGBoost, Ridge, SVR, and any future additions) must
+implement all six components below.  The only things that change per model are the
+hyperparameter search space and the scikit-learn class being instantiated.**
+
+#### Component 1: `build_{model}_model(hp, constrain_for_overfitting=False)`
+
+Every model must provide a builder function that:
+- Accepts a Keras Tuner `hp` object and a `constrain_for_overfitting` boolean.
+- Defines the full hyperparameter search space using `hp.Choice()`, `hp.Float()`,
+  `hp.Int()`, `hp.Boolean()`.
+- When `constrain_for_overfitting=True`, **narrows** the search space toward stronger
+  regularization / simpler models (e.g., lower `max_depth`, higher `alpha`, lower `C`).
+- Returns a **configured but unfitted** sklearn estimator instance.
+
+This pattern is already implemented for:
+- `build_random_forest_model()` (line 205 of `ml_builder.py`)
+- `build_xgboost_model()` (line 486 of `ml_builder.py`)
+
+And must be implemented identically for Ridge and SVR (see §15.4).
+
+#### Component 2: `tune_{model}_model(stock_symbol, x_train, y_train, x_val, y_val, ...)`
+
+Every model must provide a tuning function that:
+1. **Checks DB cache first** — calls `db_interactions.load_hyperparameters(ticker, model_type)`.
+   If cached HPs exist and are fresh, rebuild the model from them and skip tuning.
+2. **Runs Keras Tuner** — wraps the `build_{model}_model` function in a `Sklearn` tuner
+   with `BayesianOptimization` or `Hyperband` oracle.
+3. **Saves best HPs to DB** — calls `db_interactions.save_hyperparameters(ticker, model_type, ...)`.
+4. **Fits the final model** on training data.
+5. **Cleans up tuning directory** after completion.
+6. Returns the fitted model.
+
+This pattern is already implemented for:
+- `tune_random_forest_model()` (line 255 of `ml_builder.py`)
+- `tune_xgboost_model()` (line 486+ of `ml_builder.py`)
+
+The existing `tune_svm_model()` (line 783) does **NOT** follow this pattern — it lacks
+DB caching, overfitting constraints, and temp-directory cleanup.  It must be refactored.
+
+#### Component 3: Overfitting Detection + Retrain Loop
+
+Inside `train_and_validate_models()`, every model is wrapped in:
+```
+for attempt in range(max_retrains):
+    model = tune_{model}_model(..., constrain=constrain_flag)
+    metrics = evaluate(model, train/val/test)
+    overfitted, score = detect_overfitting(train_m, val_m, test_m, ...)
+    if not overfitted: break
+    constrain_flag = True
+    trials += retrain_increment
+```
+This loop is identical for RF, XGBoost, Ridge, and SVR.  Only the function name and
+trial-increment variable change.
+
+#### Component 4: Ensemble Weight Calculation
+
+After all models are trained, each model's validation MSE (in **unscaled** space) is
+used to compute inverse-MSE weights:
+```python
+weight_i = (1 / val_mse_i) / sum(1 / val_mse_j for all models j)
+```
+Negligible weights (< `MIN_ENSEMBLE_WEIGHT`) are zeroed and the remainder renormalized.
+This logic is model-agnostic — adding a new model just means adding another entry to the
+inverse-MSE dictionary.
+
+#### Component 5: Prediction Integration
+
+In `predict_future_price_changes()`, every sklearn model:
+1. Receives the same 2D feature vector (`x_input_rf_df.values`).
+2. Calls `model.predict(...)` to get a scalar prediction.
+3. Clips the prediction to `[-MAX_DAILY_RETURN, +MAX_DAILY_RETURN]`.
+4. Contributes to the weighted ensemble sum.
+5. Falls back gracefully (weight=0, prediction=0) if the model is `None`.
+
+#### Component 6: DB Hyperparameter Storage
+
+Every model must:
+1. Register its `model_type` string in the `model_hyperparameters` ENUM.
+2. Serialize hyperparameters as JSON via `save_hyperparameters()`.
+3. Deserialize and rebuild via `load_hyperparameters()`.
+4. Support `invalidate_hyperparameters()` when retraining is forced.
+
+#### Summary: Adding a New Sklearn Model to the Ensemble
+
+To add any new sklearn model (e.g., `ElasticNet`, `GradientBoostingRegressor`, `KNN`):
+
+1. Add `'{model_type}'` to the `model_hyperparameters` ENUM in the database.
+2. Implement `build_{model}_model(hp, constrain_for_overfitting)`.
+3. Implement `tune_{model}_model(...)` following the DB-cache + tuner + cleanup pattern.
+4. Add a training loop block in `train_and_validate_models()`.
+5. Add the model to the inverse-MSE weight calculation.
+6. Add the model to the `predict_future_price_changes()` day-by-day loop.
+7. Add `'{model_type}'` to `required_model_types` in `model_trainer.py`.
+8. Add `'{model_type}'` to `db_interactions.py` validation lists.
+9. Add the model key to the `models` return dict and `ensemble_weights` sub-dict.
+10. Write tests covering build, tune, cache, ensemble weight, and prediction.
+
+---
+
+## 16. Docker-Based Development
+
+If **Docker Desktop** (or Docker Engine on Linux) is available, the entire system —
+MySQL, Python environments, and the Streamlit GUI — can be containerized.  This
+eliminates manual prerequisite installation and provides reproducible builds.
+
+> **Can an AI agent use Docker?**  Yes — any AI agent with shell access (e.g., GitHub
+> Copilot Workspace, Cursor, Codespaces, or a local agent with terminal access) can
+> execute `docker build`, `docker compose up`, and `docker exec` commands just like a
+> developer.  The AI does not need Docker Desktop's GUI — only the Docker CLI.
+
+### 16.1 Container Architecture
+
+```
+docker-compose.yml
+├── db           (MySQL 8.0)     ─ port 3306
+├── app-cpu      (Python 3.12)   ─ data pipeline + Streamlit + sklearn models
+└── app-gpu      (Python 3.10)   ─ LSTM/TCN training (nvidia runtime)
+```
+
+### 16.2 Dockerfile — CPU Application (`Dockerfile.cpu`)
+
+```dockerfile
+FROM python:3.12-slim
+
+# System dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    default-mysql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY requirements_PY_3_12.txt .
+RUN pip install --no-cache-dir -r requirements_PY_3_12.txt
+
+COPY . .
+
+# Streamlit port
+EXPOSE 8501
+
+# Default: run Streamlit GUI
+CMD ["streamlit", "run", "streamlit_app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+```
+
+### 16.3 Dockerfile — GPU Application (`Dockerfile.gpu`)
+
+```dockerfile
+FROM nvidia/cuda:11.2.2-cudnn8-runtime-ubuntu20.04
+
+# Avoid interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Python 3.10 + system deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common git default-mysql-client \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y python3.10 python3.10-venv python3.10-dev python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3.10 -m pip install --upgrade pip
+
+WORKDIR /app
+COPY requirements_PY_3_10.txt .
+RUN python3.10 -m pip install --no-cache-dir -r requirements_PY_3_10.txt
+
+COPY . .
+
+# Default: run model trainer
+CMD ["python3.10", "model_trainer.py"]
+```
+
+### 16.4 Docker Compose (`docker-compose.yml`)
+
+```yaml
+version: "3.9"
+
+services:
+  db:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASS:-rootpassword}
+      MYSQL_DATABASE: stock_portefolio_builder
+      MYSQL_USER: ${DB_USER:-stock_user}
+      MYSQL_PASSWORD: ${DB_PASS:-stock_pass}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./database_files/ddl.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./database_files/migrate_add_quarterly_tables.sql:/docker-entrypoint-initdb.d/02-quarterly.sql
+      - ./database_files/migrate_add_hyperparameter_storage.sql:/docker-entrypoint-initdb.d/03-hyperparams.sql
+      - ./database_files/migrate_add_prediction_mc_tables.sql:/docker-entrypoint-initdb.d/04-predictions.sql
+      - ./database_files/migrate_add_financial_date_used.sql:/docker-entrypoint-initdb.d/05-findate.sql
+      - ./database_files/migrate_add_quarterly_fetch_metadata.sql:/docker-entrypoint-initdb.d/06-quarterly-meta.sql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app-cpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.cpu
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_USER: ${DB_USER:-stock_user}
+      DB_PASS: ${DB_PASS:-stock_pass}
+      DB_NAME: stock_portefolio_builder
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./:/app
+
+  app-gpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_USER: ${DB_USER:-stock_user}
+      DB_PASS: ${DB_PASS:-stock_pass}
+      DB_NAME: stock_portefolio_builder
+    volumes:
+      - ./:/app
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    profiles:
+      - gpu   # Only started with: docker compose --profile gpu up app-gpu
+
+volumes:
+  mysql_data:
+```
+
+### 16.5 Running with Docker
+
+```bash
+# 1. Start MySQL + CPU app (Streamlit + sklearn models)
+docker compose up -d db app-cpu
+
+# 2. Run data pipeline inside the CPU container
+docker compose exec app-cpu python stock_orchestrator.py
+
+# 3. Run model training (CPU-only models: RF, XGBoost, Ridge, SVR)
+docker compose exec app-cpu python model_trainer.py --use-lstm  # Uses CPU LSTM fallback
+
+# 4. (Optional) Run GPU model training
+docker compose --profile gpu up -d app-gpu
+docker compose exec app-gpu python3.10 model_trainer.py
+
+# 5. Run price predictions
+docker compose exec app-cpu python price_predictor.py
+
+# 6. Build portfolio
+docker compose exec app-cpu python portfolio_builder.py
+
+# 7. Access Streamlit GUI
+# Open http://localhost:8501 in your browser
+```
+
+### 16.6 What Changes in Docker Mode
+
+| Area | Without Docker | With Docker |
+|---|---|---|
+| **MySQL** | Install + configure manually | Auto-started container, schema auto-loaded |
+| **Python envs** | Two conda envs to create | Two Dockerfiles handle it |
+| **CUDA / cuDNN** | Manual driver + toolkit install | NVIDIA base image includes them |
+| **`dev.env`** | Points to `localhost` | Points to `db` (Docker service name) |
+| **Streamlit** | `streamlit run ...` | Runs inside container, exposed on `:8501` |
+| **File paths** | Absolute local paths | Volume-mounted at `/app` |
+| **GPU access** | Native GPU access | Requires `nvidia-docker` / `nvidia-container-toolkit` |
+
+### 16.7 Docker Prerequisites
+
+| Requirement | Version / Notes |
+|---|---|
+| **Docker Desktop** | 4.0+ (Windows/Mac) or **Docker Engine** 20.10+ (Linux) |
+| **Docker Compose** | V2 (included in Docker Desktop; `docker compose` not `docker-compose`) |
+| **NVIDIA Container Toolkit** | *(GPU only)* — enables `--gpus` flag in Docker |
+| **Disk space** | ~8 GB for images (MySQL + Python + CUDA) |
+
+> **Important:** On Windows, Docker Desktop must be set to use **WSL 2 backend** for
+> Linux containers.  GPU passthrough to Docker requires WSL 2 + NVIDIA Container Toolkit.
+
+### 16.8 Build Instructions Adjustments for Docker
+
+When using Docker, the following sections change:
+
+- **§0 Prerequisites** — only Docker (+ NVIDIA Container Toolkit for GPU) is needed.
+  MySQL, conda, Python, CUDA, and cuDNN are all handled by containers.
+- **Phase 0** — replace conda environment creation with `docker compose build`.
+  Replace manual MySQL setup with `docker compose up db`.
+- **`dev.env`** — set `DB_HOST=db` instead of `DB_HOST=localhost`.
+- **All `python` commands** — prefix with `docker compose exec app-cpu` or `app-gpu`.
+
+The rest of the build instructions (Phase 1–5, §14, §15) remain unchanged — the code
+itself is the same regardless of whether it runs in Docker or natively.
+
+---
+
+## 17. Prerequisite Verification Prompts
+
+When an AI agent or developer begins working with these instructions, they should
+systematically verify that all prerequisites are met **before writing any code**.
+
+The following checklists serve as **interactive prompts** — an AI agent should ask the
+user to confirm each item, or attempt to verify them automatically via shell commands.
+
+### 17.1 Core Environment Checklist
+
+> **Prompt for AI:** Before starting any phase, run the following verification commands
+> and report the results.  If any check fails, stop and help the user resolve it before
+> proceeding.
+
+```bash
+# ─── CORE TOOLS ───
+echo "=== Git ==="
+git --version || echo "❌ Git not found — install from https://git-scm.com"
+
+echo "=== Python ==="
+python3 --version || python --version || echo "❌ Python not found"
+
+echo "=== pip ==="
+pip --version || echo "❌ pip not found"
+
+echo "=== conda/mamba (if not using Docker) ==="
+conda --version 2>/dev/null || mamba --version 2>/dev/null || echo "⚠️  conda/mamba not found (OK if using Docker)"
+
+echo "=== Docker (if using containerized setup) ==="
+docker --version 2>/dev/null || echo "⚠️  Docker not found (OK if using native setup)"
+docker compose version 2>/dev/null || echo "⚠️  Docker Compose V2 not found"
+```
+
+### 17.2 Database Checklist
+
+> **Prompt for AI:** Verify MySQL is accessible.  If using Docker, verify the container
+> is running.  If native, verify the service is started.
+
+```bash
+# ─── NATIVE MYSQL ───
+echo "=== MySQL Server ==="
+mysql --version || echo "❌ MySQL client not found"
+mysql -u root -p -e "SELECT 1;" 2>/dev/null && echo "✅ MySQL connection OK" || echo "❌ Cannot connect to MySQL"
+
+# ─── DOCKER MYSQL ───
+docker compose ps db 2>/dev/null | grep -q "running" && echo "✅ MySQL container running" || echo "❌ MySQL container not running — run: docker compose up -d db"
+```
+
+### 17.3 GPU Checklist (Optional)
+
+> **Prompt for AI:** Only run these checks if the user wants GPU-accelerated LSTM/TCN
+> training.  All sklearn models (RF, XGBoost, Ridge, SVR) run on CPU.
+
+```bash
+echo "=== NVIDIA GPU ==="
+nvidia-smi || echo "❌ No NVIDIA GPU detected (sklearn models will still work on CPU)"
+
+echo "=== CUDA Toolkit ==="
+nvcc --version || echo "❌ CUDA toolkit not installed"
+
+echo "=== cuDNN ==="
+ldconfig -p | grep cudnn || echo "❌ cuDNN not found in library path"
+
+# Docker GPU check
+docker run --rm --gpus all nvidia/cuda:11.2.2-base-ubuntu20.04 nvidia-smi 2>/dev/null \
+    && echo "✅ Docker GPU passthrough OK" \
+    || echo "❌ Docker GPU passthrough failed — install nvidia-container-toolkit"
+```
+
+### 17.4 Python Dependencies Checklist
+
+> **Prompt for AI:** After creating the environment (conda or Docker), verify critical
+> packages are importable.
+
+```bash
+# ─── Python 3.12 environment ───
+python3 -c "
+import sys
+print(f'Python: {sys.version}')
+
+checks = {
+    'pandas': 'pandas',
+    'numpy': 'numpy',
+    'sklearn': 'sklearn',
+    'xgboost': 'xgboost',
+    'yfinance': 'yfinance',
+    'streamlit': 'streamlit',
+    'sqlalchemy': 'sqlalchemy',
+    'mysql.connector': 'mysql.connector',
+    'dotenv': 'dotenv',
+    'scipy': 'scipy',
+    'plotly': 'plotly',
+}
+
+for name, module in checks.items():
+    try:
+        __import__(module)
+        print(f'  ✅ {name}')
+    except ImportError:
+        print(f'  ❌ {name} — run: pip install {name}')
+"
+
+# ─── Python 3.10 environment (GPU only) ───
+# conda activate stock_env_gpu  (or docker compose exec app-gpu)
+python3 -c "
+import sys
+print(f'Python: {sys.version}')
+
+gpu_checks = {
+    'tensorflow': 'tensorflow',
+    'keras_tuner': 'keras_tuner',
+    'numpy': 'numpy',
+    'pandas': 'pandas',
+    'sklearn': 'sklearn',
+    'xgboost': 'xgboost',
+}
+
+for name, module in gpu_checks.items():
+    try:
+        __import__(module)
+        print(f'  ✅ {name}')
+    except ImportError:
+        print(f'  ❌ {name}')
+
+# TensorFlow GPU check
+try:
+    import tensorflow as tf
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        print(f'  ✅ TensorFlow GPU: {len(gpus)} device(s)')
+    else:
+        print(f'  ⚠️  TensorFlow: no GPU detected (will use CPU)')
+except Exception as e:
+    print(f'  ❌ TensorFlow GPU check failed: {e}')
+"
+```
+
+### 17.5 Database Schema Checklist
+
+> **Prompt for AI:** After database setup, verify all required tables exist.
+
+```bash
+mysql -u ${DB_USER:-stock_user} -p${DB_PASS} -h ${DB_HOST:-localhost} \
+    ${DB_NAME:-stock_portefolio_builder} -e "
+SELECT
+  CASE
+    WHEN COUNT(*) = 16 THEN '✅ All 16 expected tables found'
+    ELSE CONCAT('❌ Only ', COUNT(*), ' tables found — expected 16')
+  END AS status
+FROM information_schema.TABLES
+WHERE TABLE_SCHEMA = '${DB_NAME:-stock_portefolio_builder}';
+
+-- List all tables
+SELECT TABLE_NAME FROM information_schema.TABLES
+WHERE TABLE_SCHEMA = '${DB_NAME:-stock_portefolio_builder}'
+ORDER BY TABLE_NAME;
+
+-- Verify model_type ENUM includes ridge and svr
+SELECT COLUMN_TYPE
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = '${DB_NAME:-stock_portefolio_builder}'
+  AND TABLE_NAME = 'model_hyperparameters'
+  AND COLUMN_NAME = 'model_type';
+"
+```
+
+### 17.6 End-to-End Smoke Test
+
+> **Prompt for AI:** After all prerequisites are verified, run a minimal smoke test
+> with a single ticker to confirm the full pipeline works before processing hundreds.
+
+```bash
+# 1. Fetch data for a single well-known ticker
+python stock_orchestrator.py --ticker AAPL
+
+# 2. Train models for that ticker only
+python model_trainer.py --max-stocks 1
+
+# 3. Generate predictions
+python price_predictor.py --max-stocks 1
+
+# 4. Verify data landed in DB
+mysql -u ${DB_USER} -p${DB_PASS} -h ${DB_HOST} ${DB_NAME} -e "
+SELECT 'stock_price_data' AS tbl, COUNT(*) AS rows FROM stock_price_data WHERE ticker='AAPL'
+UNION ALL
+SELECT 'model_hyperparameters', COUNT(*) FROM model_hyperparameters WHERE ticker='AAPL'
+UNION ALL
+SELECT 'stock_predictions', COUNT(*) FROM stock_predictions WHERE ticker='AAPL';
+"
+
+# 5. Start Streamlit and confirm it loads
+streamlit run streamlit_app.py &
+sleep 5
+curl -s http://localhost:8501 | head -5 && echo "✅ Streamlit is running" || echo "❌ Streamlit failed to start"
+```
+
+### 17.7 When to Use These Prompts
+
+| Situation | Which Checklists |
+|---|---|
+| **Fresh clone of repo** | All (§17.1 → §17.6) |
+| **Adding a new model to ensemble** | §17.4 (deps) + §17.5 (ENUM check) |
+| **Setting up Docker for first time** | §17.1 (Docker checks) + §17.2 (Docker MySQL) + §17.3 (GPU if needed) |
+| **Switching from native to Docker** | §17.1 + §17.2 + update `dev.env` |
+| **CI/CD pipeline setup** | §17.1 + §17.4 + §17.5 (automated, non-interactive) |
+| **After upgrading Python/TF version** | §17.4 + §17.3 |
+
 ---
 
 ## Summary
@@ -1396,9 +1922,15 @@ Stock Portfolio Builder.  The key additions beyond the existing README are:
 4. **Ridge & SVR integration** — complete specification for expanding the ensemble from
    3 models to 5 models, including hyperparameter tuning, overfitting detection, DB
    schema changes, ensemble weighting, prediction updates, and testing.
-5. **Testing standards** — directory structure, coverage targets, fixture requirements.
-6. **Error handling & logging** — replace `print()` with `logging`, structured exceptions.
-7. **Configuration management** — centralized `pipeline_config.py` with all magic numbers.
-8. **ML module splitting** — decompose `ml_builder.py` into 8 focused modules.
-9. **Data validation contracts** — exact DataFrame schemas at each boundary.
-10. **Idempotency requirements** — every step safely re-runnable.
+5. **Shared model integration pattern** — the 6-component contract that all sklearn models
+   must follow, extracted from the Ridge/SVR spec to make adding future models trivial.
+6. **Testing standards** — directory structure, coverage targets, fixture requirements.
+7. **Error handling & logging** — replace `print()` with `logging`, structured exceptions.
+8. **Configuration management** — centralized `pipeline_config.py` with all magic numbers.
+9. **ML module splitting** — decompose `ml_builder.py` into 8 focused modules.
+10. **Data validation contracts** — exact DataFrame schemas at each boundary.
+11. **Idempotency requirements** — every step safely re-runnable.
+12. **Docker-based development** — complete containerization with `docker-compose.yml`,
+    Dockerfiles for CPU and GPU, and adjusted workflow instructions.
+13. **Prerequisite verification prompts** — interactive checklists that AI agents and
+    developers can use to verify the environment is ready before writing code.
