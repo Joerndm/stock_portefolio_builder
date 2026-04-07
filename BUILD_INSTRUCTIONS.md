@@ -1328,8 +1328,15 @@ The prediction function must be updated to use all 5 models:
 
 6. **Update print/log statements** to show all 5 model predictions.
 
-7. **Handle the 2-model fallback** (when XGBoost is unavailable) — update to handle
-   variable numbers of available models. Renormalize weights among available models.
+7. **Handle variable-model fallback** — the current code has a 2-model fallback path
+   (when XGBoost is `None`) that only uses the sequence model + RF.  With 5 models, any
+   subset may be `None` (e.g., SVR failed to converge, or Ridge was not yet trained).
+   The prediction loop must:
+   - Collect all available (non-`None`) models and their weights.
+   - Set the weight to 0 for any model that is `None`.
+   - Renormalize the remaining weights to sum to 1.0.
+   - Log which models are participating in each prediction.
+   This replaces the hard-coded 2-model vs 3-model branching with a generic N-model path.
 
 ### 15.7 Changes to `model_trainer.py`
 
