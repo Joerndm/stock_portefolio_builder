@@ -123,13 +123,6 @@ results = train_and_validate_models(
 )
 ```
 
-### Analyzing Multiple Stocks
-
-```python
-python stock_analyzer.py
-```
-This script fetches ticker lists from the database and runs analysis on all available stocks.
-
 ## Project Structure
 
 | File | Description |
@@ -141,7 +134,6 @@ This script fetches ticker lists from the database and runs analysis on all avai
 | `db_interactions.py` | Database import/export operations |
 | `blacklist_manager.py` | Manages blacklisted (delisted/invalid) tickers |
 | `ml_builder.py` | Machine learning model training and prediction |
-| `stock_analyzer.py` | Batch analysis of multiple stocks |
 | `stock_data_fetch.py` | Core data fetching utilities |
 
 ## Data Pipeline Flow
