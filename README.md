@@ -12,30 +12,58 @@ A comprehensive stock data pipeline and machine learning system for fetching fin
 
 ## Prerequisites
 
-- Python 3.10 or 3.12
+- Python 3.10 or 3.12 (see [Python Environment](#python-environment) below)
 - MySQL database server
 - Database credentials configured in `dev.env`
+
+## Python Environment
+
+This project supports two Python environments depending on your use case:
+
+### Python 3.12 (Recommended)
+
+Use this environment for the **data pipeline, Streamlit UI, and general usage**. It includes:
+
+- **Data & Visualization**: pandas, numpy, matplotlib, scipy, scikit-learn, plotly
+- **Financial Data**: yfinance, pandas-ta, lxml
+- **Web UI**: Streamlit
+- **Database**: SQLAlchemy, mysql-connector-python
+
+This environment does **not** include TensorFlow or GPU-accelerated ML libraries.
+
+### Python 3.10 (Legacy — GPU / Deep Learning)
+
+Use this environment **only if you need TensorFlow GPU support** for LSTM model training. It includes:
+
+- **Deep Learning**: TensorFlow 2.10 (GPU), Keras Tuner
+- **ML**: scikit-learn, XGBoost
+- **Data**: pandas, numpy, matplotlib, scipy, yfinance
+
+> **GPU Requirement**: TensorFlow 2.10 requires **NVIDIA CUDA 11.2** and **cuDNN 8.1** installed separately. You can also install via `conda install tensorflow-gpu==2.10.0`.
+
+> **Note**: This environment is **not compatible with Python 3.11 or newer**. It does not include Streamlit or the web UI dependencies.
 
 ## Installation
 
 1. Clone or download the repository to your local machine.
 
 2. Create a virtual environment (recommended):
+
+    **For Python 3.12 (recommended):**
     ```bash
     conda create -n stock_env python=3.12
     conda activate stock_env
-    ```
-
-3. Install the required Python libraries:
-    ```bash
     pip install -r requirements_PY_3_12.txt
     ```
-    Or for Python 3.10:
+
+    **For Python 3.10 (GPU/TensorFlow):**
     ```bash
+    conda create -n stock_env_gpu python=3.10
+    conda activate stock_env_gpu
     pip install -r requirements_PY_3_10.txt
     ```
 
-4. Configure database credentials in `dev.env`:
+3. Configure database credentials in `dev.env`:
     ```
     DB_HOST=your_host
     DB_USER=your_user
@@ -43,7 +71,7 @@ A comprehensive stock data pipeline and machine learning system for fetching fin
     DB_NAME=your_database
     ```
 
-5. Initialize the database using the DDL scripts in `database_files/`:
+4. Initialize the database using the DDL scripts in `database_files/`:
     ```bash
     mysql -u your_user -p your_database < database_files/ddl.sql
     ```
