@@ -41,10 +41,46 @@
     "date_added": "2026-01-26T19:53:56.308563",
     "active": true
   },
+    "NZYM-B.CO": {
+    "reason": "delisted",
+    "details": "\"Stock symbol 'NZYM-B.CO' is invalid or not found.\"",
+    "date_added": "2026-03-15T21:56:56.308563",
+    "active": true
+  },
+    "CHR.CO": {
+    "reason": "delisted",
+    "details": "\"Stock symbol 'CHR.CO' is invalid or not found.\"",
+    "date_added": "2026-03-15T21:56:56.308563",
+    "active": true
+  },
   "PUIG.MC": {
     "reason": "delisted",
     "details": "\"Stock symbol 'PUIG.MC' is invalid or not found.\"",
     "date_added": "2026-01-26T19:56:27.145217",
+    "active": true
+  },
+  "SNDK": {
+    "reason": "delisted",
+    "details": "Renamed/acquired by Western Digital (WDC). Orphaned data cleaned up.",
+    "date_added": "2026-06-26T00:00:00.000000",
+    "active": true
+  },
+  "CI": {
+    "reason": "delisted",
+    "details": "Ticker changed to Cigna Group. Orphaned data cleaned up.",
+    "date_added": "2026-06-26T00:00:00.000000",
+    "active": true
+  },
+  "HUM": {
+    "reason": "delisted",
+    "details": "Humana - ticker no longer returns data. Orphaned data cleaned up.",
+    "date_added": "2026-06-26T00:00:00.000000",
+    "active": true
+  },
+  "ELV": {
+    "reason": "delisted",
+    "details": "Elevance Health - ticker changed (ANTM->ELV). Orphaned data cleaned up.",
+    "date_added": "2026-06-26T00:00:00.000000",
     "active": true
   }
 }

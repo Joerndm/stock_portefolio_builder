@@ -1,8 +1,24 @@
+SELECT ticker, COUNT(*) AS rows_to_delete
+FROM stock_ratio_data
+WHERE p_s IS NULL AND p_e IS NULL AND p_b IS NULL AND p_fcf IS NULL
+  AND date > '1900-01-01'
+GROUP BY ticker
+ORDER BY rows_to_delete DESC;
+
+DELETE FROM stock_ratio_data
+WHERE p_s IS NULL AND p_e IS NULL AND p_b IS NULL AND p_fcf IS NULL
+  AND date > '1900-01-01';
+
+SELECT COUNT(*) FROM stock_ratio_data WHERE ticker = "ABBN.SW";
+SELECT MIN(financial_Statement_Date) FROM stock_income_stmt_data WHERE ticker = "ABBN.SW";
+SELECT MIN(date) FROM stock_ratio_data WHERE ticker = "ABBN.SW";
+
 SELECT *
 FROM stock_portefolio_builder.stock_info_data;
 
-SELECT *
+SELECT COUNT(close_Price)
 FROM stock_portefolio_builder.stock_price_data
+where ticker = "ABBN.SW" and 5Y IS NOT NULL
 ORDER BY date DESC;
 
 SELECT *
@@ -72,10 +88,10 @@ FROM stock_portefolio_builder.stock_ratio_data
 WHERE ticker = "NOVO-B.CO";
 
 
-SELECT Count("ticker")
+SELECT *
 FROM stock_portefolio_builder.stock_ratio_data
 WHERE ticker = "DEMANT.CO"
-ORDER BY date ASC;
+ORDER BY date DESC;
 
 SELECT *
 FROM stock_portefolio_builder.stock_ratio_data

@@ -164,10 +164,17 @@ generated_graphs/
 generated_forecasts/
 tuning_dir/
 test_reports/
+prediction_logs/
 
 # Files
 test.py
 Improvement_recommendations.md
+output.txt
+migration_output.txt
+validation_output.txt
+data_validation_report.json
+index_cache.json
+monthly_index_fetch_cache.json
 
 # File types
 *.png

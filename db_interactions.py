@@ -32,6 +32,7 @@ Dependencies:
 
 Author: Stock Portfolio Builder
 """
+import os
 import pandas as pd
 
 import fetch_secrets
@@ -66,7 +67,7 @@ def import_ticker_list():
         raise KeyError(f"Could not establish connection to the database. Error: {e}") from e
 
     try:
-        quary = "SELECT ticker FROM stock_info_data"
+        quary = "SELECT ticker FROM stock_info_data WHERE industry != 'Index'"
         stock_info_data_df = pd.read_sql(sql=quary, con=db_con)
         ticker_list = stock_info_data_df["ticker"].tolist()
         return ticker_list
@@ -110,10 +111,9 @@ def does_stock_exists_stock_info_data(stock_ticker=""):
 
     try:
         # Fetch the stock_info_data_df from the database
-        quary = f"""SELECT * FROM stock_info_data
-            WHERE ticker = "{stock_ticker}"
-            """
-        stock_info_data_df = pd.read_sql(sql=quary, con=db_con)
+        from sqlalchemy import text
+        quary = text("SELECT * FROM stock_info_data WHERE ticker = :ticker")
+        stock_info_data_df = pd.read_sql(sql=quary, con=db_con, params={"ticker": stock_ticker})
         # Check if the stock_info_data_df is empty
         if stock_info_data_df.empty:
             response = False
@@ -161,10 +161,9 @@ def does_stock_exists_stock_price_data(stock_ticker=""):
 
     try:
         # Fetch the stock_price_data_df from the database
-        quary = f"""SELECT * FROM stock_price_data
-            WHERE ticker = "{stock_ticker}"
-            """
-        stock_price_data_df = pd.read_sql(sql=quary, con=db_con)
+        from sqlalchemy import text
+        quary = text("SELECT * FROM stock_price_data WHERE ticker = :ticker")
+        stock_price_data_df = pd.read_sql(sql=quary, con=db_con, params={"ticker": stock_ticker})
         # Check if the stock_price_data_df is empty
         if stock_price_data_df.empty:
             response = False
@@ -212,10 +211,9 @@ def does_stock_exists_stock_income_stmt_data(stock_ticker=""):
 
     try:
         # Fetch the stock_price_data_df from the database
-        quary = f"""SELECT * FROM stock_income_stmt_data
-            WHERE ticker = "{stock_ticker}"
-            """
-        stock_income_stmt_data_df = pd.read_sql(sql=quary, con=db_con)
+        from sqlalchemy import text
+        quary = text("SELECT * FROM stock_income_stmt_data WHERE ticker = :ticker")
+        stock_income_stmt_data_df = pd.read_sql(sql=quary, con=db_con, params={"ticker": stock_ticker})
         # Check if the stock_income_stmt_data_df is empty
         if stock_income_stmt_data_df.empty:
             response = False
@@ -263,10 +261,9 @@ def does_stock_exists_stock_balancesheet_data(stock_ticker=""):
 
     try:
         # Fetch the stock_balancesheet_data_df from the database
-        quary = f"""SELECT * FROM stock_balancesheet_data
-            WHERE ticker = "{stock_ticker}"
-            """
-        stock_balancesheet_data_df = pd.read_sql(sql=quary, con=db_con)
+        from sqlalchemy import text
+        quary = text("SELECT * FROM stock_balancesheet_data WHERE ticker = :ticker")
+        stock_balancesheet_data_df = pd.read_sql(sql=quary, con=db_con, params={"ticker": stock_ticker})
         # Check if the stock_balancesheet_data_df is empty
         if stock_balancesheet_data_df.empty:
             response = False
@@ -314,10 +311,9 @@ def does_stock_exists_stock_cash_flow_data(stock_ticker=""):
 
     try:
         # Fetch the stock_cash_flow_data_df from the database
-        quary = f"""SELECT * FROM stock_cash_flow_data
-            WHERE ticker = "{stock_ticker}"
-            """
-        stock_cash_flow_data_df = pd.read_sql(sql=quary, con=db_con)
+        from sqlalchemy import text
+        quary = text("SELECT * FROM stock_cash_flow_data WHERE ticker = :ticker")
+        stock_cash_flow_data_df = pd.read_sql(sql=quary, con=db_con, params={"ticker": stock_ticker})
         # Check if the stock_cash_flow_data_df is empty
         if stock_cash_flow_data_df.empty:
             response = False
@@ -364,11 +360,10 @@ def does_stock_exists_stock_ratio_data(stock_ticker=""):
         raise KeyError(f"Could not establish connection to the database. Error: {e}") from e
 
     try:
-        # Fetch the stock_cash_flow_data_df from the database
-        quary = f"""SELECT * FROM stock_ratio_data
-            WHERE ticker = "{stock_ticker}"
-            """
-        stock_cash_flow_data_df = pd.read_sql(sql=quary, con=db_con)
+        # Fetch the stock_ratio_data_df from the database
+        from sqlalchemy import text
+        quary = text("SELECT * FROM stock_ratio_data WHERE ticker = :ticker")
+        stock_cash_flow_data_df = pd.read_sql(sql=quary, con=db_con, params={"ticker": stock_ticker})
         # Check if the stock_cash_flow_data_df is empty
         if stock_cash_flow_data_df.empty:
             response = False
@@ -416,10 +411,9 @@ def does_stock_exists_stock_prediction_data(stock_ticker=""):
 
     try:
         # Fetch the stock_prediction_data_df from the database
-        quary = f"""SELECT * FROM stock_prediction_data
-            WHERE ticker = "{stock_ticker}"
-            """
-        stock_prediction_data_df = pd.read_sql(sql=quary, con=db_con)
+        from sqlalchemy import text
+        quary = text("SELECT * FROM stock_prediction_data WHERE ticker = :ticker")
+        stock_prediction_data_df = pd.read_sql(sql=quary, con=db_con, params={"ticker": stock_ticker})
         # Check if the stock_cash_flow_data_df is empty
         if stock_prediction_data_df.empty:
             response = False
@@ -475,11 +469,9 @@ def import_stock_info_data(stock_ticker=""):
             if does_stock_exists_stock_info_data is False:
                 raise ValueError("The stock does not exist in the stock_info_data table.")
             elif does_stock_exists_stock_info_data is True:
-                quary = f"""SELECT *
-                    FROM stock_info_data
-                    WHERE ticker = "{stock_ticker}"
-                    """
-                stock_info_data_df = pd.read_sql(sql=quary, con=db_con)
+                from sqlalchemy import text
+                quary = text("SELECT * FROM stock_info_data WHERE ticker = :ticker")
+                stock_info_data_df = pd.read_sql(sql=quary, con=db_con, params={"ticker": stock_ticker})
                 return stock_info_data_df
 
     except Exception as e:
@@ -568,12 +560,9 @@ def import_stock_price_data(amount = 1, stock_ticker=""):
 
     try:
         if stock_ticker == "":
-            quary = f"""SELECT * FROM
-            (SELECT * FROM stock_price_data
-            ORDER BY date DESC LIMIT {amount}) AS temp
-            ORDER BY date ASC
-            """
-            stock_price_data_df = pd.read_sql(sql=quary, con=db_con)
+            from sqlalchemy import text
+            quary = text("SELECT * FROM (SELECT * FROM stock_price_data ORDER BY date DESC LIMIT :amount) AS temp ORDER BY date ASC")
+            stock_price_data_df = pd.read_sql(sql=quary, con=db_con, params={"amount": int(amount)})
             return stock_price_data_df
 
     except Exception as e:
@@ -584,13 +573,9 @@ def import_stock_price_data(amount = 1, stock_ticker=""):
             if does_stock_exists_stock_price_data(stock_ticker) is False:
                 raise ValueError("The stock does not exist in the stock_price_data table.")
             elif does_stock_exists_stock_price_data(stock_ticker) is True:
-                quary = f"""SELECT * FROM
-                (SELECT * FROM stock_price_data
-                WHERE ticker = "{stock_ticker}"
-                ORDER BY date DESC LIMIT {amount}) AS temp
-                ORDER BY date ASC
-                """
-                stock_price_data_df = pd.read_sql(sql=quary, con=db_con)
+                from sqlalchemy import text
+                quary = text("SELECT * FROM (SELECT * FROM stock_price_data WHERE ticker = :ticker ORDER BY date DESC LIMIT :amount) AS temp ORDER BY date ASC")
+                stock_price_data_df = pd.read_sql(sql=quary, con=db_con, params={"ticker": stock_ticker, "amount": int(amount)})
                 return stock_price_data_df
 
     except Exception as e:
@@ -755,24 +740,14 @@ def import_stock_financial_data(amount = 1, stock_ticker=""):
 
     try:
         if stock_ticker == "":
-            income_stmt_quary = f"""SELECT * FROM
-                (SELECT * FROM stock_income_stmt_data
-                ORDER BY financial_Statement_Date DESC LIMIT {amount}) AS temp
-                ORDER BY financial_Statement_Date ASC
-                """
-            balancesheet_quary = f"""SELECT * FROM
-                (SELECT * FROM stock_balancesheet_data
-                ORDER BY financial_Statement_Date DESC LIMIT {amount}) AS temp
-                ORDER BY financial_Statement_Date ASC
-                """
-            cash_flow_quary = f"""SELECT * FROM
-                (SELECT * FROM stock_cash_flow_data
-                ORDER BY financial_Statement_Date DESC LIMIT {amount}) AS temp
-                ORDER BY financial_Statement_Date ASC
-                """
-            stock_income_stmt_data_df = pd.read_sql(sql=income_stmt_quary, con=db_con)
-            stock_balancesheet_data_df = pd.read_sql(sql=balancesheet_quary, con=db_con)
-            stock_cash_flow_data_df = pd.read_sql(sql=cash_flow_quary, con=db_con)
+            from sqlalchemy import text
+            _params = {"amount": int(amount)}
+            income_stmt_quary = text("SELECT * FROM (SELECT * FROM stock_income_stmt_data ORDER BY financial_Statement_Date DESC LIMIT :amount) AS temp ORDER BY financial_Statement_Date ASC")
+            balancesheet_quary = text("SELECT * FROM (SELECT * FROM stock_balancesheet_data ORDER BY financial_Statement_Date DESC LIMIT :amount) AS temp ORDER BY financial_Statement_Date ASC")
+            cash_flow_quary = text("SELECT * FROM (SELECT * FROM stock_cash_flow_data ORDER BY financial_Statement_Date DESC LIMIT :amount) AS temp ORDER BY financial_Statement_Date ASC")
+            stock_income_stmt_data_df = pd.read_sql(sql=income_stmt_quary, con=db_con, params=_params)
+            stock_balancesheet_data_df = pd.read_sql(sql=balancesheet_quary, con=db_con, params=_params)
+            stock_cash_flow_data_df = pd.read_sql(sql=cash_flow_quary, con=db_con, params=_params)
             stock_financial_data_df = pd.merge(stock_income_stmt_data_df, stock_balancesheet_data_df, on=["financial_Statement_Date", "ticker"])
             stock_financial_data_df = pd.merge(stock_financial_data_df, stock_cash_flow_data_df, on=["financial_Statement_Date", "ticker"])
             stock_financial_data_df = stock_financial_data_df.rename(columns={"financial_Statement_Date": "date"})
@@ -786,30 +761,14 @@ def import_stock_financial_data(amount = 1, stock_ticker=""):
             if does_stock_exists_stock_income_stmt_data(stock_ticker) is False:
                 raise ValueError("The stock does not exist in the stock_income_stmt_data table.")
             elif does_stock_exists_stock_income_stmt_data(stock_ticker) is True:
-                income_stmt_quary = f"""SELECT * FROM
-                    (SELECT * FROM stock_income_stmt_data
-                    WHERE ticker = "{stock_ticker}"
-                    ORDER BY financial_Statement_Date DESC LIMIT {amount}
-                    ) AS temp
-                    ORDER BY financial_Statement_Date ASC
-                    """
-                balancesheet_quary = f"""SELECT * FROM
-                    (SELECT * FROM stock_balancesheet_data
-                    WHERE ticker = "{stock_ticker}"
-                    ORDER BY financial_Statement_Date DESC LIMIT {amount}
-                    ) AS temp
-                    ORDER BY financial_Statement_Date ASC
-                    """
-                cash_flow_quary = f"""SELECT * FROM
-                    (SELECT * FROM stock_cash_flow_data
-                    WHERE ticker = "{stock_ticker}"
-                    ORDER BY financial_Statement_Date DESC LIMIT {amount}
-                    ) AS temp
-                    ORDER BY financial_Statement_Date ASC
-                    """
-                stock_income_stmt_data_df = pd.read_sql(sql=income_stmt_quary, con=db_con)
-                stock_balancesheet_data_df = pd.read_sql(sql=balancesheet_quary, con=db_con)
-                stock_cash_flow_data_df = pd.read_sql(sql=cash_flow_quary, con=db_con)
+                from sqlalchemy import text
+                _params = {"ticker": stock_ticker, "amount": int(amount)}
+                income_stmt_quary = text("SELECT * FROM (SELECT * FROM stock_income_stmt_data WHERE ticker = :ticker ORDER BY financial_Statement_Date DESC LIMIT :amount) AS temp ORDER BY financial_Statement_Date ASC")
+                balancesheet_quary = text("SELECT * FROM (SELECT * FROM stock_balancesheet_data WHERE ticker = :ticker ORDER BY financial_Statement_Date DESC LIMIT :amount) AS temp ORDER BY financial_Statement_Date ASC")
+                cash_flow_quary = text("SELECT * FROM (SELECT * FROM stock_cash_flow_data WHERE ticker = :ticker ORDER BY financial_Statement_Date DESC LIMIT :amount) AS temp ORDER BY financial_Statement_Date ASC")
+                stock_income_stmt_data_df = pd.read_sql(sql=income_stmt_quary, con=db_con, params=_params)
+                stock_balancesheet_data_df = pd.read_sql(sql=balancesheet_quary, con=db_con, params=_params)
+                stock_cash_flow_data_df = pd.read_sql(sql=cash_flow_quary, con=db_con, params=_params)
                 stock_financial_data_df = pd.merge(stock_income_stmt_data_df, stock_balancesheet_data_df, on=["financial_Statement_Date", "ticker"])
                 stock_financial_data_df = pd.merge(stock_financial_data_df, stock_cash_flow_data_df, on=["financial_Statement_Date", "ticker"])
                 stock_financial_data_df = stock_financial_data_df.rename(columns={"financial_Statement_Date": "date"})
@@ -987,12 +946,9 @@ def import_stock_ratio_data(amount = 1, stock_ticker=""):
 
     try:
         if stock_ticker == "":
-            quary = f"""SELECT * FROM
-            (SELECT * FROM stock_ratio_data
-            ORDER BY date DESC LIMIT {amount}) AS temp
-            ORDER BY date ASC
-            """
-            stock_ratio_data_df = pd.read_sql(sql=quary, con=db_con)
+            from sqlalchemy import text
+            quary = text("SELECT * FROM (SELECT * FROM stock_ratio_data ORDER BY date DESC LIMIT :amount) AS temp ORDER BY date ASC")
+            stock_ratio_data_df = pd.read_sql(sql=quary, con=db_con, params={"amount": int(amount)})
             return stock_ratio_data_df
 
     except Exception as e:
@@ -1003,13 +959,9 @@ def import_stock_ratio_data(amount = 1, stock_ticker=""):
             if does_stock_exists_stock_ratio_data(stock_ticker) is False:
                 raise ValueError("The stock does not exist in the stock_ratio_data table.")
             elif does_stock_exists_stock_ratio_data(stock_ticker) is True:
-                quary = f"""SELECT * FROM
-                (SELECT * FROM stock_ratio_data
-                WHERE ticker = "{stock_ticker}"
-                ORDER BY date DESC LIMIT {amount}) AS temp
-                ORDER BY date ASC
-                """
-                stock_ratio_data_df = pd.read_sql(sql=quary, con=db_con)
+                from sqlalchemy import text
+                quary = text("SELECT * FROM (SELECT * FROM stock_ratio_data WHERE ticker = :ticker ORDER BY date DESC LIMIT :amount) AS temp ORDER BY date ASC")
+                stock_ratio_data_df = pd.read_sql(sql=quary, con=db_con, params={"ticker": stock_ticker, "amount": int(amount)})
                 return stock_ratio_data_df
 
     except Exception as e:
@@ -1208,12 +1160,9 @@ def get_newest_financial_date(stock_ticker: str, include_quarterly: bool = True)
     
     try:
         # Check annual data
-        annual_query = f"""
-            SELECT MAX(financial_Statement_Date) as newest_date 
-            FROM stock_income_stmt_data 
-            WHERE ticker = '{stock_ticker}'
-        """
-        annual_result = pd.read_sql(sql=annual_query, con=db_con)
+        from sqlalchemy import text
+        annual_query = text("SELECT MAX(financial_Statement_Date) as newest_date FROM stock_income_stmt_data WHERE ticker = :ticker")
+        annual_result = pd.read_sql(sql=annual_query, con=db_con, params={"ticker": stock_ticker})
         annual_date = annual_result['newest_date'].iloc[0]
         
         if annual_date is not None:
@@ -1222,11 +1171,7 @@ def get_newest_financial_date(stock_ticker: str, include_quarterly: bool = True)
         
         # Check quarterly data if requested
         if include_quarterly:
-            quarterly_query = f"""
-                SELECT MAX(fiscal_quarter_end) as newest_date 
-                FROM stock_income_stmt_quarterly 
-                WHERE ticker = '{stock_ticker}'
-            """
+            quarterly_query = text("SELECT MAX(fiscal_quarter_end) as newest_date FROM stock_income_stmt_quarterly WHERE ticker = :ticker")
             try:
                 quarterly_result = pd.read_sql(sql=quarterly_query, con=db_con)
                 quarterly_date = quarterly_result['newest_date'].iloc[0]
@@ -1275,14 +1220,9 @@ def get_last_ratio_financial_date(stock_ticker: str) -> tuple:
         raise KeyError(f"Could not establish connection to the database. Error: {e}") from e
     
     try:
-        query = f"""
-            SELECT date, financial_date_used 
-            FROM stock_ratio_data 
-            WHERE ticker = '{stock_ticker}' 
-            ORDER BY date DESC 
-            LIMIT 1
-        """
-        result = pd.read_sql(sql=query, con=db_con)
+        from sqlalchemy import text
+        query = text("SELECT date, financial_date_used FROM stock_ratio_data WHERE ticker = :ticker ORDER BY date DESC LIMIT 1")
+        result = pd.read_sql(sql=query, con=db_con, params={"ticker": stock_ticker})
         
         if result.empty:
             return None, None
@@ -1331,24 +1271,17 @@ def get_all_financial_dates(stock_ticker: str, include_quarterly: bool = True) -
     
     try:
         # Get annual dates
-        annual_query = f"""
-            SELECT DISTINCT financial_Statement_Date as date, 'annual' as source
-            FROM stock_income_stmt_data 
-            WHERE ticker = '{stock_ticker}'
-        """
-        annual_result = pd.read_sql(sql=annual_query, con=db_con)
+        from sqlalchemy import text
+        annual_query = text("SELECT DISTINCT financial_Statement_Date as date, 'annual' as source FROM stock_income_stmt_data WHERE ticker = :ticker")
+        annual_result = pd.read_sql(sql=annual_query, con=db_con, params={"ticker": stock_ticker})
         if not annual_result.empty:
             all_dates.append(annual_result)
         
         # Get quarterly dates if requested
         if include_quarterly:
-            quarterly_query = f"""
-                SELECT DISTINCT fiscal_quarter_end as date, 'quarterly' as source
-                FROM stock_income_stmt_quarterly 
-                WHERE ticker = '{stock_ticker}'
-            """
+            quarterly_query = text("SELECT DISTINCT fiscal_quarter_end as date, 'quarterly' as source FROM stock_income_stmt_quarterly WHERE ticker = :ticker")
             try:
-                quarterly_result = pd.read_sql(sql=quarterly_query, con=db_con)
+                quarterly_result = pd.read_sql(sql=quarterly_query, con=db_con, params={"ticker": stock_ticker})
                 if not quarterly_result.empty:
                     all_dates.append(quarterly_result)
             except Exception:
@@ -1434,12 +1367,9 @@ def get_quarterly_fetch_metadata(ticker: str) -> dict:
         db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
         db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
         
-        query = f"""
-            SELECT last_fetch_date, last_quarter_end, quarters_count
-            FROM quarterly_fetch_metadata 
-            WHERE ticker = '{ticker}'
-        """
-        df = pd.read_sql(sql=query, con=db_con)
+        from sqlalchemy import text
+        query = text("SELECT last_fetch_date, last_quarter_end, quarters_count FROM quarterly_fetch_metadata WHERE ticker = :ticker")
+        df = pd.read_sql(sql=query, con=db_con, params={"ticker": ticker})
         
         if df.empty:
             return {
@@ -1486,20 +1416,24 @@ def update_quarterly_fetch_metadata(ticker: str, last_quarter_end=None, quarters
         from sqlalchemy import text
         
         today = date.today()
-        last_quarter_str = f"'{last_quarter_end}'" if last_quarter_end else "NULL"
         
         with db_con.begin() as connection:
             # Use INSERT ... ON DUPLICATE KEY UPDATE for upsert
-            connection.execute(text(f"""
+            connection.execute(text("""
                 INSERT INTO quarterly_fetch_metadata 
                     (ticker, last_fetch_date, last_quarter_end, quarters_count)
                 VALUES 
-                    ('{ticker}', '{today}', {last_quarter_str}, {quarters_count})
+                    (:ticker, :today, :last_quarter_end, :quarters_count)
                 ON DUPLICATE KEY UPDATE
-                    last_fetch_date = '{today}',
-                    last_quarter_end = {last_quarter_str},
-                    quarters_count = {quarters_count}
-            """))
+                    last_fetch_date = :today,
+                    last_quarter_end = :last_quarter_end,
+                    quarters_count = :quarters_count
+            """), {
+                "ticker": ticker,
+                "today": today,
+                "last_quarter_end": last_quarter_end,
+                "quarters_count": quarters_count,
+            })
         
         return True
         
@@ -1583,13 +1517,9 @@ def get_existing_quarterly_dates(ticker: str, table_type: str = 'income') -> lis
         db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
         db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
         
-        query = f"""
-            SELECT DISTINCT fiscal_quarter_end 
-            FROM {table_name} 
-            WHERE ticker = '{ticker}'
-            ORDER BY fiscal_quarter_end
-        """
-        df = pd.read_sql(sql=query, con=db_con)
+        from sqlalchemy import text
+        query = text(f"SELECT DISTINCT fiscal_quarter_end FROM {table_name} WHERE ticker = :ticker ORDER BY fiscal_quarter_end")
+        df = pd.read_sql(sql=query, con=db_con, params={"ticker": ticker})
         
         if df.empty:
             return []
@@ -1617,12 +1547,9 @@ def import_quarterly_income_data(ticker: str) -> pd.DataFrame:
         db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
         db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
         
-        query = f"""
-            SELECT * FROM stock_income_stmt_quarterly 
-            WHERE ticker = '{ticker}'
-            ORDER BY fiscal_quarter_end DESC
-        """
-        df = pd.read_sql(sql=query, con=db_con)
+        from sqlalchemy import text
+        query = text("SELECT * FROM stock_income_stmt_quarterly WHERE ticker = :ticker ORDER BY fiscal_quarter_end DESC")
+        df = pd.read_sql(sql=query, con=db_con, params={"ticker": ticker})
         return df
         
     except Exception as e:
@@ -1644,12 +1571,9 @@ def import_quarterly_balancesheet_data(ticker: str) -> pd.DataFrame:
         db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
         db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
         
-        query = f"""
-            SELECT * FROM stock_balancesheet_quarterly 
-            WHERE ticker = '{ticker}'
-            ORDER BY fiscal_quarter_end DESC
-        """
-        df = pd.read_sql(sql=query, con=db_con)
+        from sqlalchemy import text
+        query = text("SELECT * FROM stock_balancesheet_quarterly WHERE ticker = :ticker ORDER BY fiscal_quarter_end DESC")
+        df = pd.read_sql(sql=query, con=db_con, params={"ticker": ticker})
         return df
         
     except Exception as e:
@@ -1671,12 +1595,9 @@ def import_quarterly_cashflow_data(ticker: str) -> pd.DataFrame:
         db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
         db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
         
-        query = f"""
-            SELECT * FROM stock_cashflow_quarterly 
-            WHERE ticker = '{ticker}'
-            ORDER BY fiscal_quarter_end DESC
-        """
-        df = pd.read_sql(sql=query, con=db_con)
+        from sqlalchemy import text
+        query = text("SELECT * FROM stock_cashflow_quarterly WHERE ticker = :ticker ORDER BY fiscal_quarter_end DESC")
+        df = pd.read_sql(sql=query, con=db_con, params={"ticker": ticker})
         return df
         
     except Exception as e:
@@ -1698,11 +1619,9 @@ def count_quarterly_reports(ticker: str) -> int:
         db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
         db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
         
-        query = f"""
-            SELECT COUNT(*) as cnt FROM stock_income_stmt_quarterly 
-            WHERE ticker = '{ticker}'
-        """
-        df = pd.read_sql(sql=query, con=db_con)
+        from sqlalchemy import text
+        query = text("SELECT COUNT(*) as cnt FROM stock_income_stmt_quarterly WHERE ticker = :ticker")
+        df = pd.read_sql(sql=query, con=db_con, params={"ticker": ticker})
         return int(df['cnt'].iloc[0])
         
     except Exception as e:
@@ -1932,86 +1851,1321 @@ def import_stock_dataset(stock_ticker=""):
             elif does_stock_exists_stock_balancesheet_data(stock_ticker) is False:
                 raise ValueError("The stock does not exist in the stock_balancesheet_data table.")
 
-            elif does_stock_exists_stock_cash_flow_data is False:
+            elif does_stock_exists_stock_cash_flow_data(stock_ticker) is False:
                 raise ValueError("The stock does not exist in the stock_cash_flow_data table.")
 
             elif does_stock_exists_stock_ratio_data(stock_ticker) is False:
                 raise ValueError("The stock does not exist in the stock_ratio_data table.")
 
             else:
-                price_quary = f"""SELECT * FROM
-                    (SELECT * FROM stock_price_data
-                    WHERE ticker = "{stock_ticker}"
-                    ORDER BY date DESC) AS temp
-                    ORDER BY date ASC
-                    """
-                stock_price_data_df = pd.read_sql(sql=price_quary, con=db_con)
+                from sqlalchemy import text
+                _ticker_params = {"ticker": stock_ticker}
+                price_quary = text("SELECT * FROM (SELECT * FROM stock_price_data WHERE ticker = :ticker ORDER BY date DESC) AS temp ORDER BY date ASC")
+                stock_price_data_df = pd.read_sql(sql=price_quary, con=db_con, params=_ticker_params)
 
-                vix_price_quary = f"""SELECT * FROM
-                    (SELECT * FROM stock_price_data
-                    WHERE ticker = "{"^VIX"}"
-                    ORDER BY date DESC) AS temp
-                    ORDER BY date ASC
-                    """
-                vix_price_data_df = pd.read_sql(sql=vix_price_quary, con=db_con)
+                vix_price_quary = text("SELECT * FROM (SELECT * FROM stock_price_data WHERE ticker = :ticker ORDER BY date DESC) AS temp ORDER BY date ASC")
+                vix_price_data_df = pd.read_sql(sql=vix_price_quary, con=db_con, params={"ticker": "^VIX"})
                 vix_price_data_df = vix_price_data_df.rename(columns={'open_Price': 'VIX_open_Price'})
                 stock_price_data_df = stock_price_data_df.merge(vix_price_data_df[['date', 'VIX_open_Price']], on='date', how='left')
                 stock_price_data_df['VIX_open_Price'] = stock_price_data_df['VIX_open_Price'].ffill()
-                income_stmt_quary = f"""SELECT * FROM
-                    (SELECT * FROM stock_income_stmt_data
-                    WHERE ticker = "{stock_ticker}"
-                    ORDER BY financial_Statement_Date DESC
-                    ) AS temp
-                    ORDER BY financial_Statement_Date ASC
-                    """
-                balancesheet_quary = f"""SELECT * FROM
-                    (SELECT * FROM stock_balancesheet_data
-                    WHERE ticker = "{stock_ticker}"
-                    ORDER BY financial_Statement_Date DESC
-                    ) AS temp
-                    ORDER BY financial_Statement_Date ASC
-                    """
-                cash_flow_quary = f"""SELECT * FROM
-                    (SELECT * FROM stock_cash_flow_data
-                    WHERE ticker = "{stock_ticker}"
-                    ORDER BY financial_Statement_Date DESC
-                    ) AS temp
-                    ORDER BY financial_Statement_Date ASC
-                    """
-                stock_income_stmt_data_df = pd.read_sql(sql=income_stmt_quary, con=db_con)
+                income_stmt_quary = text("SELECT * FROM (SELECT * FROM stock_income_stmt_data WHERE ticker = :ticker ORDER BY financial_Statement_Date DESC) AS temp ORDER BY financial_Statement_Date ASC")
+                balancesheet_quary = text("SELECT * FROM (SELECT * FROM stock_balancesheet_data WHERE ticker = :ticker ORDER BY financial_Statement_Date DESC) AS temp ORDER BY financial_Statement_Date ASC")
+                cash_flow_quary = text("SELECT * FROM (SELECT * FROM stock_cash_flow_data WHERE ticker = :ticker ORDER BY financial_Statement_Date DESC) AS temp ORDER BY financial_Statement_Date ASC")
+                stock_income_stmt_data_df = pd.read_sql(sql=income_stmt_quary, con=db_con, params=_ticker_params)
                 stock_income_stmt_data_df = stock_income_stmt_data_df.drop(columns=stock_income_stmt_data_df.columns[1])
-                stock_balancesheet_data_df = pd.read_sql(sql=balancesheet_quary, con=db_con)
+                stock_balancesheet_data_df = pd.read_sql(sql=balancesheet_quary, con=db_con, params=_ticker_params)
                 stock_balancesheet_data_df = stock_balancesheet_data_df.drop(columns=stock_balancesheet_data_df.columns[1])
-                stock_cash_flow_data_df = pd.read_sql(sql=cash_flow_quary, con=db_con)
+                stock_cash_flow_data_df = pd.read_sql(sql=cash_flow_quary, con=db_con, params=_ticker_params)
                 stock_cash_flow_data_df = stock_cash_flow_data_df.drop(columns=stock_cash_flow_data_df.columns[1])
                 stock_financial_data_df = pd.merge(stock_income_stmt_data_df, stock_balancesheet_data_df, on=["financial_Statement_Date", "ticker"])
                 stock_financial_data_df = pd.merge(stock_financial_data_df, stock_cash_flow_data_df, on=["financial_Statement_Date", "ticker"])
                 stock_financial_data_df = stock_financial_data_df.rename(columns={"financial_Statement_Date": "date"})
-                ratio_quary = f"""SELECT * FROM
-                    (SELECT * FROM stock_ratio_data
-                    WHERE ticker = "{stock_ticker}"
-                    ORDER BY date DESC) AS temp
-                    ORDER BY date ASC
-                    """
-                stock_ratio_data_df = pd.read_sql(sql=ratio_quary, con=db_con)
+                ratio_quary = text("SELECT * FROM (SELECT * FROM stock_ratio_data WHERE ticker = :ticker ORDER BY date DESC) AS temp ORDER BY date ASC")
+                stock_ratio_data_df = pd.read_sql(sql=ratio_quary, con=db_con, params=_ticker_params)
+
+                # Normalize date columns to datetime64 to prevent type-mismatch
+                # issues (date vs datetime64) when merging/comparing.
+                stock_price_data_df["date"] = pd.to_datetime(stock_price_data_df["date"])
+                stock_financial_data_df["date"] = pd.to_datetime(stock_financial_data_df["date"])
+                stock_ratio_data_df["date"] = pd.to_datetime(stock_ratio_data_df["date"])
+
                 # Create a list of column names to copy from stock_financial_data_df to stock_price_data_df
                 column_names = stock_financial_data_df.columns[2:]
                 # Create a copy of stock_price_data_df
                 combined_stock_data_df = stock_price_data_df.copy()
-                # Add columns from stock_financial_data_df to stock_price_data_df
+                # Forward-fill: rows after each financial statement date get that statement's values
                 for year in range(len(stock_financial_data_df["date"])):
                     combined_stock_data_df.loc[combined_stock_data_df["date"] >= stock_financial_data_df.iloc[year]["date"], column_names] = stock_financial_data_df.iloc[year].values[2:]
 
-                combined_stock_data_df = pd.merge(combined_stock_data_df, stock_ratio_data_df, on=["date", "ticker"])
+                # Backward-fill: rows before the earliest financial statement get the
+                # earliest available values. Without this, stocks whose ratio data
+                # starts years before the first financial report lose most rows to
+                # dropna because all financial columns are NaN.
+                combined_stock_data_df[column_names] = combined_stock_data_df[column_names].bfill()
+
+                # LEFT JOIN keeps all price rows; ratio columns will be NaN for
+                # dates not covered by ratio data (e.g. before first calculation).
+                combined_stock_data_df = pd.merge(
+                    combined_stock_data_df, stock_ratio_data_df,
+                    on=["date", "ticker"], how="left"
+                )
                 return combined_stock_data_df
 
     except Exception as e:
         raise KeyError(f"Could not import from stock_ratio_data in the database to stock_ratio_data_df with a specific ticker. Error: {e}") from e
 
 
+# ============================================================================
+# PREDICTION AND MONTE CARLO EXPORT FUNCTIONS
+# ============================================================================
+
+def export_stock_prediction_extended(
+    ticker,
+    prediction_date,
+    forecast_df,
+    current_price,
+    model_type="ensemble",
+    model_version=None,
+    mc_dropout_used=True,
+    mc_iterations=30
+):
+    """
+    Export extended stock prediction results to the database.
+    
+    This function stores ML prediction results with confidence intervals
+    for multiple prediction horizons (30, 60, 90, 252 days).
+    
+    Args:
+        ticker (str): Stock ticker symbol
+        prediction_date (datetime.date): Date when prediction was made
+        forecast_df (pd.DataFrame): Forecast DataFrame with 'close_Price' column
+        current_price (float): Current stock price at prediction time
+        model_type (str): Type of model used (e.g., 'ensemble', 'tcn', 'lstm')
+        model_version (str, optional): Model version identifier
+        mc_dropout_used (bool): Whether Monte Carlo Dropout was used
+        mc_iterations (int): Number of MC iterations if used
+    
+    Returns:
+        int: Number of rows inserted
+    
+    Raises:
+        ValueError: If required parameters are invalid
+        KeyError: If database connection fails
+    """
+    import datetime
+    from sqlalchemy import text
+    
+    if ticker == "" or ticker is None:
+        raise ValueError("Ticker cannot be empty")
+    
+    if forecast_df is None or forecast_df.empty:
+        raise ValueError("Forecast DataFrame cannot be empty")
+    
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+    except Exception as e:
+        raise KeyError(f"Could not fetch the secrets. Error: {e}") from e
+    
+    try:
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+    except Exception as e:
+        raise KeyError(f"Could not establish connection to the database. Error: {e}") from e
+    
+    try:
+        # Determine price column name
+        price_col = None
+        for col in ['close_Price', 'predicted_price', 'price']:
+            if col in forecast_df.columns:
+                price_col = col
+                break
+        
+        if price_col is None:
+            raise ValueError("Forecast DataFrame must contain a price column")
+        
+        # Prediction horizons to store (in trading days)
+        horizons = [30, 60, 90, 252]  # ~1 month, 2 months, 3 months, 1 year
+        
+        records = []
+        for horizon in horizons:
+            if horizon < len(forecast_df):
+                raw_price = forecast_df[price_col].iloc[horizon]
+                if raw_price is None or (isinstance(raw_price, float) and pd.isna(raw_price)):
+                    continue  # Skip horizons with missing predictions
+                predicted_price = float(raw_price)
+                
+                # Calculate predicted return
+                if current_price > 0:
+                    predicted_return = (predicted_price - current_price) / current_price
+                else:
+                    predicted_return = None
+                
+                # Calculate target date
+                target_date = prediction_date + datetime.timedelta(days=int(horizon * 365 / 252))
+                
+                # Get confidence intervals if available
+                conf_lower_5 = None
+                conf_lower_16 = None
+                conf_upper_84 = None
+                conf_upper_95 = None
+                pred_std = None
+                
+                # Check for uncertainty columns (guard against None/NaN)
+                if 'lower_95' in forecast_df.columns and forecast_df['lower_95'].iloc[horizon] is not None:
+                    val = forecast_df['lower_95'].iloc[horizon]
+                    conf_lower_5 = float(val) if not pd.isna(val) else None
+                if 'lower_68' in forecast_df.columns and forecast_df['lower_68'].iloc[horizon] is not None:
+                    val = forecast_df['lower_68'].iloc[horizon]
+                    conf_lower_16 = float(val) if not pd.isna(val) else None
+                if 'upper_68' in forecast_df.columns and forecast_df['upper_68'].iloc[horizon] is not None:
+                    val = forecast_df['upper_68'].iloc[horizon]
+                    conf_upper_84 = float(val) if not pd.isna(val) else None
+                if 'upper_95' in forecast_df.columns and forecast_df['upper_95'].iloc[horizon] is not None:
+                    val = forecast_df['upper_95'].iloc[horizon]
+                    conf_upper_95 = float(val) if not pd.isna(val) else None
+                if 'std' in forecast_df.columns and forecast_df['std'].iloc[horizon] is not None:
+                    val = forecast_df['std'].iloc[horizon]
+                    pred_std = float(val) if not pd.isna(val) else None
+                
+                records.append({
+                    'prediction_date': prediction_date,
+                    'ticker': ticker,
+                    'prediction_horizon_days': horizon,
+                    'target_date': target_date,
+                    'predicted_price': predicted_price,
+                    'current_price': current_price,
+                    'predicted_return': predicted_return,
+                    'confidence_lower_5': conf_lower_5,
+                    'confidence_lower_16': conf_lower_16,
+                    'confidence_upper_84': conf_upper_84,
+                    'confidence_upper_95': conf_upper_95,
+                    'model_type': model_type,
+                    'model_version': model_version,
+                    'prediction_std': pred_std,
+                    'mc_dropout_used': mc_dropout_used,
+                    'mc_iterations': mc_iterations if mc_dropout_used else None
+                })
+        
+        if records:
+            prediction_df = pd.DataFrame(records)
+            
+            # Delete existing predictions for same date/ticker to allow updates
+            delete_query = text("""
+                DELETE FROM stock_prediction_extended 
+                WHERE prediction_date = :pred_date AND ticker = :ticker
+            """)
+            with db_con.begin() as conn:
+                conn.execute(delete_query, {'pred_date': prediction_date, 'ticker': ticker})
+            
+            # Insert new predictions
+            prediction_df.to_sql(
+                'stock_prediction_extended',
+                db_con,
+                if_exists='append',
+                index=False
+            )
+            
+            return len(records)
+        
+        return 0
+    
+    except Exception as e:
+        raise KeyError(f"Could not export prediction data to database. Error: {e}") from e
+
+
+def export_monte_carlo_results(
+    ticker,
+    simulation_date,
+    monte_carlo_year_df,
+    num_simulations=1000,
+    mu_used=None,
+    sigma_used=None,
+    starting_price=None
+):
+    """
+    Export Monte Carlo simulation results to the database.
+    
+    This function stores yearly Monte Carlo simulation percentiles and metrics
+    for risk analysis and portfolio construction.
+    
+    Args:
+        ticker (str): Stock ticker symbol
+        simulation_date (datetime.date): Date when simulation was run
+        monte_carlo_year_df (pd.DataFrame): DataFrame indexed by year with percentile columns
+        num_simulations (int): Number of simulation paths run
+        mu_used (float, optional): Drift parameter used in GBM
+        sigma_used (float, optional): Volatility parameter used in GBM
+        starting_price (float, optional): Starting price for simulation
+    
+    Returns:
+        int: Number of rows inserted
+    
+    Raises:
+        ValueError: If required parameters are invalid
+        KeyError: If database connection fails
+    """
+    from sqlalchemy import text
+    
+    if ticker == "" or ticker is None:
+        raise ValueError("Ticker cannot be empty")
+    
+    if monte_carlo_year_df is None or monte_carlo_year_df.empty:
+        raise ValueError("Monte Carlo DataFrame cannot be empty")
+    
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+    except Exception as e:
+        raise KeyError(f"Could not fetch the secrets. Error: {e}") from e
+    
+    try:
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+    except Exception as e:
+        raise KeyError(f"Could not establish connection to the database. Error: {e}") from e
+    
+    try:
+        records = []
+        
+        # Iterate through years (index of the DataFrame)
+        for year in monte_carlo_year_df.index:
+            if year == 0:  # Skip year 0 (starting point)
+                continue
+            
+            row = monte_carlo_year_df.loc[year]
+            
+            # Extract percentiles from standard column names
+            record = {
+                'simulation_date': simulation_date,
+                'ticker': ticker,
+                'simulation_year': int(year),
+                'num_simulations': num_simulations,
+                'percentile_5': row.get('5th Percentile'),
+                'percentile_16': row.get('16th Percentile'),
+                'mean_price': row.get('Mean'),
+                'percentile_84': row.get('84th Percentile'),
+                'percentile_95': row.get('95th Percentile'),
+                'mu_used': mu_used,
+                'sigma_used': sigma_used,
+                'starting_price': starting_price
+            }
+            
+            # Calculate return metrics if starting price is available
+            if starting_price and starting_price > 0 and year > 0:
+                if record['percentile_5']:
+                    record['return_percentile_5'] = (record['percentile_5'] / starting_price) ** (1/year) - 1
+                if record['mean_price']:
+                    record['return_mean'] = (record['mean_price'] / starting_price) ** (1/year) - 1
+                if record['percentile_95']:
+                    record['return_percentile_95'] = (record['percentile_95'] / starting_price) ** (1/year) - 1
+            
+            records.append(record)
+        
+        if records:
+            mc_df = pd.DataFrame(records)
+            
+            # Delete existing results for same date/ticker to allow updates
+            delete_query = text("""
+                DELETE FROM monte_carlo_results 
+                WHERE simulation_date = :sim_date AND ticker = :ticker
+            """)
+            with db_con.begin() as conn:
+                conn.execute(delete_query, {'sim_date': simulation_date, 'ticker': ticker})
+            
+            # Insert new results
+            mc_df.to_sql(
+                'monte_carlo_results',
+                db_con,
+                if_exists='append',
+                index=False
+            )
+            
+            return len(records)
+        
+        return 0
+    
+    except Exception as e:
+        raise KeyError(f"Could not export Monte Carlo results to database. Error: {e}") from e
+
+
+def create_portfolio_run(
+    risk_level,
+    investment_years,
+    portfolio_size,
+    industries_filter=None,
+    countries_filter=None,
+    excluded_tickers=None,
+    run_name=None
+):
+    """
+    Create a new portfolio optimization run record in the database.
+    
+    This function creates a tracking record for a portfolio optimization run
+    and returns the run_id for associating stock predictions and holdings.
+    
+    Args:
+        risk_level (str): Risk level ('low', 'medium', 'high')
+        investment_years (int): Investment horizon in years
+        portfolio_size (int): Target number of stocks in portfolio
+        industries_filter (list, optional): List of industries to include
+        countries_filter (list, optional): List of countries to include
+        excluded_tickers (list, optional): List of tickers to exclude
+        run_name (str, optional): Optional name for this run
+    
+    Returns:
+        int: The created run_id
+    
+    Raises:
+        KeyError: If database connection fails
+    """
+    import json
+    from sqlalchemy import text
+    
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+    except Exception as e:
+        raise KeyError(f"Could not fetch the secrets. Error: {e}") from e
+    
+    try:
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+    except Exception as e:
+        raise KeyError(f"Could not establish connection to the database. Error: {e}") from e
+    
+    try:
+        insert_query = text("""
+            INSERT INTO portfolio_runs 
+            (run_name, risk_level, investment_years, portfolio_size, 
+             industries_filter, countries_filter, excluded_tickers, status)
+            VALUES 
+            (:run_name, :risk_level, :investment_years, :portfolio_size,
+             :industries_filter, :countries_filter, :excluded_tickers, 'running')
+        """)
+        
+        with db_con.begin() as conn:
+            result = conn.execute(insert_query, {
+                'run_name': run_name,
+                'risk_level': risk_level,
+                'investment_years': investment_years,
+                'portfolio_size': portfolio_size,
+                'industries_filter': json.dumps(industries_filter) if industries_filter else None,
+                'countries_filter': json.dumps(countries_filter) if countries_filter else None,
+                'excluded_tickers': json.dumps(excluded_tickers) if excluded_tickers else None
+            })
+            
+            # Get the auto-generated run_id
+            run_id = result.lastrowid
+        
+        return run_id
+    
+    except Exception as e:
+        raise KeyError(f"Could not create portfolio run record. Error: {e}") from e
+
+
+def update_portfolio_run(
+    run_id,
+    total_stocks_analyzed=None,
+    successful_predictions=None,
+    failed_predictions=None,
+    expected_return=None,
+    expected_volatility=None,
+    sharpe_ratio=None,
+    mc_return_p5=None,
+    mc_return_mean=None,
+    mc_return_p95=None,
+    status=None,
+    error_message=None,
+    execution_time_seconds=None
+):
+    """
+    Update an existing portfolio run record with results.
+    
+    Args:
+        run_id (int): The run_id to update
+        total_stocks_analyzed (int, optional): Number of stocks analyzed
+        successful_predictions (int, optional): Number of successful predictions
+        failed_predictions (int, optional): Number of failed predictions
+        expected_return (float, optional): Portfolio expected return
+        expected_volatility (float, optional): Portfolio volatility
+        sharpe_ratio (float, optional): Portfolio Sharpe ratio
+        mc_return_p5 (float, optional): Monte Carlo 5th percentile return
+        mc_return_mean (float, optional): Monte Carlo mean return
+        mc_return_p95 (float, optional): Monte Carlo 95th percentile return
+        status (str, optional): Run status ('running', 'completed', 'failed')
+        error_message (str, optional): Error message if failed
+        execution_time_seconds (float, optional): Total execution time
+    
+    Returns:
+        bool: True if update successful
+    
+    Raises:
+        KeyError: If database connection fails
+    """
+    from sqlalchemy import text
+    
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+    except Exception as e:
+        raise KeyError(f"Could not fetch the secrets. Error: {e}") from e
+    
+    try:
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+    except Exception as e:
+        raise KeyError(f"Could not establish connection to the database. Error: {e}") from e
+    
+    try:
+        # Build dynamic update query
+        updates = []
+        params = {'run_id': run_id}
+        
+        if total_stocks_analyzed is not None:
+            updates.append("total_stocks_analyzed = :total_stocks_analyzed")
+            params['total_stocks_analyzed'] = total_stocks_analyzed
+        if successful_predictions is not None:
+            updates.append("successful_predictions = :successful_predictions")
+            params['successful_predictions'] = successful_predictions
+        if failed_predictions is not None:
+            updates.append("failed_predictions = :failed_predictions")
+            params['failed_predictions'] = failed_predictions
+        if expected_return is not None:
+            updates.append("expected_return = :expected_return")
+            params['expected_return'] = expected_return
+        if expected_volatility is not None:
+            updates.append("expected_volatility = :expected_volatility")
+            params['expected_volatility'] = expected_volatility
+        if sharpe_ratio is not None:
+            updates.append("sharpe_ratio = :sharpe_ratio")
+            params['sharpe_ratio'] = sharpe_ratio
+        if mc_return_p5 is not None:
+            updates.append("mc_return_p5 = :mc_return_p5")
+            params['mc_return_p5'] = mc_return_p5
+        if mc_return_mean is not None:
+            updates.append("mc_return_mean = :mc_return_mean")
+            params['mc_return_mean'] = mc_return_mean
+        if mc_return_p95 is not None:
+            updates.append("mc_return_p95 = :mc_return_p95")
+            params['mc_return_p95'] = mc_return_p95
+        if status is not None:
+            updates.append("status = :status")
+            params['status'] = status
+        if error_message is not None:
+            updates.append("error_message = :error_message")
+            params['error_message'] = error_message
+        if execution_time_seconds is not None:
+            updates.append("execution_time_seconds = :execution_time_seconds")
+            params['execution_time_seconds'] = execution_time_seconds
+        
+        if updates:
+            update_query = text(f"""
+                UPDATE portfolio_runs 
+                SET {', '.join(updates)}
+                WHERE run_id = :run_id
+            """)
+            
+            with db_con.begin() as conn:
+                conn.execute(update_query, params)
+        
+        return True
+    
+    except Exception as e:
+        raise KeyError(f"Could not update portfolio run record. Error: {e}") from e
+
+
+def export_portfolio_holdings(run_id, holdings_df):
+    """
+    Export portfolio holdings for a specific run to the database.
+    
+    Args:
+        run_id (int): The portfolio run ID
+        holdings_df (pd.DataFrame): DataFrame with columns:
+            - ticker: Stock ticker symbol
+            - weight: Portfolio weight (0-1)
+            - rank: Rank in portfolio (optional)
+            - expected_return: Expected return (optional)
+            - volatility: Volatility (optional)
+            - industry: Industry classification (optional)
+    
+    Returns:
+        int: Number of holdings inserted
+    
+    Raises:
+        ValueError: If required columns are missing
+        KeyError: If database connection fails
+    """
+    from sqlalchemy import text
+    
+    if holdings_df is None or holdings_df.empty:
+        raise ValueError("Holdings DataFrame cannot be empty")
+    
+    if 'ticker' not in holdings_df.columns or 'weight' not in holdings_df.columns:
+        raise ValueError("Holdings DataFrame must contain 'ticker' and 'weight' columns")
+    
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+    except Exception as e:
+        raise KeyError(f"Could not fetch the secrets. Error: {e}") from e
+    
+    try:
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+    except Exception as e:
+        raise KeyError(f"Could not establish connection to the database. Error: {e}") from e
+    
+    try:
+        # Add run_id to DataFrame
+        holdings_df = holdings_df.copy()
+        holdings_df['run_id'] = run_id
+        
+        # Ensure columns match database schema
+        db_columns = [
+            'run_id', 'ticker', 'weight', 'rank', 'expected_return', 
+            'volatility', 'sharpe_ratio', 'correlation_to_portfolio',
+            'marginal_contribution_to_risk', 'industry', 'country'
+        ]
+        
+        # Only keep columns that exist in both DataFrame and database
+        columns_to_export = [col for col in db_columns if col in holdings_df.columns]
+        holdings_to_export = holdings_df[columns_to_export]
+        
+        # Insert holdings
+        holdings_to_export.to_sql(
+            'portfolio_holdings',
+            db_con,
+            if_exists='append',
+            index=False
+        )
+        
+        return len(holdings_to_export)
+    
+    except Exception as e:
+        raise KeyError(f"Could not export portfolio holdings. Error: {e}") from e
+
+
+def import_monte_carlo_results(ticker=None, simulation_date=None, years=None):
+    """
+    Import Monte Carlo simulation results from the database.
+    
+    Args:
+        ticker (str, optional): Filter by ticker symbol
+        simulation_date (date, optional): Filter by simulation date
+        years (list, optional): List of years to retrieve
+    
+    Returns:
+        pd.DataFrame: Monte Carlo results
+    
+    Raises:
+        KeyError: If database connection fails
+    """
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+    except Exception as e:
+        raise KeyError(f"Could not fetch the secrets. Error: {e}") from e
+    
+    try:
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+    except Exception as e:
+        raise KeyError(f"Could not establish connection to the database. Error: {e}") from e
+    
+    try:
+        query = "SELECT * FROM monte_carlo_results WHERE 1=1"
+        params = {}
+        
+        if ticker:
+            query += " AND ticker = %(ticker)s"
+            params['ticker'] = ticker
+        
+        if simulation_date:
+            query += " AND simulation_date = %(sim_date)s"
+            params['sim_date'] = simulation_date
+        
+        if years:
+            query += f" AND simulation_year IN ({','.join(map(str, years))})"
+        
+        query += " ORDER BY ticker, simulation_year"
+        
+        return pd.read_sql(query, db_con, params=params)
+    
+    except Exception as e:
+        raise KeyError(f"Could not import Monte Carlo results. Error: {e}") from e
+
+
+def import_stock_predictions_extended(ticker=None, prediction_date=None):
+    """
+    Import extended stock predictions from the database.
+    
+    Args:
+        ticker (str, optional): Filter by ticker symbol
+        prediction_date (date, optional): Filter by prediction date
+    
+    Returns:
+        pd.DataFrame: Extended prediction results
+    
+    Raises:
+        KeyError: If database connection fails
+    """
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+    except Exception as e:
+        raise KeyError(f"Could not fetch the secrets. Error: {e}") from e
+    
+    try:
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+    except Exception as e:
+        raise KeyError(f"Could not establish connection to the database. Error: {e}") from e
+    
+    try:
+        query = "SELECT * FROM stock_prediction_extended WHERE 1=1"
+        params = {}
+        
+        if ticker:
+            query += " AND ticker = %(ticker)s"
+            params['ticker'] = ticker
+        
+        if prediction_date:
+            query += " AND prediction_date = %(pred_date)s"
+            params['pred_date'] = prediction_date
+        
+        query += " ORDER BY ticker, prediction_horizon_days"
+        
+        return pd.read_sql(query, db_con, params=params)
+    
+    except Exception as e:
+        raise KeyError(f"Could not import stock predictions. Error: {e}") from e
+
+
+# ============================================================================
+# MODEL / PREDICTION FRESHNESS QUERY FUNCTIONS
+# ============================================================================
+
+def get_model_status_for_all_tickers(max_age_days=30):
+    """
+    Get model training status for all tickers in the database.
+    
+    Returns a DataFrame with columns:
+        ticker, model_type, tuning_date, age_days, is_fresh
+    
+    Args:
+        max_age_days: Models older than this are considered stale
+        
+    Returns:
+        pd.DataFrame with model status per ticker/model_type,
+        or empty DataFrame on error
+    """
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+    except Exception as e:
+        print(f"[WARNING] Could not connect to database: {e}")
+        return pd.DataFrame()
+    
+    try:
+        query = """
+            SELECT 
+                ticker,
+                model_type,
+                tuning_date,
+                DATEDIFF(NOW(), tuning_date) AS age_days,
+                CASE WHEN DATEDIFF(NOW(), tuning_date) <= %(max_age)s AND is_valid = TRUE 
+                     THEN TRUE ELSE FALSE END AS is_fresh
+            FROM model_hyperparameters
+            WHERE is_valid = TRUE
+            ORDER BY ticker, model_type
+        """
+        return pd.read_sql(query, db_con, params={'max_age': max_age_days})
+    except Exception as e:
+        print(f"[WARNING] Could not query model status: {e}")
+        return pd.DataFrame()
+
+
+def get_tickers_needing_training(max_age_days=30, required_model_types=None):
+    """
+    Get tickers that need model training — either no models exist or models are stale.
+    
+    Args:
+        max_age_days: Models older than this are considered stale
+        required_model_types: List of required model types (default: ['rf', 'xgb', 'tcn'])
+        
+    Returns:
+        dict with keys:
+            'untrained': list of tickers with no models at all
+            'stale': list of tickers with at least one stale model
+            'fresh': list of tickers with all models fresh
+    """
+    if required_model_types is None:
+        required_model_types = ['rf', 'xgb', 'tcn']
+    
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+    except Exception as e:
+        print(f"[WARNING] Could not connect to database: {e}")
+        return {'untrained': [], 'stale': [], 'fresh': []}
+    
+    try:
+        # Get all non-index tickers (matches import_ticker_list filter)
+        all_tickers_df = pd.read_sql("SELECT ticker FROM stock_info_data WHERE industry != 'Index'", db_con)
+        all_tickers = set(all_tickers_df['ticker'].tolist())
+        
+        # Get model status
+        model_status = get_model_status_for_all_tickers(max_age_days)
+        
+        if model_status.empty:
+            return {
+                'untrained': list(all_tickers),
+                'stale': [],
+                'fresh': []
+            }
+        
+        # Group by ticker
+        tickers_with_models = set(model_status['ticker'].unique())
+        untrained = list(all_tickers - tickers_with_models)
+        
+        stale = []
+        fresh = []
+        
+        for ticker in tickers_with_models:
+            ticker_models = model_status[model_status['ticker'] == ticker]
+            
+            # Check if all required models exist and are fresh
+            has_all_required = all(
+                mt in ticker_models['model_type'].values 
+                for mt in required_model_types
+            )
+            all_fresh = ticker_models['is_fresh'].all()
+            
+            if has_all_required and all_fresh:
+                fresh.append(ticker)
+            else:
+                stale.append(ticker)
+        
+        return {
+            'untrained': sorted(untrained),
+            'stale': sorted(stale),
+            'fresh': sorted(fresh)
+        }
+    except Exception as e:
+        print(f"[WARNING] Could not determine training needs: {e}")
+        return {'untrained': [], 'stale': [], 'fresh': []}
+
+
+def get_tickers_needing_prediction(max_prediction_age_days=1):
+    """
+    Get tickers that have trained models but no recent predictions.
+    
+    Args:
+        max_prediction_age_days: Predictions older than this need refreshing
+        
+    Returns:
+        dict with keys:
+            'needs_prediction': list of tickers needing new predictions
+            'recently_predicted': list of tickers with fresh predictions
+    """
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+    except Exception as e:
+        print(f"[WARNING] Could not connect to database: {e}")
+        return {'needs_prediction': [], 'recently_predicted': []}
+    
+    try:
+        # Tickers with valid models
+        models_query = """
+            SELECT DISTINCT ticker 
+            FROM model_hyperparameters 
+            WHERE is_valid = TRUE
+        """
+        model_tickers_df = pd.read_sql(models_query, db_con)
+        model_tickers = set(model_tickers_df['ticker'].tolist()) if not model_tickers_df.empty else set()
+        
+        # Tickers with recent predictions
+        predictions_query = """
+            SELECT DISTINCT ticker
+            FROM stock_prediction_extended
+            WHERE DATEDIFF(NOW(), prediction_date) <= %(max_age)s
+        """
+        predicted_df = pd.read_sql(predictions_query, db_con, params={'max_age': max_prediction_age_days})
+        recently_predicted = set(predicted_df['ticker'].tolist()) if not predicted_df.empty else set()
+        
+        # Tickers that have models but no recent predictions
+        needs_prediction = model_tickers - recently_predicted
+        
+        return {
+            'needs_prediction': sorted(list(needs_prediction)),
+            'recently_predicted': sorted(list(recently_predicted))
+        }
+    except Exception as e:
+        print(f"[WARNING] Could not determine prediction needs: {e}")
+        return {'needs_prediction': [], 'recently_predicted': []}
+
+
+def get_tickers_with_predictions(max_age_days=7):
+    """
+    Get tickers that have recent ML predictions available for portfolio construction.
+    
+    Args:
+        max_age_days: Maximum age of predictions to consider
+        
+    Returns:
+        list of ticker symbols with recent predictions
+    """
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+    except Exception as e:
+        print(f"[WARNING] Could not connect to database: {e}")
+        return []
+    
+    try:
+        query = """
+            SELECT DISTINCT ticker
+            FROM stock_prediction_extended
+            WHERE DATEDIFF(NOW(), prediction_date) <= %(max_age)s
+            ORDER BY ticker
+        """
+        result = pd.read_sql(query, db_con, params={'max_age': max_age_days})
+        return result['ticker'].tolist() if not result.empty else []
+    except Exception as e:
+        print(f"[WARNING] Could not query prediction tickers: {e}")
+        return []
+
+
+def get_prediction_summary(ticker, max_age_days=7):
+    """
+    Get the latest prediction summary for a ticker.
+    
+    Args:
+        ticker: Stock ticker symbol
+        max_age_days: Maximum age of predictions to consider
+        
+    Returns:
+        dict with prediction info or None if no recent predictions
+    """
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+    except Exception as e:
+        print(f"[WARNING] Could not connect to database: {e}")
+        return None
+    
+    try:
+        query = """
+            SELECT 
+                prediction_date,
+                prediction_horizon_days,
+                predicted_price,
+                current_price,
+                predicted_return,
+                confidence_lower_5,
+                confidence_upper_95,
+                model_type,
+                prediction_std
+            FROM stock_prediction_extended
+            WHERE ticker = %(ticker)s
+            AND DATEDIFF(NOW(), prediction_date) <= %(max_age)s
+            ORDER BY prediction_horizon_days
+        """
+        result = pd.read_sql(query, db_con, params={'ticker': ticker, 'max_age': max_age_days})
+        
+        if result.empty:
+            return None
+        
+        return {
+            'prediction_date': result['prediction_date'].iloc[0],
+            'current_price': result['current_price'].iloc[0],
+            'horizons': result.to_dict('records')
+        }
+    except Exception as e:
+        print(f"[WARNING] Could not query prediction summary: {e}")
+        return None
+
+
+# ============================================================================
+# HYPERPARAMETER STORAGE FUNCTIONS
+# ============================================================================
+
+def save_hyperparameters(
+    ticker,
+    model_type,
+    hyperparameters,
+    num_trials=None,
+    best_score=None,
+    tuning_time_seconds=None,
+    training_samples=None,
+    num_features=None,
+    feature_list=None,
+    val_mse=None,
+    val_r2=None,
+    val_mae=None,
+    is_constrained=False
+):
+    """
+    Save best hyperparameters to database for reuse.
+    
+    This allows skipping tuning if valid hyperparameters already exist,
+    significantly reducing tuning_dir storage usage.
+    
+    Args:
+        ticker (str): Stock ticker symbol
+        model_type (str): Model type ('rf', 'xgb', 'lstm', 'tcn')
+        hyperparameters (dict): Best hyperparameters as dictionary
+        num_trials (int, optional): Number of trials in tuning session
+        best_score (float, optional): Best validation score achieved
+        tuning_time_seconds (float, optional): Time taken for tuning
+        training_samples (int, optional): Number of training samples
+        num_features (int, optional): Number of features
+        feature_list (list, optional): List of feature names (for hash)
+        val_mse (float, optional): Validation MSE
+        val_r2 (float, optional): Validation R2
+        val_mae (float, optional): Validation MAE
+        is_constrained (bool): Whether overfitting constraints were applied
+    
+    Returns:
+        bool: True if saved successfully
+    
+    Raises:
+        ValueError: If required parameters are invalid
+        KeyError: If database connection fails
+    """
+    import json
+    import hashlib
+    from sqlalchemy import text
+    
+    if not ticker or not model_type:
+        raise ValueError("Ticker and model_type are required")
+    
+    # Normalize model_type to lowercase to match DB enum
+    model_type = model_type.lower()
+    
+    if model_type not in ('rf', 'xgb', 'lstm', 'tcn'):
+        raise ValueError(f"Invalid model_type: {model_type}. Must be one of: rf, xgb, lstm, tcn")
+    
+    if not hyperparameters:
+        raise ValueError("Hyperparameters dictionary cannot be empty")
+    
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+    except Exception as e:
+        raise KeyError(f"Could not fetch the secrets. Error: {e}") from e
+    
+    try:
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+    except Exception as e:
+        raise KeyError(f"Could not establish connection to the database. Error: {e}") from e
+    
+    try:
+        # Create feature hash if feature list provided
+        feature_hash = None
+        if feature_list:
+            feature_str = ','.join(sorted(str(f) for f in feature_list))
+            feature_hash = hashlib.sha256(feature_str.encode()).hexdigest()[:64]
+        
+        # Convert hyperparameters to JSON string
+        hp_json = json.dumps(hyperparameters, default=str)
+        
+        # Use REPLACE to upsert (MySQL specific)
+        upsert_query = text("""
+            REPLACE INTO model_hyperparameters 
+            (ticker, model_type, hyperparameters, num_trials, best_score, 
+             tuning_time_seconds, training_samples, num_features, feature_hash,
+             val_mse, val_r2, val_mae, is_constrained, is_valid, tuning_date)
+            VALUES 
+            (:ticker, :model_type, :hyperparameters, :num_trials, :best_score,
+             :tuning_time_seconds, :training_samples, :num_features, :feature_hash,
+             :val_mse, :val_r2, :val_mae, :is_constrained, TRUE, CURRENT_TIMESTAMP)
+        """)
+        
+        with db_con.begin() as conn:
+            conn.execute(upsert_query, {
+                'ticker': ticker,
+                'model_type': model_type,
+                'hyperparameters': hp_json,
+                'num_trials': num_trials,
+                'best_score': best_score,
+                'tuning_time_seconds': tuning_time_seconds,
+                'training_samples': training_samples,
+                'num_features': num_features,
+                'feature_hash': feature_hash,
+                'val_mse': val_mse,
+                'val_r2': val_r2,
+                'val_mae': val_mae,
+                'is_constrained': is_constrained
+            })
+        
+        print(f"[DB] Saved {model_type.upper()} hyperparameters for {ticker}")
+        return True
+    
+    except Exception as e:
+        print(f"[WARNING] Could not save hyperparameters: {e}")
+        return False
+
+
+def load_hyperparameters(
+    ticker,
+    model_type,
+    max_age_days=30,
+    feature_list=None,
+    require_same_features=False
+):
+    """
+    Load cached hyperparameters from database.
+    
+    Args:
+        ticker (str): Stock ticker symbol
+        model_type (str): Model type ('rf', 'xgb', 'lstm', 'tcn')
+        max_age_days (int): Maximum age of cached HPs in days (None = no limit)
+        feature_list (list, optional): Current feature list for validation
+        require_same_features (bool): If True, only return if feature hash matches
+    
+    Returns:
+        dict or None: Hyperparameters dict if valid cache exists, None otherwise
+    
+    Raises:
+        KeyError: If database connection fails
+    """
+    import json
+    import hashlib
+    from datetime import datetime, timedelta
+    
+    if not ticker or not model_type:
+        return None
+    
+    # Normalize model_type to lowercase to match DB enum
+    model_type = model_type.lower()
+    
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+    except Exception as e:
+        print(f"[WARNING] Could not fetch secrets: {e}")
+        return None
+    
+    try:
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+    except Exception as e:
+        print(f"[WARNING] Could not connect to database: {e}")
+        return None
+    
+    try:
+        query = """
+            SELECT hyperparameters, tuning_date, feature_hash, val_mse, val_r2
+            FROM model_hyperparameters 
+            WHERE ticker = %(ticker)s 
+            AND model_type = %(model_type)s 
+            AND is_valid = TRUE
+        """
+        params = {'ticker': ticker, 'model_type': model_type}
+        
+        result = pd.read_sql(query, db_con, params=params)
+        
+        if result.empty:
+            return None
+        
+        row = result.iloc[0]
+        tuning_date = row['tuning_date']
+        
+        # Check age
+        if max_age_days is not None:
+            if isinstance(tuning_date, str):
+                tuning_date = datetime.fromisoformat(tuning_date)
+            age = datetime.now() - tuning_date
+            if age.days > max_age_days:
+                print(f"[CACHE] {model_type.upper()} HPs for {ticker} expired ({age.days} days old)")
+                return None
+        
+        # Check feature hash if required
+        if require_same_features and feature_list:
+            feature_str = ','.join(sorted(str(f) for f in feature_list))
+            current_hash = hashlib.sha256(feature_str.encode()).hexdigest()[:64]
+            if row['feature_hash'] != current_hash:
+                print(f"[CACHE] {model_type.upper()} HPs for {ticker} have different features")
+                return None
+        
+        # Parse and return hyperparameters
+        hp_json = row['hyperparameters']
+        hyperparameters = json.loads(hp_json) if isinstance(hp_json, str) else hp_json
+        
+        mse_str = f"{row['val_mse']:.4f}" if row['val_mse'] is not None else "N/A"
+        r2_str = f"{row['val_r2']:.4f}" if row['val_r2'] is not None else "N/A"
+        print(f"[CACHE] Loaded {model_type.upper()} hyperparameters for {ticker} "
+              f"(MSE: {mse_str}, R2: {r2_str})")
+        
+        return hyperparameters
+    
+    except Exception as e:
+        print(f"[WARNING] Could not load hyperparameters: {e}")
+        return None
+
+
+def invalidate_hyperparameters(ticker=None, model_type=None):
+    """
+    Invalidate cached hyperparameters to force re-tuning.
+    
+    Args:
+        ticker (str, optional): Specific ticker to invalidate (None = all)
+        model_type (str, optional): Specific model type (None = all types)
+    
+    Returns:
+        int: Number of records invalidated
+    """
+    from sqlalchemy import text
+    
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+    except Exception as e:
+        print(f"[WARNING] Could not connect to database: {e}")
+        return 0
+    
+    try:
+        query = "UPDATE model_hyperparameters SET is_valid = FALSE WHERE 1=1"
+        params = {}
+        
+        if ticker:
+            query += " AND ticker = :ticker"
+            params['ticker'] = ticker
+        
+        if model_type:
+            query += " AND model_type = :model_type"
+            params['model_type'] = model_type
+        
+        with db_con.begin() as conn:
+            result = conn.execute(text(query), params)
+            count = result.rowcount
+        
+        print(f"[DB] Invalidated {count} hyperparameter cache entries")
+        return count
+    
+    except Exception as e:
+        print(f"[WARNING] Could not invalidate hyperparameters: {e}")
+        return 0
+
+
+def cleanup_tuning_directory(tuning_dir="tuning_dir", keep_tickers=None, dry_run=False):
+    """
+    Clean up tuning directory to free disk space.
+    
+    This function removes tuning directories for stocks that have
+    valid hyperparameters cached in the database.
+    
+    Args:
+        tuning_dir (str): Path to tuning directory
+        keep_tickers (list, optional): List of tickers to keep (others deleted)
+        dry_run (bool): If True, only report what would be deleted
+    
+    Returns:
+        dict: Summary of cleanup operation
+    """
+    import shutil
+    
+    if not os.path.exists(tuning_dir):
+        return {"status": "tuning_dir not found", "deleted": 0, "freed_mb": 0}
+    
+    summary = {
+        "status": "completed",
+        "deleted": 0,
+        "kept": 0,
+        "freed_mb": 0,
+        "deleted_dirs": [],
+        "kept_dirs": []
+    }
+    
+    try:
+        for item in os.listdir(tuning_dir):
+            item_path = os.path.join(tuning_dir, item)
+            
+            if not os.path.isdir(item_path):
+                continue
+            
+            # Parse ticker from directory name (e.g., "RF_tuning_AAPL" -> "AAPL")
+            parts = item.split('_')
+            if len(parts) >= 3:
+                ticker = '_'.join(parts[2:])  # Handle tickers with underscores
+            else:
+                continue
+            
+            # Check if we should keep this ticker
+            should_keep = keep_tickers and ticker in keep_tickers
+            
+            if should_keep:
+                summary["kept"] += 1
+                summary["kept_dirs"].append(item)
+                continue
+            
+            # Calculate size
+            size_bytes = sum(
+                os.path.getsize(os.path.join(dirpath, filename))
+                for dirpath, dirnames, filenames in os.walk(item_path)
+                for filename in filenames
+            )
+            size_mb = size_bytes / (1024 * 1024)
+            
+            if dry_run:
+                print(f"[DRY RUN] Would delete: {item} ({size_mb:.1f} MB)")
+                summary["freed_mb"] += size_mb
+                summary["deleted"] += 1
+                summary["deleted_dirs"].append(item)
+            else:
+                try:
+                    shutil.rmtree(item_path)
+                    print(f"[CLEANUP] Deleted: {item} ({size_mb:.1f} MB)")
+                    summary["freed_mb"] += size_mb
+                    summary["deleted"] += 1
+                    summary["deleted_dirs"].append(item)
+                except (OSError, PermissionError) as e:
+                    print(f"[WARNING] Could not delete {item}: {e}")
+        
+        return summary
+    
+    except Exception as e:
+        summary["status"] = f"error: {e}"
+        return summary
+
+
+def diagnose_stock_pipeline(stock_ticker):
+    """Diagnose data availability for a ticker across all pipeline tables.
+    
+    Returns a dict with row counts and date ranges for each table,
+    plus the final merged row count, to identify data gaps.
+    """
+    from sqlalchemy import text
+    db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+    engine = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+
+    tables = {
+        "stock_price_data": "date",
+        "stock_income_stmt_data": "financial_Statement_Date",
+        "stock_balancesheet_data": "financial_Statement_Date",
+        "stock_cash_flow_data": "financial_Statement_Date",
+        "stock_ratio_data": "date",
+    }
+    report = {"ticker": stock_ticker, "tables": {}}
+
+    with engine.connect() as conn:
+        for table, date_col in tables.items():
+            row = conn.execute(
+                text(f"SELECT COUNT(*) AS cnt, MIN({date_col}) AS min_dt, MAX({date_col}) AS max_dt "
+                     f"FROM {table} WHERE ticker = :ticker"),
+                {"ticker": stock_ticker},
+            ).mappings().first()
+            report["tables"][table] = {
+                "rows": int(row["cnt"]),
+                "min_date": str(row["min_dt"]) if row["min_dt"] else None,
+                "max_date": str(row["max_dt"]) if row["max_dt"] else None,
+            }
+
+    # Check merged row count using the real pipeline function
+    try:
+        merged_df = import_stock_dataset(stock_ticker)
+        report["merged_rows"] = len(merged_df) if merged_df is not None else 0
+    except Exception as e:
+        report["merged_rows"] = 0
+        report["merge_error"] = str(e)
+
+    return report
+
+
 # Run the main function
 if __name__ == "__main__":
-    TICKER = "NOVO-B"
+    TICKER = "PLTR"
+    report = diagnose_stock_pipeline(TICKER)
+    print(f"Data availability report for {TICKER}:")
+    for table, info in report["tables"].items():
+        print(f"  {table}: {info['rows']} rows, date range: {info['min_date']} to {info['max_date']}")
+
     if does_stock_exists_stock_price_data(TICKER) is False:
         print("Stock does not exist")
     elif does_stock_exists_stock_price_data(TICKER) is True:

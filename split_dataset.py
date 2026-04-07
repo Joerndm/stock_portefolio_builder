@@ -17,7 +17,6 @@ Functions:
 """
 
 import math
-from sklearn.model_selection import train_test_split
 import numpy as np
 import pandas as pd
 
@@ -60,23 +59,13 @@ def dataset_train_test_split(dataset_dataframe, test_size=0.10, validation_size=
         forecast_out = int(math.ceil(0.05 * len(train_data_df)))
         train_data_df["prediction"] = train_data_df.iloc[0:-forecast_out]["1D"]
 
-        # Fit scaler on x features (before any filtering)
         # Exclude raw OHLCV columns that won't be available for future predictions
         exclude_cols = ["open_Price", "high_Price", "low_Price", "close_Price", "trade_Volume", "1D", "prediction"]
-        scaler_x = data_scalers.data_preprocessing_minmax_scaler_fit(
-            train_data_df.drop(exclude_cols, axis=1, errors='ignore')
-        )
-        scaler_x.set_output(transform="pandas")
-
-        # Transform x data
-        scaled_x = data_scalers.data_preprocessing_minmax_scaler_transform(
-            scaler_x,
-            train_data_df.drop(exclude_cols, axis=1, errors='ignore')
-        )
+        x_all = train_data_df.drop(exclude_cols, axis=1, errors='ignore')
 
         # Separate prediction data (future data with no known y values)
-        x_Predictions = scaled_x.iloc[-forecast_out:].copy()
-        x = scaled_x.iloc[:-forecast_out].copy()
+        x_Predictions = x_all.iloc[-forecast_out:].copy()
+        x = x_all.iloc[:-forecast_out].copy()
 
         # Drop rows with NaN values in prediction column
         train_data_df = train_data_df.dropna(subset=["prediction"], axis=0, how="any")
@@ -85,17 +74,28 @@ def dataset_train_test_split(dataset_dataframe, test_size=0.10, validation_size=
         # Align x with y (remove rows that were dropped from y)
         x = x.loc[train_data_df.index].copy()
 
-        # First split: separate test set from training+validation (BEFORE scaling y)
-        x_temp, x_test, y_temp, y_test = train_test_split(
-            x, y, test_size=test_size, random_state=rs
-        )
+        # TIME-BASED SPLIT: preserve chronological order (no shuffling)
+        n = len(x)
+        train_end = int(n * (1 - test_size - validation_size))
+        val_end = int(n * (1 - test_size))
 
-        # Second split: separate validation from training
-        # Calculate the ratio for the temp set
-        validation_ratio = validation_size / (1 - test_size)
-        x_train, x_val, y_train, y_val = train_test_split(
-            x_temp, y_temp, test_size=validation_ratio, random_state=rs
-        )
+        x_train = x.iloc[:train_end]
+        x_val = x.iloc[train_end:val_end]
+        x_test = x.iloc[val_end:]
+
+        y_train = y[:train_end]
+        y_val = y[train_end:val_end]
+        y_test = y[val_end:]
+
+        # Fit x scaler on TRAINING data only (prevent data leakage)
+        scaler_x = data_scalers.data_preprocessing_minmax_scaler_fit(x_train)
+        scaler_x.set_output(transform="pandas")
+
+        # Transform all x datasets using the scaler fit on training data
+        x_train_scaled = data_scalers.data_preprocessing_minmax_scaler_transform(scaler_x, x_train)
+        x_val_scaled = data_scalers.data_preprocessing_minmax_scaler_transform(scaler_x, x_val)
+        x_test_scaled = data_scalers.data_preprocessing_minmax_scaler_transform(scaler_x, x_test)
+        x_Predictions = data_scalers.data_preprocessing_minmax_scaler_transform(scaler_x, x_Predictions)
 
         # Fit y scaler on TRAINING data only (prevent data leakage)
         scaler_y = data_scalers.data_preprocessing_minmax_scaler_fit(y_train)
@@ -104,12 +104,6 @@ def dataset_train_test_split(dataset_dataframe, test_size=0.10, validation_size=
         y_train = data_scalers.data_preprocessing_minmax_scaler_transform(scaler_y, y_train).flatten()
         y_val = data_scalers.data_preprocessing_minmax_scaler_transform(scaler_y, y_val).flatten()
         y_test = data_scalers.data_preprocessing_minmax_scaler_transform(scaler_y, y_test).flatten()
-
-        # Scale x values (already scaled by scaler_x, but reapply for consistency)
-        scaler_x.set_output(transform="pandas")
-        x_train_scaled = data_scalers.data_preprocessing_minmax_scaler_transform(scaler_x, x_train)
-        x_val_scaled = data_scalers.data_preprocessing_minmax_scaler_transform(scaler_x, x_val)
-        x_test_scaled = data_scalers.data_preprocessing_minmax_scaler_transform(scaler_x, x_test)
 
         return scaler_x, scaler_y, x_train_scaled, x_val_scaled, x_test_scaled, y_train, y_val, y_test, x_Predictions
 

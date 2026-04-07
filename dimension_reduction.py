@@ -188,8 +188,10 @@ def feature_selection_rf(dimensions, x_training_data, x_val_data, x_test_data, y
     print(f"Shape of prediction dataset after feature selection: {reduced_prediction_dataset.shape}")
     
     # Get feature names
+    # Must match the columns dropped by split_dataset.py (metadata + raw OHLCV + target)
     dataset_column_list = dataset_df.columns
-    drop_colum_list = ["date", "ticker", "currency", "open_Price", "high_Price", "low_Price", "close_Price", "trade_Volume", "1D"]
+    drop_colum_list = ["date", "name", "date_published", "ticker", "currency", "financial_date_used",
+                       "open_Price", "high_Price", "low_Price", "close_Price", "trade_Volume", "1D", "prediction"]
     for column in drop_colum_list:
         if column in dataset_column_list:
             dataset_column_list = dataset_column_list.drop([column])

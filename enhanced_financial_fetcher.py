@@ -63,16 +63,24 @@ class QuarterlyFinancialFetcher:
         self.use_fmp = use_fmp and bool(fmp_api_key or FMP_API_KEY)
         self.fmp_api_key = fmp_api_key or FMP_API_KEY
         
+    # Epsilon threshold for near-zero denominators
+    RATIO_EPSILON = 0.01
+    
     def _safe_divide(self, numerator, denominator):
         """
-        Safely divide two numbers or arrays, handling zero division and NaN.
+        Safely divide two numbers or arrays, handling zero division, near-zero
+        denominators, and NaN values.
         
         Works with both scalar values and numpy arrays/pandas Series.
         """
         try:
+            eps = self.RATIO_EPSILON
+            
             # Handle scalar case (most common in this module)
             if np.isscalar(numerator) and np.isscalar(denominator):
                 if denominator == 0 or pd.isna(denominator) or pd.isna(numerator):
+                    return np.nan
+                if abs(denominator) < eps:
                     return np.nan
                 return numerator / denominator
             
@@ -85,7 +93,7 @@ class QuarterlyFinancialFetcher:
             num = num.astype(float)  # broadcast_arrays returns read-only, need writable copy for result
             
             result = np.full(num.shape, np.nan, dtype=float)
-            valid_mask = (den != 0) & ~np.isnan(den) & ~np.isnan(num)
+            valid_mask = (np.abs(den) >= eps) & ~np.isnan(den) & ~np.isnan(num)
             
             if np.any(valid_mask):
                 result[valid_mask] = num[valid_mask] / den[valid_mask]
@@ -254,6 +262,56 @@ class QuarterlyFinancialFetcher:
             
         except Exception as e:
             print(f"Error fetching quarterly cash flow for {symbol}: {e}")
+            return pd.DataFrame()
+    
+    def _annual_cashflow_fallback(self, symbol: str, years: int = 10) -> pd.DataFrame:
+        """
+        Derive TTM-like cash flow from annual reports when quarterly data is unavailable.
+        
+        Annual figures are already 12-month totals, so they serve as a direct TTM proxy.
+        Each annual report date is treated as the TTM value for that date.
+        
+        Args:
+            symbol: Stock ticker symbol
+            years: Number of years of data to fetch
+            
+        Returns:
+            DataFrame with columns [date, operating_cash_flow_ttm, free_cash_flow_ttm, capex_ttm]
+        """
+        try:
+            ticker = yf.Ticker(symbol)
+            annual_cf = ticker.cashflow
+            
+            if annual_cf is None or annual_cf.empty:
+                return pd.DataFrame()
+            
+            df = annual_cf.T.copy()
+            df.index = pd.to_datetime(df.index)
+            df = df.sort_index()
+            
+            cutoff_date = datetime.datetime.now() - relativedelta(years=years)
+            df = df[df.index >= cutoff_date]
+            
+            if df.empty:
+                return pd.DataFrame()
+            
+            df = self._standardize_cash_flow_columns(df)
+            
+            result = pd.DataFrame({'date': df.index})
+            
+            col_map = {
+                'operating_cash_flow': 'operating_cash_flow_ttm',
+                'free_cash_flow': 'free_cash_flow_ttm',
+                'capex': 'capex_ttm',
+            }
+            for src, dst in col_map.items():
+                result[dst] = df[src].values if src in df.columns else np.nan
+            
+            print(f"   ↳ Using annual cash flow as TTM fallback for {symbol} ({len(result)} years)")
+            return result
+            
+        except Exception as e:
+            print(f"   ↳ Annual cash flow fallback failed for {symbol}: {e}")
             return pd.DataFrame()
     
     def _standardize_income_columns(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -444,6 +502,10 @@ class QuarterlyFinancialFetcher:
             DataFrame with calculated financial ratios
         """
         try:
+            # Guard: if income_ttm is empty or missing 'date' column, return early
+            if income_ttm.empty or 'date' not in income_ttm.columns:
+                return pd.DataFrame()
+            
             ticker = yf.Ticker(symbol)
             info = ticker.info
             shares_outstanding = info.get('sharesOutstanding', None)
@@ -571,7 +633,8 @@ class QuarterlyFinancialFetcher:
                 cf_cols = [c for c in cf_cols if c in cash_flow_q.columns]
                 result['cash_flow_ttm'] = self.calculate_ttm(cash_flow_q, cf_cols)
             else:
-                result['cash_flow_ttm'] = pd.DataFrame()
+                # Fallback: derive annual cash flow as TTM proxy when quarterly is unavailable
+                result['cash_flow_ttm'] = self._annual_cashflow_fallback(symbol, years)
             
             # Calculate financial ratios
             if not balance_sheet.empty:
@@ -803,8 +866,11 @@ def calculate_ttm_from_quarterly(quarterly_df: pd.DataFrame, ticker: str,
     for col in ttm_columns:
         if col in df.columns:
             ttm_col = col.replace('_q', '_ttm')
-            # Rolling sum of last 4 quarters
-            df[ttm_col] = df[col].rolling(window=4, min_periods=4).sum()
+            # Rolling sum of last 4 quarters, allow 3 quarters minimum
+            # and proportionally scale to a full year estimate
+            rolling_sum = df[col].rolling(window=4, min_periods=3).sum()
+            rolling_count = df[col].rolling(window=4, min_periods=3).count()
+            df[ttm_col] = rolling_sum * (4.0 / rolling_count)
     
     # Calculate growth rates
     if statement_type == 'income' and 'revenue_ttm' in df.columns:

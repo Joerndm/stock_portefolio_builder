@@ -24,6 +24,7 @@ Last Modified: 2026
 """
 import os
 import sys
+import io
 import json
 import time
 import datetime
@@ -36,6 +37,46 @@ from dateutil.relativedelta import relativedelta
 import pandas as pd
 import numpy as np
 import yfinance as yf
+
+
+class _ThreadLocalStdout:
+    """
+    Thread-local stdout wrapper for parallel processing.
+    
+    When a thread sets a buffer via set_buffer(), all print/write calls
+    from that thread go to the buffer instead of the real stdout.
+    Other threads (without a buffer) write to the real stdout normally.
+    """
+
+    def __init__(self, original):
+        self._original = original
+        self._local = threading.local()
+
+    def set_buffer(self, buffer):
+        """Set a StringIO buffer for the current thread."""
+        self._local.buffer = buffer
+
+    def clear_buffer(self):
+        """Remove the buffer for the current thread."""
+        self._local.buffer = None
+
+    def write(self, msg):
+        buf = getattr(self._local, 'buffer', None)
+        if buf is not None:
+            buf.write(msg)
+        else:
+            self._original.write(msg)
+
+    def flush(self):
+        buf = getattr(self._local, 'buffer', None)
+        if buf is not None:
+            buf.flush()
+        else:
+            self._original.flush()
+
+    # Delegate other attributes to the original stdout
+    def __getattr__(self, name):
+        return getattr(self._original, name)
 
 # Local imports
 from dynamic_index_fetcher import (
@@ -84,17 +125,17 @@ class StockDataOrchestrator:
     6. Calculating financial ratios
     7. Exporting to database
     """
-    
+
     # Default indices to fetch
     DEFAULT_INDICES = ['C25', 'SP500', 'DAX40', 'CAC40', 'FTSE100', 'AEX25', 'SMI', 'FTSEMIB', 'IBEX35', 'BEL20', 'ATX']
 
     # Error tracking for auto-blacklisting
     MAX_CONSECUTIVE_ERRORS = 3
-    
+
     # Parallel processing defaults
     DEFAULT_MAX_WORKERS = 5  # Conservative to avoid API rate limits
     MAX_WORKERS_LIMIT = 10   # Upper limit to prevent overwhelming APIs
-    
+
     def __init__(self, indices: List[str] = None, include_market_indices: bool = True):
         """
         Initialize the StockDataOrchestrator.
@@ -105,17 +146,17 @@ class StockDataOrchestrator:
         """
         self.indices = indices or self.DEFAULT_INDICES
         self.include_market_indices = include_market_indices
-        
+
         # Initialize components
         self.blacklist = get_blacklist_manager()
         self.quarterly_fetcher = QuarterlyFinancialFetcher()
         self.ttm_calculator = TTMFinancialCalculator()
         self.index_fetcher = DynamicIndexFetcher()
-        
+
         # Database connection
         self.db_con = None
         self._connect_database()
-        
+
         # Tracking
         self.processed_tickers = set()
         self.failed_tickers = []  # List of (ticker, error_message) tuples
@@ -127,14 +168,15 @@ class StockDataOrchestrator:
             'errors': 0,
             'blacklisted': 0
         }
-        
+
         # Thread-safe lock for parallel processing
         self._stats_lock = threading.Lock()
         self._processed_lock = threading.Lock()
-        
+        self._print_lock = threading.Lock()
+
         # Monthly fetch tracking
         self._monthly_fetch_cache = self._load_monthly_fetch_cache()
-    
+
     def _load_monthly_fetch_cache(self) -> Dict:
         """Load the monthly fetch cache from file."""
         if os.path.exists(MONTHLY_FETCH_CACHE_FILE):
@@ -144,7 +186,7 @@ class StockDataOrchestrator:
             except (json.JSONDecodeError, IOError):
                 return {}
         return {}
-    
+
     def _save_monthly_fetch_cache(self):
         """Save the monthly fetch cache to file."""
         try:
@@ -152,7 +194,7 @@ class StockDataOrchestrator:
                 json.dump(self._monthly_fetch_cache, f, indent=2)
         except IOError as e:
             print(f"Warning: Could not save monthly fetch cache: {e}")
-    
+
     def _should_fetch_from_wikipedia(self) -> bool:
         """
         Determine if we should fetch fresh data from Wikipedia.
@@ -164,28 +206,28 @@ class StockDataOrchestrator:
         """
         if not self._monthly_fetch_cache:
             return True
-        
+
         last_fetch_str = self._monthly_fetch_cache.get('last_wikipedia_fetch')
         if not last_fetch_str:
             return True
-        
+
         try:
             last_fetch = datetime.datetime.fromisoformat(last_fetch_str)
             now = datetime.datetime.now()
-            
+
             # Check if same month and year
             if last_fetch.year == now.year and last_fetch.month == now.month:
                 return False  # Already fetched this month
             return True  # New month, should fetch
         except (ValueError, TypeError):
             return True  # Invalid date format, fetch fresh
-    
+
     def _update_wikipedia_fetch_timestamp(self):
         """Update the timestamp of last Wikipedia fetch."""
         self._monthly_fetch_cache['last_wikipedia_fetch'] = datetime.datetime.now().isoformat()
         self._monthly_fetch_cache['indices_fetched'] = self.indices
         self._save_monthly_fetch_cache()
-    
+
     def _connect_database(self):
         """Establish database connection."""
         try:
@@ -197,7 +239,17 @@ class StockDataOrchestrator:
         except Exception as e:
             print(f"⚠️  Database connection failed: {e}")
             self.db_con = None
-    
+
+    def _reconnect_database(self):
+        """Re-establish database connection after a lost connection."""
+        print("   ↳ Reconnecting to database...")
+        try:
+            if self.db_con is not None:
+                self.db_con.dispose()
+        except Exception:
+            pass
+        self._connect_database()
+
     def get_symbols(self, use_cache: bool = True, force_wikipedia: bool = False) -> pd.DataFrame:
         """
         Fetch stock symbols from configured indices.
@@ -216,9 +268,9 @@ class StockDataOrchestrator:
         print(f"\n{'='*60}")
         print(f"Fetching symbols from indices: {', '.join(self.indices)}")
         print(f"{'='*60}")
-        
+
         should_fetch_wikipedia = force_wikipedia or self._should_fetch_from_wikipedia()
-        
+
         if should_fetch_wikipedia:
             print("\n📡 Monthly Wikipedia fetch: Fetching fresh index constituents...")
             symbols_df = dynamic_fetch_index_data(
@@ -226,7 +278,10 @@ class StockDataOrchestrator:
                 include_market_indices=self.include_market_indices,
                 use_cache=use_cache
             )
-            
+
+            # Detect tickers that disappeared from indices (possible renames/delistings)
+            self._detect_ticker_changes(symbols_df)
+
             # Update the monthly fetch timestamp
             self._update_wikipedia_fetch_timestamp()
             print(f"   ✓ Wikipedia fetch complete, cached for this month")
@@ -241,7 +296,7 @@ class StockDataOrchestrator:
                     'Exchange': 'various'
                 })
                 print(f"   ✓ Loaded {len(db_tickers)} tickers from database")
-                
+
                 # Add market indices if requested
                 if self.include_market_indices:
                     market_indices_df = pd.DataFrame({
@@ -251,7 +306,7 @@ class StockDataOrchestrator:
                     })
                     symbols_df = pd.concat([symbols_df, market_indices_df], ignore_index=True)
                     symbols_df = symbols_df.drop_duplicates(subset=['Symbol'])
-                    
+
             except Exception as e:
                 print(f"   ⚠️  Could not load from database: {e}")
                 print("   → Falling back to Wikipedia fetch...")
@@ -261,21 +316,21 @@ class StockDataOrchestrator:
                     use_cache=use_cache
                 )
                 self._update_wikipedia_fetch_timestamp()
-        
+
         # Filter blacklisted tickers
         valid_symbols, blacklisted = self.blacklist.filter_tickers(
             symbols_df['Symbol'].tolist()
         )
-        
+
         symbols_df = symbols_df[symbols_df['Symbol'].isin(valid_symbols)]
         self.processing_stats['blacklisted'] = len(blacklisted)
-        
+
         print(f"\n✓ Total symbols after filtering: {len(symbols_df)}")
         if blacklisted:
             print(f"  ↳ Filtered {len(blacklisted)} blacklisted tickers")
-        
+
         return symbols_df
-    
+
     def force_wikipedia_refresh(self):
         """
         Force a fresh Wikipedia fetch, clearing the monthly cache.
@@ -285,7 +340,7 @@ class StockDataOrchestrator:
         self._monthly_fetch_cache = {}
         self._save_monthly_fetch_cache()
         print("✓ Monthly cache cleared. Next run will fetch from Wikipedia.")
-    
+
     def get_monthly_fetch_status(self) -> Dict:
         """
         Get information about the last Wikipedia fetch.
@@ -295,10 +350,10 @@ class StockDataOrchestrator:
         """
         if not self._monthly_fetch_cache:
             return {'status': 'never_fetched', 'last_fetch': None, 'will_fetch': True}
-        
+
         last_fetch_str = self._monthly_fetch_cache.get('last_wikipedia_fetch')
         indices_fetched = self._monthly_fetch_cache.get('indices_fetched', [])
-        
+
         try:
             last_fetch = datetime.datetime.fromisoformat(last_fetch_str)
             will_fetch = self._should_fetch_from_wikipedia()
@@ -311,7 +366,7 @@ class StockDataOrchestrator:
             }
         except (ValueError, TypeError):
             return {'status': 'invalid_cache', 'last_fetch': None, 'will_fetch': True}
-    
+
     def _handle_ticker_error(self, ticker: str, error: Exception, 
                               error_type: str = "error") -> bool:
         """
@@ -329,10 +384,10 @@ class StockDataOrchestrator:
             True if ticker should be skipped (blacklisted), False to retry
         """
         error_msg = str(error)
-        
+
         # Track consecutive errors
         self.error_counts[ticker] = self.error_counts.get(ticker, 0) + 1
-        
+
         # Check for specific error types that warrant immediate blacklisting
         immediate_blacklist_patterns = [
             "invalid or not found",
@@ -342,10 +397,10 @@ class StockDataOrchestrator:
             "not available",
             "KeyError",
         ]
-        
+
         should_blacklist = False
         blacklist_reason = 'error'
-        
+
         # Check for immediate blacklist patterns
         for pattern in immediate_blacklist_patterns:
             if pattern.lower() in error_msg.lower():
@@ -357,12 +412,12 @@ class StockDataOrchestrator:
                 else:
                     blacklist_reason = 'invalid'
                 break
-        
+
         # Also blacklist if too many consecutive errors
         if self.error_counts[ticker] >= self.MAX_CONSECUTIVE_ERRORS:
             should_blacklist = True
             blacklist_reason = 'error'
-        
+
         if should_blacklist:
             self.blacklist.add_ticker(
                 ticker, 
@@ -371,7 +426,7 @@ class StockDataOrchestrator:
             )
             self.processing_stats['blacklisted'] += 1
             print(f"   ↳ Added {ticker} to blacklist (reason: {blacklist_reason})")
-            
+
             # If delisted, also remove from database to keep it clean
             if blacklist_reason == 'delisted':
                 print(f"   ↳ Cleaning up database for delisted ticker {ticker}...")
@@ -382,11 +437,11 @@ class StockDataOrchestrator:
                         print(f"   ↳ Removed {total_deleted} records from database")
                 except Exception as cleanup_error:
                     print(f"   ⚠️ Database cleanup failed: {cleanup_error}")
-            
+
             return True
-        
+
         return False
-    
+
     def _is_index_ticker(self, ticker: str, stock_info: dict = None) -> bool:
         """
         Check if a ticker is a market index.
@@ -401,17 +456,64 @@ class StockDataOrchestrator:
         # Quick check by prefix
         if ticker.startswith('^'):
             return True
-        
+
         # Check against known market indices
         if ticker in MARKET_INDICES.values():
             return True
-        
+
         # Check via stock info
         if stock_info and stock_info.get('typeDisp') == 'Index':
             return True
-        
+
         return False
-    
+
+    def _detect_ticker_changes(self, fresh_symbols_df: pd.DataFrame):
+        """
+        Compare freshly fetched Wikipedia index tickers against the database
+        to detect possible renames, delistings, or index removals.
+        
+        Logs warnings for DB tickers that are no longer in any index so the
+        user can investigate whether they were renamed (e.g. ANTM→ELV) and
+        need cleanup.
+        """
+        try:
+            db_tickers = set(db_interactions.import_ticker_list())
+            fresh_tickers = set(fresh_symbols_df['Symbol'].tolist())
+
+            # Tickers in DB but not in any index (excluding market indices and blacklisted)
+            blacklisted_set = set(t for t in db_tickers if self.blacklist.is_blacklisted(t))
+            index_set = set(MARKET_INDICES.values())
+
+            disappeared = db_tickers - fresh_tickers - blacklisted_set - index_set
+
+            if not disappeared:
+                return
+
+            # Check which of these still return valid yfinance data
+            print(f"\n🔍 Ticker change detection: {len(disappeared)} DB tickers no longer in any index")
+            stale_candidates = []
+            for ticker in sorted(disappeared):
+                try:
+                    info = yf.Ticker(ticker).info
+                    price = info.get('regularMarketPrice')
+                    if price is None:
+                        stale_candidates.append((ticker, 'no_data'))
+                    # If API returns data but with a different symbol, it was renamed
+                    elif info.get('symbol') and info['symbol'] != ticker:
+                        stale_candidates.append((ticker, f"renamed→{info['symbol']}"))
+                except Exception:
+                    stale_candidates.append((ticker, 'api_error'))
+
+            if stale_candidates:
+                print(f"   ⚠️  POTENTIAL RENAMES/DELISTINGS ({len(stale_candidates)}):")
+                for t, reason in stale_candidates:
+                    print(f"     {t}: {reason}")
+                print(f"   → Review and add to blacklist or clean up if confirmed.")
+            else:
+                print(f"   ✓ All {len(disappeared)} tickers still return valid data (just removed from index)")
+        except Exception as e:
+            print(f"   ⚠️  Ticker change detection skipped: {e}")
+
     def process_stock_info(self, ticker: str) -> Tuple[bool, Optional[pd.DataFrame]]:
         """
         Process and export basic stock information.
@@ -425,22 +527,22 @@ class StockDataOrchestrator:
         try:
             if db_interactions.does_stock_exists_stock_info_data(ticker):
                 return True, None
-            
+
             print(f"   → Fetching company info for {ticker}")
-            
+
             # Use stock_data_fetch function
             from stock_data_fetch import fetch_stock_standard_data
             stock_info_df = fetch_stock_standard_data(ticker)
-            
+
             db_interactions.export_stock_info_data(stock_info_df)
             return True, stock_info_df
-            
+
         except Exception as e:
             print(f"   ✗ Error fetching stock info: {e}")
             if self._handle_ticker_error(ticker, e, "stock_info"):
                 return False, None
             return False, None
-    
+
     def process_price_data(self, ticker: str, stock_info: dict = None,
                            force_full: bool = False) -> Tuple[bool, Optional[pd.DataFrame]]:
         """
@@ -465,58 +567,66 @@ class StockDataOrchestrator:
             calculate_bollinger_bands,
             calculate_momentum
         )
-        
+
         is_index = self._is_index_ticker(ticker, stock_info)
-        
+
         try:
             # Check if we need full fetch or just update
             if not force_full and db_interactions.does_stock_exists_stock_price_data(ticker):
                 return self._update_price_data(ticker, stock_info, is_index)
-            
+
             print(f"   → Fetching full price history for {ticker}")
-            
+
             # Fetch full historical data
             stock_price_data_df = fetch_stock_price_data(ticker)
-            
+
             if stock_price_data_df.empty:
                 print(f"   ✗ No price data available for {ticker}")
                 return False, None
-            
+
             # Calculate all indicators
             stock_price_data_df = calculate_period_returns(stock_price_data_df)
             stock_price_data_df = add_technical_indicators(stock_price_data_df)
             stock_price_data_df = add_volume_indicators(stock_price_data_df)
-            
+
             # Skip volatility for indices
             if not is_index:
                 stock_price_data_df = add_volatility_indicators(stock_price_data_df)
-            
+
             stock_price_data_df = calculate_moving_averages(stock_price_data_df)
             stock_price_data_df = calculate_standard_diviation_value(stock_price_data_df)
             stock_price_data_df = calculate_bollinger_bands(stock_price_data_df)
             stock_price_data_df = calculate_momentum(stock_price_data_df)
-            
+
             # Drop rows with NaN in critical columns
             critical_cols = ['date', 'ticker', 'close_Price', 'open_Price', 'high_Price', 'low_Price']
             stock_price_data_df = stock_price_data_df.dropna(subset=critical_cols)
-            
+
             if stock_price_data_df.empty:
                 print(f"   ✗ DataFrame empty after processing for {ticker}")
                 return False, None
-            
+
+            # Validate: reject data with impossible price spikes (>300% day-over-day)
+            # This catches yfinance thread-safety data corruption
+            stock_price_data_df = self._validate_price_continuity(
+                ticker, stock_price_data_df
+            )
+            if stock_price_data_df is None:
+                return False, None
+
             # Export to database
             db_interactions.export_stock_price_data(stock_price_data_df)
             print(f"   ✓ Exported {len(stock_price_data_df)} price records")
-            
+
             return True, stock_price_data_df
-            
+
         except Exception as e:
             print(f"   ✗ Error processing price data: {e}")
             traceback.print_exc()
             if self._handle_ticker_error(ticker, e, "price_data"):
                 return False, None
             return False, None
-    
+
     def _update_price_data(self, ticker: str, stock_info: dict,
                            is_index: bool) -> Tuple[bool, Optional[pd.DataFrame]]:
         """
@@ -542,35 +652,53 @@ class StockDataOrchestrator:
             calculate_momentum
         )
         from market_hours_utils import should_fetch_new_data
-        
+
         try:
-            # Get the last date in database
-            stock_price_data_df = db_interactions.import_stock_price_data(
-                amount=1, stock_ticker=ticker
-            )
+            # Get the last date in database (with retry for connection drops)
+            for _db_attempt in range(3):
+                try:
+                    stock_price_data_df = db_interactions.import_stock_price_data(
+                        amount=1, stock_ticker=ticker
+                    )
+                    break
+                except (KeyError, Exception) as db_err:
+                    if _db_attempt < 2 and ("Lost connection" in str(db_err) or "2013" in str(db_err)):
+                        print(f"   ↳ DB connection lost, retrying ({_db_attempt + 1}/3)...")
+                        time.sleep(2 * (_db_attempt + 1))
+                        continue
+                    raise
             last_db_date = stock_price_data_df.iloc[0]["date"]
-            
+
             # Convert to date object
             if hasattr(last_db_date, 'date'):
                 last_db_date = last_db_date.date()
             elif isinstance(last_db_date, str):
                 last_db_date = datetime.datetime.strptime(last_db_date, "%Y-%m-%d").date()
-            
+
             # Check if update needed
             should_fetch, new_date, reason = should_fetch_new_data(last_db_date, ticker)
-            
+
             if not should_fetch:
                 print(f"   ↳ {reason}")
                 return True, None
-            
+
             print(f"   → Updating price data from {new_date}")
-            
-            # Get enough historical data for indicator calculations
-            stock_price_data_df = db_interactions.import_stock_price_data(
-                amount=252 * 5 + 1, stock_ticker=ticker
-            )
+
+            # Get enough historical data for indicator calculations (with retry)
+            for _db_attempt in range(3):
+                try:
+                    stock_price_data_df = db_interactions.import_stock_price_data(
+                        amount=252 * 5 + 1, stock_ticker=ticker
+                    )
+                    break
+                except (KeyError, Exception) as db_err:
+                    if _db_attempt < 2 and ("Lost connection" in str(db_err) or "2013" in str(db_err)):
+                        print(f"   ↳ DB connection lost, retrying ({_db_attempt + 1}/3)...")
+                        time.sleep(2 * (_db_attempt + 1))
+                        continue
+                    raise
             stock_price_data_df["date"] = pd.to_datetime(stock_price_data_df["date"])
-            
+
             # Fetch new data
             new_stock_price_data_df = fetch_stock_price_data(ticker, new_date)
             
@@ -596,6 +724,10 @@ class StockDataOrchestrator:
             cols_to_drop = [c for c in indicator_cols if c in stock_price_data_df.columns]
             if cols_to_drop:
                 stock_price_data_df = stock_price_data_df.drop(columns=cols_to_drop)
+            
+            # Deduplicate columns (parallel yfinance downloads can corrupt column structure)
+            stock_price_data_df = stock_price_data_df.loc[:, ~stock_price_data_df.columns.duplicated()]
+            new_stock_price_data_df = new_stock_price_data_df.loc[:, ~new_stock_price_data_df.columns.duplicated()]
             
             # Concatenate, ensuring no duplicate columns
             combined_df = pd.concat(
@@ -634,6 +766,11 @@ class StockDataOrchestrator:
                 print(f"   ↳ No valid new data to export")
                 return True, None
             
+            # Validate: reject data with impossible price spikes (>300% day-over-day)
+            combined_df = self._validate_price_continuity(ticker, combined_df)
+            if combined_df is None:
+                return False, None
+
             # Export new data
             db_interactions.export_stock_price_data(combined_df)
             print(f"   ✓ Exported {len(combined_df)} new price records")
@@ -674,6 +811,19 @@ class StockDataOrchestrator:
                 full_stock_financial_data_df = db_interactions.import_stock_financial_data(
                     stock_ticker=ticker
                 )
+                
+                if full_stock_financial_data_df.empty:
+                    # Income statement exists but merge with balance sheet/cash flow produced no rows
+                    print(f"   ↳ Financial data merge returned empty — fetching fresh data")
+                    full_stock_financial_data_df = fetch_stock_financial_data(ticker)
+                    if full_stock_financial_data_df.empty:
+                        print(f"   ↳ No financial data available")
+                        return False, None
+                    full_stock_financial_data_df = full_stock_financial_data_df.replace([np.inf, -np.inf], np.nan)
+                    db_interactions.export_stock_financial_data(full_stock_financial_data_df)
+                    print(f"   ✓ Exported {len(full_stock_financial_data_df)} financial records (fresh)")
+                    return True, full_stock_financial_data_df
+                
                 db_date = full_stock_financial_data_df.iloc[0]["date"]
                 
                 # Fetch latest to compare
@@ -688,22 +838,14 @@ class StockDataOrchestrator:
                     
                     source_date = new_financial_data_df["date"].dt.date.iloc[-1]
                     
-                    if db_date == source_date:
+                    if db_date == source_date and len(full_stock_financial_data_df) >= len(new_financial_data_df):
                         print(f"   ↳ Financial data is up to date")
                         return True, full_stock_financial_data_df
                     
-                    # Filter to only new data
-                    new_financial_data_df = new_financial_data_df.loc[
-                        new_financial_data_df["date"].dt.date > db_date
-                    ]
-                    
-                    if new_financial_data_df.empty:
-                        print(f"   ↳ No new financial statements to export")
-                        return True, full_stock_financial_data_df
-                    
-                    # Export new data
+                    # Export ALL fetched data (export does DELETE + INSERT,
+                    # so we must pass the complete dataset, not just new rows)
                     db_interactions.export_stock_financial_data(new_financial_data_df)
-                    print(f"   ✓ Exported {len(new_financial_data_df)} new financial records")
+                    print(f"   ✓ Exported {len(new_financial_data_df)} financial records (full refresh)")
                     return True, new_financial_data_df
                     
                 except Exception as e:
@@ -895,6 +1037,7 @@ class StockDataOrchestrator:
         """
         from stock_data_fetch import combine_stock_data, calculate_ratios, drop_nan_values
         from datetime import timedelta
+        from sqlalchemy import text as sa_text
         
         try:
             # Check current ratio data status
@@ -923,15 +1066,25 @@ class StockDataOrchestrator:
                     print(f"   [SKIP] No financial statement dates found")
                     return False, None
                 
-                # Start from the earliest financial statement date
-                earliest_fin_date = all_fin_dates['date'].min()
-                start_date = pd.to_datetime(earliest_fin_date).strftime('%Y-%m-%d')
+                # Start from the earliest *price* date so ratios cover the
+                # full price history (financial data is backward-filled).
+                # Fall back to earliest financial date if price query fails.
+                try:
+                    price_start_query = sa_text("SELECT MIN(date) AS min_date FROM stock_price_data WHERE ticker = :ticker")
+                    price_start_df = pd.read_sql(sql=price_start_query, con=self.db_con, params={"ticker": ticker})
+                    earliest_price_date = price_start_df['min_date'].iloc[0]
+                    if earliest_price_date is not None:
+                        start_date = pd.to_datetime(earliest_price_date).strftime('%Y-%m-%d')
+                    else:
+                        earliest_fin_date = all_fin_dates['date'].min()
+                        start_date = pd.to_datetime(earliest_fin_date).strftime('%Y-%m-%d')
+                except Exception:
+                    earliest_fin_date = all_fin_dates['date'].min()
+                    start_date = pd.to_datetime(earliest_fin_date).strftime('%Y-%m-%d')
                 
                 # Get ALL financial data
-                query = f"""SELECT COUNT(financial_Statement_Date)
-                            FROM stock_income_stmt_data
-                            WHERE ticker = '{ticker}'"""
-                entry_amount = pd.read_sql(sql=query, con=self.db_con)
+                count_query = sa_text("SELECT COUNT(financial_Statement_Date) FROM stock_income_stmt_data WHERE ticker = :ticker")
+                entry_amount = pd.read_sql(sql=count_query, con=self.db_con, params={"ticker": ticker})
                 full_stock_financial_data_df = db_interactions.import_stock_financial_data(
                     amount=entry_amount.loc[0, entry_amount.columns[0]],
                     stock_ticker=ticker
@@ -988,10 +1141,8 @@ class StockDataOrchestrator:
                     print(f"   [DELETE] Deleted {deleted_count} ratio records from {recalculate_from}")
                     
                     # Get ALL financial data for proper forward-fill
-                    query = f"""SELECT COUNT(financial_Statement_Date)
-                                FROM stock_income_stmt_data
-                                WHERE ticker = '{ticker}'"""
-                    entry_amount = pd.read_sql(sql=query, con=self.db_con)
+                    count_query2 = sa_text("SELECT COUNT(financial_Statement_Date) FROM stock_income_stmt_data WHERE ticker = :ticker")
+                    entry_amount = pd.read_sql(sql=count_query2, con=self.db_con, params={"ticker": ticker})
                     full_stock_financial_data_df = db_interactions.import_stock_financial_data(
                         amount=entry_amount.loc[0, entry_amount.columns[0]],
                         stock_ticker=ticker
@@ -1028,11 +1179,20 @@ class StockDataOrchestrator:
                 print(f"   [SKIP] Financial data empty after dropna")
                 return False, None
             
-            # Get price data from the recalculate_from date
-            query = f"""SELECT *
-                        FROM stock_price_data
-                        WHERE ticker = '{ticker}' AND date >= '{recalculate_from}'"""
-            stock_price_data_df = pd.read_sql(sql=query, con=self.db_con)
+            # Get price data from the recalculate_from date (with retry for connection drops)
+            price_query = sa_text("SELECT * FROM stock_price_data WHERE ticker = :ticker AND date >= :from_date")
+            _price_params = {"ticker": ticker, "from_date": recalculate_from}
+            for _db_attempt in range(3):
+                try:
+                    stock_price_data_df = pd.read_sql(sql=price_query, con=self.db_con, params=_price_params)
+                    break
+                except Exception as db_err:
+                    if _db_attempt < 2 and ("Lost connection" in str(db_err) or "2013" in str(db_err)):
+                        print(f"   ↳ DB connection lost, retrying ({_db_attempt + 1}/3)...")
+                        time.sleep(2 * (_db_attempt + 1))
+                        self._reconnect_database()
+                        continue
+                    raise
             
             if stock_price_data_df.empty:
                 print(f"   [SKIP] No price data for ratio calculation from {recalculate_from}")
@@ -1067,6 +1227,15 @@ class StockDataOrchestrator:
                 stock_ratio_data_df.loc[mask, 'financial_date_used'] = fin_date
             
             stock_ratio_data_df = drop_nan_values(stock_ratio_data_df)
+            
+            # Drop rows where ALL ratio values are NaN (useless rows from failed calculations)
+            ratio_value_cols = ['p_s', 'p_e', 'p_b', 'p_fcf']
+            available_ratio_cols = [c for c in ratio_value_cols if c in stock_ratio_data_df.columns]
+            if available_ratio_cols:
+                all_nan_mask = stock_ratio_data_df[available_ratio_cols].isna().all(axis=1)
+                if all_nan_mask.any():
+                    print(f"   [CLEAN] Dropping {all_nan_mask.sum()} rows with all-NaN ratios")
+                    stock_ratio_data_df = stock_ratio_data_df[~all_nan_mask].reset_index(drop=True)
             
             if stock_ratio_data_df.empty:
                 print(f"   [SKIP] No valid ratio data to export")
@@ -1108,18 +1277,31 @@ class StockDataOrchestrator:
             self.processing_stats['skipped'] += 1
             return False
         
-        # Get stock info for type checking
-        try:
-            stock_info = yf.Ticker(ticker).info
-            if not stock_info or stock_info.get('regularMarketPrice') is None:
-                raise ValueError(f"No data available for {ticker}")
-        except Exception as e:
-            error_msg = f"Cannot access: {str(e)[:60]}"
-            print(f"   ✗ {error_msg}")
-            self._handle_ticker_error(ticker, e, "info")
-            self._add_failed_ticker(ticker, error_msg)
-            self.processing_stats['errors'] += 1
-            return False
+        # Get stock info for type checking (with retry for transient API errors)
+        stock_info = None
+        for attempt in range(3):
+            try:
+                stock_info = yf.Ticker(ticker).info
+                if stock_info and (stock_info.get('regularMarketPrice') is not None 
+                                   or stock_info.get('typeDisp') == 'Index'):
+                    break
+                stock_info = None
+            except Exception:
+                if attempt < 2:
+                    time.sleep(1 * (attempt + 1))
+        
+        if not stock_info:
+            # Check if ticker exists in our database — if so, proceed without fresh info
+            if db_interactions.does_stock_exists_stock_price_data(ticker):
+                print(f"   ↳ API unavailable, using existing DB data for {ticker}")
+                stock_info = {}  # Empty dict — will skip type checks gracefully
+            else:
+                error_msg = f"Cannot access: No data available for {ticker}"
+                print(f"   ✗ {error_msg}")
+                self._handle_ticker_error(ticker, ValueError(error_msg), "info")
+                self._add_failed_ticker(ticker, error_msg)
+                self.processing_stats['errors'] += 1
+                return False
         
         is_index = self._is_index_ticker(ticker, stock_info)
         
@@ -1143,18 +1325,21 @@ class StockDataOrchestrator:
             success, _ = self.process_financial_data(ticker, prefer_ttm)
             if success:
                 # Ratio Data
-                self.process_ratio_data(ticker, prefer_ttm)
+                ratio_success, ratio_df = self.process_ratio_data(ticker, prefer_ttm)
+                
+                # Post-fetch validation: warn about incomplete data
+                self._validate_post_fetch(ticker, ratio_df)
         else:
             print(f"   ↳ Skipping financial data for index {ticker}")
-        
+
         self.processed_tickers.add(ticker)
         self.processing_stats['success'] += 1
         return True
-    
+
     def _update_stats(self, stat_key: str, increment: int = 1):
         """
         Thread-safe update of processing statistics.
-        
+
         Args:
             stat_key: Key in processing_stats dict
             increment: Value to add (default 1)
@@ -1171,6 +1356,65 @@ class StockDataOrchestrator:
         """Thread-safe addition of failed ticker with error message."""
         with self._processed_lock:
             self.failed_tickers.append((ticker, error_msg))
+    
+    def _validate_post_fetch(self, ticker: str, ratio_df: Optional[pd.DataFrame]):
+        """
+        Post-fetch validation gate: log warnings for tickers with incomplete data.
+        
+        Checks ratio coverage after processing and emits actionable warnings so
+        issues are visible in pipeline logs rather than silently persisted.
+        """
+        if ratio_df is None or ratio_df.empty:
+            return
+        
+        ratio_cols = ['p_s', 'p_e', 'p_b', 'p_fcf']
+        existing_cols = [c for c in ratio_cols if c in ratio_df.columns]
+        if not existing_cols:
+            return
+        
+        total_rows = len(ratio_df)
+        warnings = []
+        for col in existing_cols:
+            null_pct = ratio_df[col].isna().sum() / total_rows * 100
+            if null_pct > 80:
+                warnings.append(f"{col} {null_pct:.0f}% NULL")
+        
+        if warnings:
+            print(f"   ⚠️  DATA QUALITY [{ticker}]: {', '.join(warnings)}")
+    
+    def _validate_price_continuity(self, ticker: str, price_df: pd.DataFrame,
+                                    max_pct_change: float = 3.0) -> Optional[pd.DataFrame]:
+        """
+        Validate that price data doesn't contain impossible day-over-day jumps.
+        
+        This catches yfinance thread-safety corruption where one ticker's
+        prices are returned for a different ticker's request.
+        
+        Args:
+            ticker: Stock ticker symbol
+            price_df: DataFrame with close_Price column sorted by date
+            max_pct_change: Maximum allowed fractional change (3.0 = 300%)
+            
+        Returns:
+            The price_df if valid, or None if corruption is detected
+        """
+        if price_df is None or len(price_df) < 2:
+            return price_df
+        
+        prices = price_df['close_Price'].values
+        # Calculate day-over-day pct change, skip NaN/zero
+        for i in range(1, len(prices)):
+            if prices[i - 1] > 0 and prices[i] > 0:
+                pct = abs((prices[i] - prices[i - 1]) / prices[i - 1])
+                if pct > max_pct_change:
+                    date_str = str(price_df.iloc[i].get('date', f'row {i}'))
+                    print(f"   ⚠️  PRICE SPIKE REJECTED [{ticker}]: "
+                          f"{prices[i-1]:.2f} → {prices[i]:.2f} "
+                          f"({pct*100:.0f}%) on {date_str}")
+                    print(f"   ⚠️  Skipping export — likely yfinance data corruption")
+                    return None
+        
+        return price_df
     
     def _process_ticker_worker(self, ticker: str, force_full: bool, 
                                 prefer_ttm: bool, progress_info: str) -> Tuple[str, bool, Optional[str]]:
@@ -1189,19 +1433,35 @@ class StockDataOrchestrator:
         Returns:
             Tuple of (ticker, success, error_message or None)
         """
+        # Buffer all output for this ticker, then print atomically
+        buffer = io.StringIO()
+        thread_stdout = sys.stdout
+        if isinstance(thread_stdout, _ThreadLocalStdout):
+            thread_stdout.set_buffer(buffer)
+        
         try:
-            # Print progress (thread-safe via GIL for simple prints)
             print(f"\n{progress_info} Starting: {ticker}")
             
             success = self.process_ticker(ticker, force_full, prefer_ttm)
-            return (ticker, success, None)
+            result = (ticker, success, None)
             
         except Exception as e:
             error_msg = str(e)
             print(f"\n{progress_info} ✗ {ticker}: {error_msg}")
             self._update_stats('errors')
             self._add_failed_ticker(ticker, error_msg)
-            return (ticker, False, error_msg)
+            result = (ticker, False, error_msg)
+        finally:
+            # Flush buffered output atomically
+            if isinstance(thread_stdout, _ThreadLocalStdout):
+                thread_stdout.clear_buffer()
+            output = buffer.getvalue()
+            if output:
+                with self._print_lock:
+                    sys.stdout.write(output) if not isinstance(sys.stdout, _ThreadLocalStdout) else sys.__stdout__.write(output)
+                    sys.__stdout__.flush()
+        
+        return result
     
     def run(self, tickers: List[str] = None, force_full: bool = False,
             prefer_ttm: bool = True, force_wikipedia: bool = False,
@@ -1226,7 +1486,7 @@ class StockDataOrchestrator:
         if max_workers is None:
             max_workers = self.DEFAULT_MAX_WORKERS
         max_workers = min(max(1, max_workers), self.MAX_WORKERS_LIMIT)
-        
+
         print("\n" + "=" * 60)
         print("STOCK DATA ORCHESTRATOR")
         print("=" * 60)
@@ -1235,7 +1495,7 @@ class StockDataOrchestrator:
         print(f"TTM Preferred: {prefer_ttm}")
         print(f"Parallel Mode: {'Enabled (' + str(max_workers) + ' workers)' if parallel else 'Disabled'}")
         print("=" * 60)
-        
+
         # Get tickers
         if tickers is None:
             symbols_df = self.get_symbols(force_wikipedia=force_wikipedia)
@@ -1243,7 +1503,7 @@ class StockDataOrchestrator:
         else:
             # Filter provided tickers against blacklist
             tickers = filter_blacklisted(tickers)
-        
+
         # Also add existing database tickers if doing updates
         if not force_full:
             try:
@@ -1255,17 +1515,21 @@ class StockDataOrchestrator:
                 tickers = all_tickers
             except Exception as e:
                 print(f"⚠️  Could not fetch DB tickers: {e}")
-        
+
         print(f"\nProcessing {len(tickers)} tickers...")
-        
+
         if parallel:
             self._run_parallel(tickers, force_full, prefer_ttm, max_workers)
         else:
             self._run_sequential(tickers, force_full, prefer_ttm)
+
+        # Auto-retry stale tickers after main processing
+        if not force_full:
+            self.retry_stale_tickers(stale_days_threshold=7, prefer_ttm=prefer_ttm)
         
         # Summary
         elapsed_time = time.time() - start_time
-        
+
         print("\n" + "=" * 60)
         print("PROCESSING COMPLETE")
         print("=" * 60)
@@ -1280,14 +1544,14 @@ class StockDataOrchestrator:
         print(f"  Errors:          {self.processing_stats['errors']}")
         print(f"  Blacklisted:     {self.processing_stats['blacklisted']}")
         print("=" * 60)
-        
+
         # Show blacklist summary
         bl_summary = self.blacklist.get_summary()
         if bl_summary['active'] > 0:
             print(f"\nBlacklist Summary ({bl_summary['active']} active):")
             for reason, count in bl_summary['by_reason'].items():
                 print(f"  {reason}: {count}")
-        
+
         # Show failed tickers for troubleshooting
         if self.failed_tickers:
             print(f"\n" + "-" * 60)
@@ -1299,12 +1563,12 @@ class StockDataOrchestrator:
                     error_msg = error_msg[:77] + "..."
                 print(f"  {ticker}: {error_msg}")
             print("-" * 60)
-        
+
         # Add failed tickers to stats for programmatic access
         self.processing_stats['failed_tickers'] = self.failed_tickers.copy()
-        
+
         return self.processing_stats
-    
+
     def _run_sequential(self, tickers: List[str], force_full: bool, prefer_ttm: bool):
         """
         Run pipeline sequentially (original behavior).
@@ -1327,7 +1591,7 @@ class StockDataOrchestrator:
                 traceback.print_exc()
                 self._add_failed_ticker(ticker, f"Unexpected: {error_msg[:50]}")
                 self.processing_stats['errors'] += 1
-    
+
     def _run_parallel(self, tickers: List[str], force_full: bool, 
                       prefer_ttm: bool, max_workers: int):
         """
@@ -1344,10 +1608,23 @@ class StockDataOrchestrator:
         """
         total = len(tickers)
         completed = 0
-        
+
         print(f"\n🚀 Starting parallel processing with {max_workers} workers...")
-        print(f"   (Note: Output may be interleaved due to parallel execution)\n")
-        
+
+        # Warm up yfinance session to avoid thread-safety issues during initial setup
+        try:
+            import yfinance as yf
+            _warmup = yf.download(tickers[0] if tickers else 'AAPL', 
+                                  period='1d', auto_adjust=True, progress=False)
+            print(f"   ✓ Session initialized")
+        except Exception:
+            pass  # Non-critical, deduplication handles remaining edge cases
+
+        # Install thread-local stdout wrapper for clean per-ticker output
+        original_stdout = sys.stdout
+        thread_local_stdout = _ThreadLocalStdout(original_stdout)
+        sys.stdout = thread_local_stdout
+
         try:
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 # Submit all tasks with progress info
@@ -1361,12 +1638,12 @@ class StockDataOrchestrator:
                     ): ticker 
                     for i, ticker in enumerate(tickers, 1)
                 }
-                
+
                 # Process results as they complete
                 for future in as_completed(future_to_ticker):
                     ticker = future_to_ticker[future]
                     completed += 1
-                    
+
                     try:
                         ticker_result, success, error_msg = future.result()
                         if success:
@@ -1376,10 +1653,67 @@ class StockDataOrchestrator:
                     except Exception as e:
                         print(f"   ✗ {ticker} exception: {e}")
                         self._update_stats('errors')
-                        
+
         except KeyboardInterrupt:
             print("\n\n⚠️  Interrupted by user - waiting for running tasks to complete...")
             # ThreadPoolExecutor will wait for running tasks on context exit
+        finally:
+            # Restore original stdout
+            sys.stdout = original_stdout
+
+    def retry_stale_tickers(self, stale_days_threshold: int = 7, prefer_ttm: bool = True) -> Dict:
+        """
+        Identify tickers whose latest price data is older than the threshold
+        and re-process them to pick up any data that was missed due to
+        transient API failures.
+        
+        Args:
+            stale_days_threshold: Number of days without new data to consider stale
+            prefer_ttm: Whether to prefer TTM financial data
+            
+        Returns:
+            Dictionary with retry results
+        """
+        from sqlalchemy import text as sa_text
+
+        print(f"\n{'='*60}")
+        print(f"STALE TICKER RETRY (>{stale_days_threshold} days old)")
+        print(f"{'='*60}")
+
+        try:
+            query = sa_text("""
+                SELECT ticker, MAX(date) AS last_date,
+                       DATEDIFF(CURDATE(), MAX(date)) AS days_stale
+                FROM stock_price_data
+                GROUP BY ticker
+                HAVING days_stale > :threshold
+                ORDER BY days_stale DESC
+            """)
+            stale_df = pd.read_sql(query, self.db_con, params={"threshold": stale_days_threshold})
+        except Exception as e:
+            print(f"  Error querying stale tickers: {e}")
+            return {'retried': 0}
+
+        if stale_df.empty:
+            print("  No stale tickers found.")
+            return {'retried': 0}
+
+        # Filter out blacklisted
+        stale_tickers = filter_blacklisted(stale_df['ticker'].tolist())
+        print(f"  Found {len(stale_tickers)} stale tickers to retry")
+
+        retried = 0
+        for ticker in stale_tickers:
+            days = stale_df.loc[stale_df['ticker'] == ticker, 'days_stale'].iloc[0]
+            print(f"\n  Retrying {ticker} ({days} days stale)...")
+            try:
+                self.process_ticker(ticker, force_full=False, prefer_ttm=prefer_ttm)
+                retried += 1
+            except Exception as e:
+                print(f"  Error retrying {ticker}: {e}")
+
+        print(f"\n  Retried {retried}/{len(stale_tickers)} stale tickers.")
+        return {'retried': retried, 'total_stale': len(stale_tickers)}
 
 
 def main():
@@ -1449,9 +1783,18 @@ def main():
         default=5,
         help='Number of parallel workers (default: 5, max: 10)'
     )
-    
+    parser.add_argument(
+        '--retry-stale',
+        type=int,
+        nargs='?',
+        const=7,
+        default=None,
+        metavar='DAYS',
+        help='Retry tickers with no new price data for N days (default: 7)'
+    )
+
     args = parser.parse_args()
-    
+
     # Handle info commands
     if args.show_fetch_status:
         orchestrator = StockDataOrchestrator(indices=args.indices)
@@ -1468,12 +1811,12 @@ def main():
         print("="*60)
         print("\nTo force a fresh Wikipedia fetch, use: --force-wikipedia")
         return
-    
+
     if args.list_indices:
         print("\n" + "="*60)
         print("AVAILABLE STOCK INDICES")
         print("="*60)
-        
+
         # Group indices by region
         regions = {
             'USA': ['SP500', 'NASDAQ100', 'DOW30', 'SP400', 'SP600', 'RUSSELL1000'],
@@ -1493,22 +1836,22 @@ def main():
             'Portugal': ['PSI20'],
             'Pan-European': ['STOXX50', 'STOXX600'],
         }
-        
+
         fetcher = DynamicIndexFetcher()
         available = fetcher.get_available_indices()
-        
+
         for region, codes in regions.items():
             valid_codes = [c for c in codes if c in available]
             if valid_codes:
                 print(f"\n{region}:")
                 for code in valid_codes:
                     print(f"  {code:12} {available[code]}")
-        
+
         print("\n" + "-"*60)
         print("Market Indices (for benchmarking):")
         for name, symbol in fetcher.get_market_indices().items():
             print(f"  {name:12} {symbol}")
-        
+
         print("\n" + "-"*60)
         print("Example commands:")
         print("  # Fetch all European major indices:")
@@ -1520,7 +1863,7 @@ def main():
         print("  # Fetch everything (large dataset!):")
         print("  python stock_orchestrator.py --indices SP500 NASDAQ100 DAX40 CAC40 FTSE100 C25 OMX30 SMI FTSEMIB AEX25")
         return
-    
+
     if args.show_blacklist:
         manager = get_blacklist_manager()
         summary = manager.get_summary()
@@ -1535,13 +1878,21 @@ def main():
                 details = manager.get_blacklist_details(ticker)
                 print(f"  {ticker}: {details.get('reason')} - {details.get('details', '')[:40]}")
         return
-    
+
     # Run orchestrator
     orchestrator = StockDataOrchestrator(
         indices=args.indices,
         include_market_indices=not args.no_market_indices
     )
-    
+
+    # Handle --retry-stale before normal run
+    if args.retry_stale is not None:
+        orchestrator.retry_stale_tickers(
+            stale_days_threshold=args.retry_stale,
+            prefer_ttm=not args.no_ttm
+        )
+        return
+
     if args.update_only:
         # Only process tickers already in database
         try:
@@ -1552,7 +1903,7 @@ def main():
             return
     else:
         tickers = args.ticker if args.ticker else None
-    
+
     orchestrator.run(
         tickers=tickers,
         force_full=args.force_full,
@@ -1562,7 +1913,6 @@ def main():
         max_workers=args.workers
     )
 
-
 def run_with_indices(indices=None, tickers=None, force_full=False, prefer_ttm=True, 
                      force_wikipedia=False, parallel=True, max_workers=5):
     """
@@ -1571,46 +1921,46 @@ def run_with_indices(indices=None, tickers=None, force_full=False, prefer_ttm=Tr
     Use this function when calling from another module or in debugging mode.
     
     Args:
-        indices: List of index codes (e.g., ['SP500', 'DAX40', 'CAC40'])
-                Default: ['SP500', 'DAX40', 'CAC40', 'FTSE100', 'AEX25', 'SMI', 'FTSEMIB', 'IBEX35', 'BEL20', 'ATX']
-        tickers: Optional list of specific tickers to process (overrides indices)
-        force_full: Force full data fetch (not incremental)
-        prefer_ttm: Prefer TTM financial data (default: True)
-        force_wikipedia: Force fresh Wikipedia fetch (ignore monthly cache)
-        parallel: Enable parallel processing for faster execution (default: True)
-        max_workers: Number of parallel workers (default: 5, max: 10)
-        
+        Indices: List of index codes (e.g., ['SP500', 'DAX40', 'CAC40'])
+        Default: ['SP500', 'DAX40', 'CAC40', 'FTSE100', 'AEX25', 'SMI', 'FTSEMIB', 'IBEX35', 'BEL20', 'ATX']
+        Tickers: Optional list of specific tickers to process (overrides indices)
+        Force_full: Force full data fetch (not incremental)
+        Prefer_ttm: Prefer TTM financial data (default: True)
+        Force_wikipedia: Force fresh Wikipedia fetch (ignore monthly cache)
+        Parallel: Enable parallel processing for faster execution (default: True)
+        Max_workers: Number of parallel workers (default: 5, max: 10)
+
     Returns:
         Dictionary with processing statistics
-        
+
     Example:
         # Run with default European/US indices:
         from stock_orchestrator import run_with_indices
         stats = run_with_indices()
-        
+
         # Run with specific indices:
         stats = run_with_indices(indices=['C25', 'OMX30'])
-        
+
         # Run specific tickers:
         stats = run_with_indices(tickers=['AAPL', 'MSFT', 'GOOGL'])
-        
+
         # Force Wikipedia refresh:
         stats = run_with_indices(force_wikipedia=True)
-        
+
         # Run with parallel processing (faster):
         stats = run_with_indices(parallel=True, max_workers=5)
-        
+
         # Run specific tickers in parallel:
         stats = run_with_indices(tickers=['AAPL', 'MSFT', 'GOOGL', 'AMZN'], parallel=True)
     """
     if indices is None:
         indices = ['C25', 'SP500', 'DAX40', 'CAC40', 'FTSE100', 'AEX25', 'SMI', 'FTSEMIB', 'IBEX35', 'BEL20', 'ATX']
-    
+
     orchestrator = StockDataOrchestrator(
         indices=indices,
         include_market_indices=True
     )
-    
+
     return orchestrator.run(
         tickers=tickers,
         force_full=force_full,

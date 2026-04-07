@@ -67,7 +67,11 @@ def pandas_mysql_connector(mysql_host, mysql_user, mysql_password, mysql_databas
         user = mysql_user
         password = mysql_password
         database = mysql_database_name
-        mysql_con = create_engine(f"mysql+mysqlconnector://{user}:{password}@{host}/{database}")
+        mysql_con = create_engine(
+            f"mysql+mysqlconnector://{user}:{password}@{host}/{database}",
+            pool_pre_ping=True,
+            pool_recycle=3600
+        )
         return mysql_con
 
     except mysql.Error as e:

@@ -19,6 +19,12 @@ python-dateutil==2.8.2
 #
 yfinance>=0.2.40
 pandas-ta
+lxml>=5.0.0
+#
+#GUI / VISUALIZATION
+#
+streamlit>=1.38.0
+plotly>=5.22.0
 #
 #DATABASE / AUTH / ENVIRONMENT
 #

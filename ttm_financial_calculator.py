@@ -51,6 +51,13 @@ class TTMFinancialCalculator:
     # Default margin of error for validation (15% difference acceptable)
     DEFAULT_VALIDATION_MARGIN = 0.15
     
+    # Epsilon threshold for near-zero denominators in ratio calculations
+    RATIO_EPSILON = 0.01
+    
+    # Clamp ratios to this range to prevent extreme outliers
+    RATIO_CLAMP_MIN = -1000.0
+    RATIO_CLAMP_MAX = 10000.0
+    
     def __init__(self, use_fmp: bool = False, fmp_api_key: str = ''):
         """
         Initialize the TTMFinancialCalculator.
@@ -63,16 +70,26 @@ class TTMFinancialCalculator:
         
     def _safe_divide(self, numerator, denominator):
         """
-        Safely divide two numbers or arrays, handling zero division and NaN.
+        Safely divide two numbers or arrays, handling zero division, near-zero
+        denominators, and NaN values. Results are clamped to prevent extreme outliers.
         
         Works with both scalar values and numpy arrays/pandas Series.
         """
         try:
+            eps = self.RATIO_EPSILON
+            clamp_min = self.RATIO_CLAMP_MIN
+            clamp_max = self.RATIO_CLAMP_MAX
+            
             # Handle scalar inputs directly (most common case)
             if np.isscalar(numerator) and np.isscalar(denominator):
                 if denominator == 0 or np.isnan(denominator) or np.isnan(numerator):
                     return np.nan
-                return float(numerator) / float(denominator)
+                if abs(denominator) < eps:
+                    return np.nan
+                val = float(numerator) / float(denominator)
+                if val < clamp_min or val > clamp_max:
+                    return np.nan
+                return val
             
             # Convert to numpy arrays for vectorized operations
             num = np.atleast_1d(np.asarray(numerator, dtype=float))
@@ -85,12 +102,16 @@ class TTMFinancialCalculator:
             # Create result array filled with NaN
             result = np.full(num.shape, np.nan, dtype=float)
             
-            # Find valid positions (denominator not zero, not nan, numerator not nan)
-            valid_mask = (den != 0) & ~np.isnan(den) & ~np.isnan(num)
+            # Find valid positions (denominator above epsilon, not nan, numerator not nan)
+            valid_mask = (np.abs(den) >= eps) & ~np.isnan(den) & ~np.isnan(num)
             
             # Perform division only where valid
             if np.any(valid_mask):
                 result[valid_mask] = num[valid_mask] / den[valid_mask]
+            
+            # Clamp extreme values to NaN
+            extreme_mask = (result < clamp_min) | (result > clamp_max)
+            result[extreme_mask] = np.nan
             
             # Return scalar if result is single element
             if result.size == 1:
@@ -227,8 +248,45 @@ class TTMFinancialCalculator:
                             result['income_data'] = db_income
                             
                             # Also get balance sheet and cash flow from database
-                            result['balance_sheet'] = db_interactions.import_quarterly_balancesheet_data(symbol)
-                            result['cash_flow'] = db_interactions.import_quarterly_cashflow_data(symbol)
+                            db_bs = db_interactions.import_quarterly_balancesheet_data(symbol)
+                            db_cf = db_interactions.import_quarterly_cashflow_data(symbol)
+                            result['balance_sheet'] = db_bs
+                            result['cash_flow'] = db_cf
+                            
+                            # Build ratios DataFrame from DB TTM columns so
+                            # _calculate_ratios_from_ttm can use it
+                            ratios_rows = []
+                            for _, row in db_income.iterrows():
+                                qtr_date = row.get('fiscal_quarter_end')
+                                eps_ttm = row.get('eps_diluted_ttm', np.nan)
+                                revenue_ttm = row.get('revenue_ttm', np.nan)
+                                shares = row.get('shares_diluted', np.nan)
+                                
+                                # Get book_value_per_share from balance sheet
+                                bvps = np.nan
+                                if not db_bs.empty and qtr_date is not None:
+                                    bs_match = db_bs[db_bs['fiscal_quarter_end'] == qtr_date]
+                                    if not bs_match.empty:
+                                        bvps = bs_match.iloc[0].get('book_value_per_share', np.nan)
+                                
+                                # Get fcf_per_share from cash flow
+                                fcf_ps = np.nan
+                                if not db_cf.empty and qtr_date is not None:
+                                    cf_match = db_cf[db_cf['fiscal_quarter_end'] == qtr_date]
+                                    if not cf_match.empty:
+                                        fcf_ps = cf_match.iloc[0].get('fcf_per_share_ttm', np.nan)
+                                
+                                ratios_rows.append({
+                                    'date': qtr_date,
+                                    'eps_ttm': eps_ttm,
+                                    'book_value_per_share': bvps,
+                                    'revenue_ttm': revenue_ttm,
+                                    'fcf_per_share': fcf_ps,
+                                    'shares_diluted': shares
+                                })
+                            
+                            if ratios_rows:
+                                result['ratios'] = pd.DataFrame(ratios_rows)
                             
                             print(f"✅ Using TTM data from database for {symbol} ({db_quarters} quarters available)")
                             return result
@@ -308,7 +366,7 @@ class TTMFinancialCalculator:
             result['quarters_available'] = 0
             return result
         
-        if fin_data['source'] == 'ttm':
+        if fin_data['source'] in ('ttm', 'ttm_db'):
             return self._calculate_ratios_from_ttm(symbol, price_data, fin_data)
         else:
             return self._calculate_ratios_from_annual(symbol, price_data, fin_data)
@@ -327,9 +385,24 @@ class TTMFinancialCalculator:
         result['quarters_available'] = fin_data['quarters_available']
         
         try:
-            ticker = yf.Ticker(symbol)
-            info = ticker.info
-            shares_outstanding = info.get('sharesOutstanding', None)
+            # Try to get shares_outstanding from ratios data first (avoids API call)
+            ratios_df = fin_data.get('ratios', pd.DataFrame())
+            shares_outstanding = None
+            
+            if not ratios_df.empty and 'shares_diluted' in ratios_df.columns:
+                # Use latest shares from DB quarterly data
+                valid_shares = ratios_df['shares_diluted'].dropna()
+                if not valid_shares.empty:
+                    shares_outstanding = valid_shares.iloc[0]  # Most recent (sorted DESC)
+            
+            if shares_outstanding is None or shares_outstanding == 0:
+                # Fall back to yfinance API
+                try:
+                    ticker = yf.Ticker(symbol)
+                    info = ticker.info
+                    shares_outstanding = info.get('sharesOutstanding', None)
+                except Exception as e:
+                    print(f"   ↳ Could not fetch shares outstanding from API for {symbol}: {e}")
             
             if shares_outstanding is None or shares_outstanding == 0:
                 print(f"⚠️ No shares outstanding data for {symbol}")
@@ -338,8 +411,6 @@ class TTMFinancialCalculator:
                 result['P/S'] = np.nan
                 result['P/FCF'] = np.nan
                 return result
-            
-            ratios_df = fin_data.get('ratios', pd.DataFrame())
             
             if ratios_df.empty:
                 result['P/E'] = np.nan
@@ -382,6 +453,29 @@ class TTMFinancialCalculator:
             
             # Shift ratios by 1 to avoid look-ahead bias (same as original code)
             result[['P/E', 'P/B', 'P/S', 'P/FCF']] = result[['P/E', 'P/B', 'P/S', 'P/FCF']].shift(1)
+            
+            # Per-ratio annual fallback: if a specific ratio is entirely NaN from TTM,
+            # attempt to fill it from annual data instead of leaving all NaN
+            ratios_to_check = {'P/E': 'eps', 'P/B': 'book_value_per_share',
+                               'P/S': 'revenue_per_share', 'P/FCF': 'fcf_per_share'}
+            missing_ratios = [r for r in ratios_to_check if result[r].isna().all()]
+            if missing_ratios:
+                try:
+                    annual_data = self.fetch_annual_financial_data(symbol)
+                    if not annual_data['income'].empty:
+                        annual_fin = {'income_data': annual_data['income'],
+                                      'balance_sheet': annual_data['balance_sheet'],
+                                      'cash_flow': annual_data['cash_flow'],
+                                      'quarters_available': 0}
+                        annual_result = self._calculate_ratios_from_annual(
+                            symbol, price_data, annual_fin
+                        )
+                        for ratio_name in missing_ratios:
+                            if ratio_name in annual_result.columns and not annual_result[ratio_name].isna().all():
+                                result[ratio_name] = annual_result[ratio_name]
+                                print(f"   ↳ Filled {ratio_name} from annual fallback for {symbol}")
+                except Exception as fallback_err:
+                    print(f"   ↳ Annual fallback failed for {symbol}: {fallback_err}")
             
         except Exception as e:
             print(f"Error calculating TTM ratios for {symbol}: {e}")
@@ -663,40 +757,51 @@ def calculate_ratios_ttm_with_fallback(
     fin_data = calculator.get_best_available_financials(symbol, prefer_ttm)
     
     # If we have existing financial columns in the DataFrame, use TTM-enhanced calculation
-    if fin_data['source'] == 'ttm':
-        return calculator.calculate_ratios_with_source_tracking(
-            symbol, combined_stock_data_df, prefer_ttm=True
-        )
-    else:
-        # Fall back to existing calculation logic for annual data
-        result = combined_stock_data_df.copy()
+    if fin_data['source'] in ('ttm', 'ttm_db'):
+        # Validate that TTM ratios data has usable values before proceeding
+        ratios_df = fin_data.get('ratios', pd.DataFrame())
+        ttm_usable = False
+        if not ratios_df.empty:
+            key_ttm_cols = ['eps_ttm', 'book_value_per_share', 'fcf_per_share']
+            for col in key_ttm_cols:
+                if col in ratios_df.columns and ratios_df[col].dropna().shape[0] > 0:
+                    ttm_usable = True
+                    break
         
-        try:
-            # Use existing annual-based calculation
-            result["P/S"] = result["close_Price"] / (result["revenue"] / result["average_shares"])
-            result["P/E"] = result["close_Price"] / result["eps"]
-            result["P/B"] = result["close_Price"] / result["book_Value_Per_Share"]
-            result["P/FCF"] = result["close_Price"] / result["free_Cash_Flow_Per_Share"]
-            
-            # Shift to avoid look-ahead bias
-            result[["P/S", "P/E", "P/B", "P/FCF"]] = result[["P/S", "P/E", "P/B", "P/FCF"]].shift(1)
-            
-            # Add source tracking
-            result['ratio_data_source'] = 'annual'
-            result['quarters_available'] = fin_data['quarters_available']
-            
-            print(f"📅 Ratios calculated using annual data for {symbol}")
-            
-        except KeyError as e:
-            print(f"Missing column for ratio calculation: {e}")
-            result["P/S"] = np.nan
-            result["P/E"] = np.nan
-            result["P/B"] = np.nan
-            result["P/FCF"] = np.nan
-            result['ratio_data_source'] = 'failed'
-            result['quarters_available'] = 0
-            
-        return result
+        if ttm_usable:
+            return calculator._calculate_ratios_from_ttm(symbol, combined_stock_data_df, fin_data)
+        else:
+            print(f"⚠️ TTM data exists for {symbol} but key metrics (eps, bvps, fcf) are all NULL — falling back to annual")
+    
+    # Fall back to existing calculation logic for annual data
+    result = combined_stock_data_df.copy()
+    
+    try:
+        # Use existing annual-based calculation
+        result["P/S"] = result["close_Price"] / (result["revenue"] / result["average_shares"])
+        result["P/E"] = result["close_Price"] / result["eps"]
+        result["P/B"] = result["close_Price"] / result["book_Value_Per_Share"]
+        result["P/FCF"] = result["close_Price"] / result["free_Cash_Flow_Per_Share"]
+        
+        # Shift to avoid look-ahead bias
+        result[["P/S", "P/E", "P/B", "P/FCF"]] = result[["P/S", "P/E", "P/B", "P/FCF"]].shift(1)
+        
+        # Add source tracking
+        result['ratio_data_source'] = 'annual'
+        result['quarters_available'] = fin_data['quarters_available']
+        
+        print(f"📅 Ratios calculated using annual data for {symbol}")
+        
+    except KeyError as e:
+        print(f"Missing column for ratio calculation: {e}")
+        result["P/S"] = np.nan
+        result["P/E"] = np.nan
+        result["P/B"] = np.nan
+        result["P/FCF"] = np.nan
+        result['ratio_data_source'] = 'failed'
+        result['quarters_available'] = 0
+        
+    return result
 
 
 # Convenience functions for direct use

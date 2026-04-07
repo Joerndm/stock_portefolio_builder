@@ -405,7 +405,7 @@ CREATE TABLE `stock_ratio_data` (
 -- ============================================
 -- SECTION 6: ML PREDICTIONS
 -- ============================================
--- Machine learning model predictions
+-- Machine learning model predictions (simple/legacy)
 
 CREATE TABLE `stock_prediction_data` (
   `ticker` VARCHAR(255) NOT NULL,
@@ -417,6 +417,221 @@ CREATE TABLE `stock_prediction_data` (
   PRIMARY KEY (`ticker`),
   FOREIGN KEY (`ticker`) REFERENCES `stock_info_data`(`ticker`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ML model predictions';
+
+
+-- ============================================
+-- SECTION 6B: EXTENDED ML PREDICTIONS
+-- ============================================
+-- Detailed ML predictions with confidence intervals
+
+DROP TABLE IF EXISTS `stock_prediction_extended`;
+CREATE TABLE IF NOT EXISTS `stock_prediction_extended` (
+  `prediction_id` INT AUTO_INCREMENT,
+  `prediction_date` DATE NOT NULL COMMENT 'Date when prediction was made',
+  `ticker` VARCHAR(255) NOT NULL COMMENT 'Stock ticker symbol',
+  `prediction_horizon_days` INT NOT NULL COMMENT 'Days into the future (e.g., 30, 60, 90, 252)',
+  `target_date` DATE COMMENT 'Target date for this prediction',
+  
+  -- Price predictions
+  `predicted_price` FLOAT COMMENT 'Point estimate of predicted price',
+  `current_price` FLOAT COMMENT 'Price at prediction time (for return calculation)',
+  `predicted_return` FLOAT COMMENT 'Predicted return as decimal (e.g., 0.10 for 10%)',
+  
+  -- Confidence intervals
+  `confidence_lower_5` FLOAT COMMENT '5th percentile price (95% confidence lower bound)',
+  `confidence_lower_16` FLOAT COMMENT '16th percentile price (68% confidence lower bound)',
+  `confidence_upper_84` FLOAT COMMENT '84th percentile price (68% confidence upper bound)',
+  `confidence_upper_95` FLOAT COMMENT '95th percentile price (95% confidence upper bound)',
+  
+  -- Model information
+  `model_type` VARCHAR(100) COMMENT 'Model type (e.g., ensemble, tcn, lstm, rf, xgb)',
+  `model_version` VARCHAR(50) COMMENT 'Model version or run identifier',
+  
+  -- Uncertainty metrics
+  `prediction_std` FLOAT COMMENT 'Standard deviation of prediction',
+  `mc_dropout_used` BOOLEAN DEFAULT FALSE COMMENT 'Whether Monte Carlo Dropout was used',
+  `mc_iterations` INT COMMENT 'Number of MC Dropout iterations if used',
+  
+  PRIMARY KEY (`prediction_id`),
+  UNIQUE KEY `uk_prediction` (`prediction_date`, `ticker`, `prediction_horizon_days`),
+  FOREIGN KEY (`ticker`) REFERENCES `stock_info_data`(`ticker`),
+  INDEX `idx_ticker` (`ticker`),
+  INDEX `idx_prediction_date` (`prediction_date`),
+  INDEX `idx_target_date` (`target_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Extended ML predictions with confidence intervals';
+
+
+-- ============================================
+-- SECTION 6C: MONTE CARLO SIMULATION RESULTS
+-- ============================================
+-- Monte Carlo simulation results by year (1-10 year horizons)
+
+DROP TABLE IF EXISTS `monte_carlo_results`;
+CREATE TABLE IF NOT EXISTS `monte_carlo_results` (
+  `result_id` INT AUTO_INCREMENT,
+  `simulation_date` DATE NOT NULL COMMENT 'Date when simulation was run',
+  `ticker` VARCHAR(255) NOT NULL COMMENT 'Stock ticker symbol',
+  `simulation_year` INT NOT NULL COMMENT 'Year number in simulation (1-10)',
+  `num_simulations` INT COMMENT 'Number of Monte Carlo paths simulated',
+  
+  -- Price percentiles at end of year
+  `percentile_5` FLOAT COMMENT '5th percentile price',
+  `percentile_10` FLOAT COMMENT '10th percentile price',
+  `percentile_16` FLOAT COMMENT '16th percentile price (~1 std below)',
+  `percentile_25` FLOAT COMMENT '25th percentile price',
+  `mean_price` FLOAT COMMENT 'Mean simulated price',
+  `median_price` FLOAT COMMENT 'Median (50th percentile) price',
+  `percentile_75` FLOAT COMMENT '75th percentile price',
+  `percentile_84` FLOAT COMMENT '84th percentile price (~1 std above)',
+  `percentile_90` FLOAT COMMENT '90th percentile price',
+  `percentile_95` FLOAT COMMENT '95th percentile price',
+  
+  -- Return percentiles (more useful for portfolio construction)
+  `return_percentile_5` FLOAT COMMENT '5th percentile annualized return',
+  `return_mean` FLOAT COMMENT 'Mean annualized return',
+  `return_percentile_95` FLOAT COMMENT '95th percentile annualized return',
+  
+  -- Risk metrics
+  `volatility` FLOAT COMMENT 'Simulated volatility for this year',
+  `var_95` FLOAT COMMENT 'Value at Risk (95%)',
+  `cvar_95` FLOAT COMMENT 'Conditional VaR / Expected Shortfall (95%)',
+  
+  -- Simulation parameters
+  `mu_used` FLOAT COMMENT 'Drift parameter used in simulation',
+  `sigma_used` FLOAT COMMENT 'Volatility parameter used in simulation',
+  `starting_price` FLOAT COMMENT 'Starting price for simulation',
+  
+  PRIMARY KEY (`result_id`),
+  UNIQUE KEY `uk_mc_result` (`simulation_date`, `ticker`, `simulation_year`),
+  FOREIGN KEY (`ticker`) REFERENCES `stock_info_data`(`ticker`),
+  INDEX `idx_ticker` (`ticker`),
+  INDEX `idx_simulation_date` (`simulation_date`),
+  INDEX `idx_year` (`simulation_year`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Monte Carlo simulation results by year';
+
+
+-- ============================================
+-- SECTION 6D: PORTFOLIO OPTIMIZATION
+-- ============================================
+-- Track portfolio optimization runs and holdings
+
+DROP TABLE IF EXISTS `portfolio_runs`;
+CREATE TABLE IF NOT EXISTS `portfolio_runs` (
+  `run_id` INT AUTO_INCREMENT,
+  `run_date` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT 'When the run was executed',
+  `run_name` VARCHAR(255) COMMENT 'Optional name for this portfolio run',
+  
+  -- Investor profile settings
+  `risk_level` ENUM('low', 'medium', 'high') NOT NULL DEFAULT 'medium',
+  `investment_years` INT NOT NULL DEFAULT 5,
+  `portfolio_size` INT NOT NULL DEFAULT 25,
+  
+  -- Filter criteria used
+  `industries_filter` TEXT COMMENT 'JSON array of industries (null = all)',
+  `countries_filter` TEXT COMMENT 'JSON array of countries (null = all)',
+  `excluded_tickers` TEXT COMMENT 'JSON array of excluded tickers',
+  
+  -- Portfolio results
+  `total_stocks_analyzed` INT COMMENT 'Number of stocks that were analyzed',
+  `successful_predictions` INT COMMENT 'Number of successful predictions',
+  `failed_predictions` INT COMMENT 'Number of failed predictions',
+  
+  -- Portfolio metrics
+  `expected_return` FLOAT COMMENT 'Portfolio expected annual return',
+  `expected_volatility` FLOAT COMMENT 'Portfolio expected volatility',
+  `sharpe_ratio` FLOAT COMMENT 'Portfolio Sharpe ratio',
+  
+  -- Monte Carlo results for portfolio
+  `mc_return_p5` FLOAT COMMENT 'Portfolio 5th percentile return',
+  `mc_return_mean` FLOAT COMMENT 'Portfolio mean return',
+  `mc_return_p95` FLOAT COMMENT 'Portfolio 95th percentile return',
+  
+  -- Status
+  `status` ENUM('running', 'completed', 'failed') DEFAULT 'running',
+  `error_message` TEXT COMMENT 'Error message if failed',
+  `execution_time_seconds` FLOAT COMMENT 'Total execution time',
+  
+  PRIMARY KEY (`run_id`),
+  INDEX `idx_run_date` (`run_date`),
+  INDEX `idx_risk_level` (`risk_level`),
+  INDEX `idx_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Portfolio optimization run tracking';
+
+DROP TABLE IF EXISTS `portfolio_holdings`;
+CREATE TABLE IF NOT EXISTS `portfolio_holdings` (
+  `holding_id` INT AUTO_INCREMENT,
+  `run_id` INT NOT NULL COMMENT 'Reference to portfolio_runs',
+  `ticker` VARCHAR(255) NOT NULL COMMENT 'Stock ticker',
+  
+  -- Portfolio weight and ranking  
+  `weight` FLOAT NOT NULL COMMENT 'Weight in portfolio (0-1)',
+  `rank` INT COMMENT 'Rank in portfolio (1 = highest weight)',
+  
+  -- Individual stock metrics at time of selection
+  `expected_return` FLOAT COMMENT 'Expected return for this stock',
+  `volatility` FLOAT COMMENT 'Historical volatility',
+  `sharpe_ratio` FLOAT COMMENT 'Individual Sharpe ratio',
+  
+  -- Correlation with portfolio
+  `correlation_to_portfolio` FLOAT COMMENT 'Correlation with rest of portfolio',
+  `marginal_contribution_to_risk` FLOAT COMMENT 'MCR to portfolio risk',
+  
+  -- Sector/Industry for diversification tracking
+  `industry` VARCHAR(255) COMMENT 'Industry classification',
+  `country` VARCHAR(100) COMMENT 'Country of domicile',
+  
+  PRIMARY KEY (`holding_id`),
+  UNIQUE KEY `uk_holding` (`run_id`, `ticker`),
+  FOREIGN KEY (`run_id`) REFERENCES `portfolio_runs`(`run_id`) ON DELETE CASCADE,
+  FOREIGN KEY (`ticker`) REFERENCES `stock_info_data`(`ticker`),
+  INDEX `idx_run_id` (`run_id`),
+  INDEX `idx_ticker` (`ticker`),
+  INDEX `idx_weight` (`weight`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Individual holdings in optimized portfolios';
+
+
+-- ============================================
+-- SECTION 6E: HYPERPARAMETER STORAGE
+-- ============================================
+-- Stores best hyperparameters from model tuning sessions
+-- Allows skipping tuning if recent valid HPs exist,
+-- significantly reducing tuning_dir storage usage
+
+DROP TABLE IF EXISTS `model_hyperparameters`;
+CREATE TABLE IF NOT EXISTS `model_hyperparameters` (
+  `hp_id` INT AUTO_INCREMENT,
+  `ticker` VARCHAR(255) NOT NULL COMMENT 'Stock ticker symbol',
+  `model_type` ENUM('rf', 'xgb', 'lstm', 'tcn') NOT NULL COMMENT 'Model type',
+  `tuning_date` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT 'When tuning was performed',
+  
+  -- Hyperparameters stored as JSON for flexibility
+  `hyperparameters` JSON NOT NULL COMMENT 'Best hyperparameters as JSON object',
+  
+  -- Tuning metadata
+  `num_trials` INT COMMENT 'Number of trials in tuning session',
+  `best_score` FLOAT COMMENT 'Best validation score achieved',
+  `tuning_time_seconds` FLOAT COMMENT 'Time taken for tuning',
+  
+  -- Dataset characteristics (for validation)
+  `training_samples` INT COMMENT 'Number of training samples used',
+  `num_features` INT COMMENT 'Number of features used',
+  `feature_hash` VARCHAR(64) COMMENT 'Hash of feature list for validation',
+  
+  -- Model performance metrics on validation set
+  `val_mse` FLOAT COMMENT 'Validation MSE',
+  `val_r2` FLOAT COMMENT 'Validation R2',
+  `val_mae` FLOAT COMMENT 'Validation MAE',
+  
+  -- Flags
+  `is_constrained` BOOLEAN DEFAULT FALSE COMMENT 'Whether overfitting constraints were applied',
+  `is_valid` BOOLEAN DEFAULT TRUE COMMENT 'Whether these HPs are still valid for use',
+  
+  PRIMARY KEY (`hp_id`),
+  UNIQUE KEY `uk_ticker_model` (`ticker`, `model_type`),
+  INDEX `idx_ticker` (`ticker`),
+  INDEX `idx_model_type` (`model_type`),
+  INDEX `idx_tuning_date` (`tuning_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Best hyperparameters from model tuning';
 
 
 -- ============================================
@@ -547,10 +762,22 @@ ORDER BY im.index_code, si.company_Name;
 --     NOTE: TTM calculation happens at fetch time via calculate_ratios_ttm_with_fallback()
 --
 -- ML/Analytics:
---   - stock_prediction_data: ML model predictions
+--   - stock_prediction_data: Simple ML model predictions (legacy)
+--   - stock_prediction_extended: Detailed ML predictions with confidence intervals
+--   - monte_carlo_results: Monte Carlo simulation results by year (1-10 year horizons)
+--
+-- Portfolio:
+--   - portfolio_runs: Portfolio optimization run configuration and results
+--   - portfolio_holdings: Individual stock holdings/weights for each portfolio run
+--
+-- ML Infrastructure:
+--   - model_hyperparameters: Cached best hyperparameters from tuning (reduces storage)
 --
 -- Optional Tables (not used by ML pipeline):
 --   - index_membership: Index constituent tracking (for future use)
+--
+-- Metadata Tables:
+--   - quarterly_fetch_metadata: Tracks quarterly data fetch timestamps for smart caching
 --
 -- Useful Views:
 --   - v_latest_quarterly_financials: Latest financial metrics per stock
