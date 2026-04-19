@@ -28,6 +28,7 @@ from portfolio_config import (
     InvestorProfile, RiskLevel, InvestmentStrategy,
     VOLATILITY_CAPS, DEFAULT_RISK_FREE_RATE,
     STRATEGY_LABELS, STRATEGY_DESCRIPTIONS,
+    COUNTRY_RISK_FREE_RATES, COUNTRY_NAMES, get_risk_free_rate,
 )
 
 # ─── Page header ─────────────────────────────────────────────────────
@@ -78,9 +79,32 @@ with st.sidebar:
     )
 
     st.divider()
+
+    # Country-specific risk-free rate for Sharpe ratio
+    st.subheader("Risk-Free Rate")
+    country_options = ["Default (4.0%)"] + COUNTRY_NAMES
+    selected_country_label = st.selectbox(
+        "Country",
+        options=country_options,
+        index=0,
+        help="Select a country to use its government bond yield as the risk-free rate for Sharpe ratio"
+    )
+
+    if selected_country_label == "Default (4.0%)":
+        risk_free_rate = DEFAULT_RISK_FREE_RATE
+        st.caption(f"Risk-free rate: **{risk_free_rate:.1%}** (global default)")
+    else:
+        risk_free_rate = get_risk_free_rate(selected_country_label)
+        country_info = COUNTRY_RISK_FREE_RATES[selected_country_label]
+        st.caption(
+            f"Risk-free rate: **{risk_free_rate:.1%}**  \n"
+            f"Based on: {country_info['bond']}  \n"
+            f"Currency: {country_info['currency']}"
+        )
+
+    st.divider()
     vol_cap = VOLATILITY_CAPS[risk_level]
     st.caption(f"Volatility cap: **{vol_cap:.0%}**")
-    st.caption(f"Risk-free rate: **{DEFAULT_RISK_FREE_RATE:.1%}**")
 
 # ─── Main area: Ticker selection & exclusion ─────────────────────────
 st.subheader("Stock Universe")
@@ -208,7 +232,7 @@ if st.button("🚀 Build Optimized Portfolio", type="primary", use_container_wid
                 price_df=historical_prices,
                 risk_level=profile.risk_level.value,
                 volatility_cap=vol_cap,
-                risk_free_rate=DEFAULT_RISK_FREE_RATE,
+                risk_free_rate=risk_free_rate,
                 max_weight_per_stock=max_weight,
                 min_weight_per_stock=0.0,
                 mc_simulations=50000,  # Reduced for GUI responsiveness
@@ -271,6 +295,11 @@ if st.button("🚀 Build Optimized Portfolio", type="primary", use_container_wid
             st.session_state['last_mc_result'] = mc_result
             st.session_state['last_run_id'] = run_id
             st.session_state['last_profile'] = profile
+            st.session_state['last_risk_free_rate'] = risk_free_rate
+            st.session_state['last_risk_free_country'] = (
+                selected_country_label if selected_country_label != "Default (4.0%)"
+                else None
+            )
 
             # Clear caches so Dashboard picks up new run
             gui_data.get_portfolio_runs.clear()
@@ -296,6 +325,17 @@ if 'last_ef_result' in st.session_state:
 
     st.markdown("---")
     st.subheader("Optimization Results")
+
+    # Show risk-free rate context
+    last_rfr = st.session_state.get('last_risk_free_rate', DEFAULT_RISK_FREE_RATE)
+    last_country = st.session_state.get('last_risk_free_country')
+    if last_country:
+        st.caption(
+            f"Sharpe ratio calculated with **{last_country}** risk-free rate: "
+            f"**{last_rfr:.1%}**"
+        )
+    else:
+        st.caption(f"Sharpe ratio calculated with default risk-free rate: **{last_rfr:.1%}**")
 
     # KPI row
     r_cols = st.columns(4)

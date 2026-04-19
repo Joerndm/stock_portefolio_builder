@@ -92,6 +92,8 @@ with kpi_cols[2]:
     st.metric(
         "Sharpe Ratio",
         f"{sharpe:.3f}" if pd.notna(sharpe) else "N/A",
+        help="Sharpe ratio as calculated during portfolio optimization. "
+             "Country-specific risk-free rate can be set in Portfolio Builder."
     )
 
 with kpi_cols[3]:

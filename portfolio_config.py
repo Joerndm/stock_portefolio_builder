@@ -103,6 +103,49 @@ MIN_SHARPE_RATIOS: Dict[RiskLevel, float] = {
 # Default risk-free rate (annual, e.g., treasury bond yield)
 DEFAULT_RISK_FREE_RATE: float = 0.04  # 4%
 
+# Country-specific risk-free rates (annualised government bond yields)
+# These approximate 10-year government bond yields and are used for
+# Sharpe ratio calculation.  Update periodically or fetch dynamically.
+COUNTRY_RISK_FREE_RATES: Dict[str, Dict] = {
+    "Denmark": {"rate": 0.028, "currency": "DKK", "bond": "10Y Danish Gov Bond"},
+    "United States": {"rate": 0.043, "currency": "USD", "bond": "10Y US Treasury"},
+    "Germany": {"rate": 0.025, "currency": "EUR", "bond": "10Y German Bund"},
+    "France": {"rate": 0.031, "currency": "EUR", "bond": "10Y French OAT"},
+    "United Kingdom": {"rate": 0.041, "currency": "GBP", "bond": "10Y UK Gilt"},
+    "Sweden": {"rate": 0.027, "currency": "SEK", "bond": "10Y Swedish Gov Bond"},
+    "Norway": {"rate": 0.035, "currency": "NOK", "bond": "10Y Norwegian Gov Bond"},
+    "Finland": {"rate": 0.030, "currency": "EUR", "bond": "10Y Finnish Gov Bond"},
+    "Netherlands": {"rate": 0.027, "currency": "EUR", "bond": "10Y Dutch Gov Bond"},
+    "Switzerland": {"rate": 0.008, "currency": "CHF", "bond": "10Y Swiss Conf Bond"},
+    "Spain": {"rate": 0.033, "currency": "EUR", "bond": "10Y Spanish Bono"},
+    "Italy": {"rate": 0.038, "currency": "EUR", "bond": "10Y Italian BTP"},
+    "Belgium": {"rate": 0.030, "currency": "EUR", "bond": "10Y Belgian OLO"},
+    "Austria": {"rate": 0.029, "currency": "EUR", "bond": "10Y Austrian Gov Bond"},
+    "Portugal": {"rate": 0.031, "currency": "EUR", "bond": "10Y Portuguese OT"},
+    "Japan": {"rate": 0.010, "currency": "JPY", "bond": "10Y JGB"},
+    "Australia": {"rate": 0.042, "currency": "AUD", "bond": "10Y Australian Gov Bond"},
+    "Canada": {"rate": 0.034, "currency": "CAD", "bond": "10Y Canadian Gov Bond"},
+}
+
+# Sorted country names for GUI dropdowns
+COUNTRY_NAMES: List[str] = sorted(COUNTRY_RISK_FREE_RATES.keys())
+
+
+def get_risk_free_rate(country: str = None) -> float:
+    """
+    Get the risk-free rate for a given country.
+    
+    Args:
+        country: Country name (e.g., 'Denmark', 'United States').
+                 If None or not found, returns DEFAULT_RISK_FREE_RATE.
+    
+    Returns:
+        Annual risk-free rate as a decimal (e.g., 0.028 for 2.8%)
+    """
+    if country and country in COUNTRY_RISK_FREE_RATES:
+        return COUNTRY_RISK_FREE_RATES[country]["rate"]
+    return DEFAULT_RISK_FREE_RATE
+
 
 @dataclass
 class InvestorProfile:
