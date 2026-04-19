@@ -3158,6 +3158,152 @@ def diagnose_stock_pipeline(stock_ticker):
     return report
 
 
+# ─── Beta Data Functions ─────────────────────────────────────────────
+
+def export_stock_beta_data(beta_df):
+    """
+    Export stock beta data to the stock_beta_data table.
+    
+    Uses UPSERT logic: deletes existing records for the same ticker/index/date range,
+    then inserts new data.
+    
+    Args:
+        beta_df: DataFrame with columns: date, ticker, index_code, index_symbol,
+                 beta_60d, beta_120d, beta_252d, correlation_252d, r_squared_252d
+    """
+    if beta_df.empty:
+        return
+    
+    required_cols = ['date', 'ticker', 'index_code']
+    missing = [c for c in required_cols if c not in beta_df.columns]
+    if missing:
+        raise ValueError(f"Missing required columns: {missing}")
+    
+    db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+    engine = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+    
+    # Only keep valid DB columns
+    db_columns = [
+        'date', 'ticker', 'index_code', 'index_symbol',
+        'beta_60d', 'beta_120d', 'beta_252d',
+        'correlation_252d', 'r_squared_252d'
+    ]
+    export_df = beta_df[[c for c in db_columns if c in beta_df.columns]].copy()
+    
+    # Drop rows with no beta values at all
+    beta_cols = [c for c in ['beta_60d', 'beta_120d', 'beta_252d'] if c in export_df.columns]
+    if beta_cols:
+        export_df = export_df.dropna(subset=beta_cols, how='all')
+    
+    if export_df.empty:
+        return
+    
+    try:
+        from sqlalchemy import text
+        
+        ticker = export_df['ticker'].iloc[0]
+        index_code = export_df['index_code'].iloc[0]
+        min_date = export_df['date'].min()
+        max_date = export_df['date'].max()
+        
+        with engine.begin() as connection:
+            connection.execute(text("""
+                DELETE FROM stock_beta_data
+                WHERE ticker = :ticker
+                  AND index_code = :index_code
+                  AND date >= :min_date
+                  AND date <= :max_date
+            """), {
+                'ticker': ticker,
+                'index_code': index_code,
+                'min_date': min_date,
+                'max_date': max_date,
+            })
+        
+        export_df.to_sql(name="stock_beta_data", con=engine, index=False, if_exists="append")
+        print(f"✓ Exported {len(export_df)} beta records for {ticker} vs {index_code}")
+        
+    except Exception as e:
+        print(f"❌ Error exporting beta data: {e}")
+    finally:
+        engine.dispose()
+
+
+def import_stock_beta_data(ticker: str, index_code: str = None, amount: int = 1) -> pd.DataFrame:
+    """
+    Import beta data for a stock, optionally filtered by index.
+    
+    Args:
+        ticker: Stock ticker symbol
+        index_code: Optional index code filter (e.g., 'SP500', 'C25')
+        amount: Number of most recent records to return per index
+        
+    Returns:
+        DataFrame with beta data
+    """
+    db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+    engine = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+    
+    try:
+        if index_code:
+            query = """
+                SELECT * FROM stock_beta_data
+                WHERE ticker = %s AND index_code = %s
+                ORDER BY date DESC
+                LIMIT %s
+            """
+            df = pd.read_sql(query, engine, params=(ticker, index_code, amount))
+        else:
+            # Get latest record for each index
+            query = """
+                SELECT b.* FROM stock_beta_data b
+                INNER JOIN (
+                    SELECT ticker, index_code, MAX(date) AS max_date
+                    FROM stock_beta_data
+                    WHERE ticker = %s
+                    GROUP BY ticker, index_code
+                ) latest ON b.ticker = latest.ticker
+                    AND b.index_code = latest.index_code
+                    AND b.date = latest.max_date
+                ORDER BY b.index_code
+            """
+            df = pd.read_sql(query, engine, params=(ticker,))
+        return df
+    except Exception as e:
+        print(f"Error importing beta data for {ticker}: {e}")
+        return pd.DataFrame()
+    finally:
+        engine.dispose()
+
+
+def get_available_beta_indices(ticker: str = None) -> list:
+    """
+    Get list of index codes that have beta data.
+    
+    Args:
+        ticker: Optional filter — only return indices for this ticker
+        
+    Returns:
+        List of index_code strings
+    """
+    db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+    engine = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+    
+    try:
+        if ticker:
+            query = "SELECT DISTINCT index_code FROM stock_beta_data WHERE ticker = %s ORDER BY index_code"
+            df = pd.read_sql(query, engine, params=(ticker,))
+        else:
+            query = "SELECT DISTINCT index_code FROM stock_beta_data ORDER BY index_code"
+            df = pd.read_sql(query, engine)
+        return df['index_code'].tolist() if not df.empty else []
+    except Exception as e:
+        print(f"Error getting beta indices: {e}")
+        return []
+    finally:
+        engine.dispose()
+
+
 # Run the main function
 if __name__ == "__main__":
     TICKER = "PLTR"

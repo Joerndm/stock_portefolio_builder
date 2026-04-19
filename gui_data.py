@@ -172,6 +172,20 @@ def get_quarterly_cashflow(ticker: str) -> pd.DataFrame:
     return db_interactions.import_quarterly_cashflow_data(ticker)
 
 
+# ─── Beta Data ───────────────────────────────────────────────────────
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def get_stock_beta(ticker: str, index_code: str = None) -> pd.DataFrame:
+    """Get beta data for a stock, optionally filtered by index."""
+    return db_interactions.import_stock_beta_data(ticker, index_code=index_code)
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def get_available_beta_indices(ticker: str = None) -> list:
+    """Get list of index codes that have beta data for a ticker."""
+    return db_interactions.get_available_beta_indices(ticker)
+
+
 # ─── Utility ─────────────────────────────────────────────────────────
 
 GRAPHS_DIR = os.path.join(PROJECT_ROOT, "generated_graphs")
