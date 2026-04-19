@@ -1,7 +1,8 @@
 [MASTER]
-# Modules that may not be installed in the CI environment (Python 3.10-only dependencies)
-# These are used by ml_builder.py, price_predictor.py, and model_trainer.py
-# but are not available in the Python 3.12 linting environment.
+# Modules that are not installed in the Python 3.12 CI environment.
+# These packages are only listed in requirements_PY_3_10.txt (the legacy ML/GPU stack)
+# and are used by ml_builder.py, price_predictor.py, and model_trainer.py.
+# memory_profiler and psutil are test-only dependencies not in any requirements file.
 ignored-modules=tensorflow,tensorflow.keras,tensorflow.keras.models,tensorflow.keras.layers,tensorflow.keras.optimizers,tensorflow.keras.callbacks,tensorflow.keras.regularizers,keras,keras.callbacks,keras_tuner,keras_tuner.tuners,xgboost,memory_profiler,psutil
 
 [MESSAGES CONTROL]
