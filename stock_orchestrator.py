@@ -1237,6 +1237,13 @@ class StockDataOrchestrator:
                     print(f"   [CLEAN] Dropping {all_nan_mask.sum()} rows with all-NaN ratios")
                     stock_ratio_data_df = stock_ratio_data_df[~all_nan_mask].reset_index(drop=True)
             
+            # Replace inf/-inf with NaN (e.g. P/E when EPS is zero)
+            if available_ratio_cols:
+                inf_count = np.isinf(stock_ratio_data_df[available_ratio_cols].select_dtypes(include='number')).sum().sum()
+                if inf_count > 0:
+                    print(f"   [CLEAN] Replacing {inf_count} inf values with NaN")
+                    stock_ratio_data_df[available_ratio_cols] = stock_ratio_data_df[available_ratio_cols].replace([np.inf, -np.inf], np.nan)
+
             if stock_ratio_data_df.empty:
                 print(f"   [SKIP] No valid ratio data to export")
                 return False, None

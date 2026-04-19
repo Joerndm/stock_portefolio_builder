@@ -1424,6 +1424,8 @@ def calculate_ratios(combined_stock_data_df, stock_symbol=None, prefer_ttm=True)
         combined_stock_data_df["P/B"] = combined_stock_data_df["close_Price"] / combined_stock_data_df["book_Value_Per_Share"]
         # Calculate the P/FCF ratio
         combined_stock_data_df["P/FCF"] = combined_stock_data_df["close_Price"] / combined_stock_data_df["free_Cash_Flow_Per_Share"]
+        # Replace inf/-inf from zero-division (e.g. eps=0) with NaN
+        combined_stock_data_df[["P/S", "P/E", "P/B", "P/FCF"]] = combined_stock_data_df[["P/S", "P/E", "P/B", "P/FCF"]].replace([np.inf, -np.inf], np.nan)
         print("Ratios have been calculated successfully using annual data, and added to the dataframe.")
         combined_stock_data_df[["P/S", "P/E", "P/B", "P/FCF"]] = combined_stock_data_df[["P/S", "P/E", "P/B", "P/FCF"]].shift(1)
         

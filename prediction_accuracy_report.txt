@@ -1,0 +1,7 @@
+================================================================================
+PREDICTION ACCURACY ANALYSIS REPORT
+Generated: 2026-04-19 13:20:44
+================================================================================
+
+No predictions with matching actual prices found.
+Predictions may target future dates where no actuals exist yet.

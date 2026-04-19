@@ -783,6 +783,9 @@ def calculate_ratios_ttm_with_fallback(
         result["P/B"] = result["close_Price"] / result["book_Value_Per_Share"]
         result["P/FCF"] = result["close_Price"] / result["free_Cash_Flow_Per_Share"]
         
+        # Replace inf/-inf from zero-division (e.g. eps=0) with NaN
+        result[["P/S", "P/E", "P/B", "P/FCF"]] = result[["P/S", "P/E", "P/B", "P/FCF"]].replace([np.inf, -np.inf], np.nan)
+        
         # Shift to avoid look-ahead bias
         result[["P/S", "P/E", "P/B", "P/FCF"]] = result[["P/S", "P/E", "P/B", "P/FCF"]].shift(1)
         
