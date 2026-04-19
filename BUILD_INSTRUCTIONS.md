@@ -1934,3 +1934,7 @@ Stock Portfolio Builder.  The key additions beyond the existing README are:
     Dockerfiles for CPU and GPU, and adjusted workflow instructions.
 13. **Prerequisite verification prompts** — interactive checklists that AI agents and
     developers can use to verify the environment is ready before writing code.
+14. **Beta values** — rolling beta (60d, 120d, 252d) for every stock against 19 market
+    indices, stored in `stock_beta_data`, displayed in Stock Explorer with index selector.
+15. **Country-specific Sharpe ratio** — 18 countries with government bond yields as
+    risk-free rates, selectable in Portfolio Builder sidebar, used by efficient frontier.
