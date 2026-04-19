@@ -765,6 +765,140 @@ def _safe_growth(current, previous):
     return (current / previous) - 1
 
 
+# ─── Index-to-yfinance-symbol mapping for beta calculations ─────────
+# Maps human-readable index codes (used in index_membership and UI)
+# to the yfinance ticker symbols needed to download index price data.
+INDEX_BETA_SYMBOLS = {
+    'SP500': '^GSPC',
+    'NASDAQ100': '^IXIC',
+    'DOW30': '^DJI',
+    'C25': '^OMXC25',
+    'DAX40': '^GDAXI',
+    'CAC40': '^FCHI',
+    'FTSE100': '^FTSE',
+    'AEX25': '^AEX',
+    'OMX30': '^OMX',
+    'IBEX35': '^IBEX',
+    'OMXH25': '^OMXH25',
+    'STOXX600': '^STOXX',
+    'STOXX50': '^STOXX50E',
+    'SMI': '^SSMI',
+    'FTSEMIB': 'FTSEMIB.MI',
+    'BEL20': '^BFX',
+    'ATX': '^ATX',
+    'OBX': 'OBX.OL',
+    'PSI20': '^PSI20',
+}
+
+
+def calculate_and_export_beta(stock_ticker, stock_price_df=None,
+                               index_codes=None, years=5):
+    """
+    Calculate beta for a stock against one or more market indices and export to DB.
+    
+    Fetches index price history via yfinance, calculates rolling beta using
+    technical_indicators.calculate_beta(), and exports results to stock_beta_data.
+    
+    Args:
+        stock_ticker: Stock ticker symbol
+        stock_price_df: Optional pre-loaded stock price DataFrame.
+                        If None, fetched from the database.
+        index_codes: List of index codes to compare against (e.g., ['SP500', 'C25']).
+                     If None, uses all available indices.
+        years: Years of history to use for beta calculation
+        
+    Returns:
+        Dict mapping index_code → latest beta_252d value, or empty dict on failure
+    """
+    from technical_indicators import calculate_beta
+    
+    # Load stock prices if not provided
+    if stock_price_df is None:
+        try:
+            import db_interactions
+            stock_price_df = db_interactions.import_stock_price_data(
+                amount=years * 252, stock_ticker=stock_ticker
+            )
+        except Exception as e:
+            print(f"   ⚠️  Cannot load price data for {stock_ticker}: {e}")
+            return {}
+    
+    if stock_price_df.empty or 'close_Price' not in stock_price_df.columns:
+        return {}
+    
+    # Ensure date column
+    if 'date' not in stock_price_df.columns and stock_price_df.index.name == 'date':
+        stock_price_df = stock_price_df.reset_index()
+    
+    index_codes = index_codes or list(INDEX_BETA_SYMBOLS.keys())
+    
+    results = {}
+    
+    for idx_code in index_codes:
+        yf_symbol = INDEX_BETA_SYMBOLS.get(idx_code)
+        if not yf_symbol:
+            continue
+        
+        try:
+            # Fetch index price data
+            start_date = datetime.datetime.now() - relativedelta(years=years)
+            with _yfinance_download_lock:
+                idx_data = yf.download(
+                    yf_symbol, start=start_date,
+                    auto_adjust=True, progress=False
+                )
+            
+            if idx_data.empty:
+                continue
+            
+            idx_df = pd.DataFrame(idx_data).reset_index()
+            # Handle MultiIndex columns from yfinance
+            if isinstance(idx_df.columns, pd.MultiIndex):
+                idx_df = idx_df.droplevel(1, axis=1)
+            idx_df = idx_df.loc[:, ~idx_df.columns.duplicated()]
+            idx_df = idx_df.rename(columns={'Date': 'date', 'Close': 'close_Price'})
+            
+            if 'close_Price' not in idx_df.columns or idx_df.empty:
+                continue
+            
+            # Calculate beta
+            beta_df = calculate_beta(stock_price_df, idx_df)
+            
+            # Add metadata columns
+            beta_df['ticker'] = stock_ticker
+            beta_df['index_code'] = idx_code
+            beta_df['index_symbol'] = yf_symbol
+            
+            # Drop rows where all beta values are NaN
+            beta_cols = [c for c in beta_df.columns if c.startswith('beta_')]
+            beta_df = beta_df.dropna(subset=beta_cols, how='all')
+            
+            if beta_df.empty:
+                continue
+            
+            # Export to database
+            try:
+                import db_interactions
+                db_interactions.export_stock_beta_data(beta_df)
+            except Exception as e:
+                print(f"   ⚠️  Could not export beta for {stock_ticker} vs {idx_code}: {e}")
+            
+            # Store latest beta for return
+            latest = beta_df.iloc[-1]
+            beta_252 = latest.get('beta_252d')
+            if pd.notna(beta_252):
+                results[idx_code] = float(beta_252)
+                
+        except Exception as e:
+            print(f"   ⚠️  Beta calc failed for {stock_ticker} vs {idx_code}: {e}")
+            continue
+    
+    if results:
+        print(f"   ✓ Beta calculated for {stock_ticker} vs {list(results.keys())}")
+    
+    return results
+
+
 def fetch_stock_financial_data(stock_symbol = ""):
     """
     Fetches financial stock data using yfinance and a list of stock symbols.

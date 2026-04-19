@@ -384,6 +384,85 @@ with tab_overview:
     with r2c4:
         st.metric("Book/Share", _fmt(book_val_ps))
 
+    # ── Beta (Stock vs Market Index) ──────────────────────────────
+    st.markdown("---")
+    st.subheader("Beta  (vs Market Index)")
+
+    beta_indices = gui_data.get_available_beta_indices(ticker)
+
+    if beta_indices:
+        # Let the user pick which index to compare against
+        beta_col1, beta_col2 = st.columns([1, 3])
+        with beta_col1:
+            selected_beta_index = st.selectbox(
+                "Benchmark Index",
+                options=beta_indices,
+                index=0,
+                help="Select a market index to see this stock's beta against it",
+                key="beta_index_selector",
+            )
+
+        beta_df = gui_data.get_stock_beta(ticker, index_code=selected_beta_index)
+
+        if not beta_df.empty:
+            b = beta_df.iloc[0]
+            beta_date = b.get('date', '')
+            if hasattr(beta_date, 'strftime'):
+                beta_date = beta_date.strftime('%Y-%m-%d')
+
+            with beta_col2:
+                st.caption(f"As of **{beta_date}**  •  Benchmark: **{selected_beta_index}**")
+
+            bc1, bc2, bc3, bc4, bc5 = st.columns(5)
+            with bc1:
+                st.metric("Beta (60d)", _fmt(b.get('beta_60d'), '{:.2f}'))
+            with bc2:
+                st.metric("Beta (120d)", _fmt(b.get('beta_120d'), '{:.2f}'))
+            with bc3:
+                st.metric("Beta (1Y)", _fmt(b.get('beta_252d'), '{:.2f}'))
+            with bc4:
+                st.metric("Correlation", _fmt(b.get('correlation_252d'), '{:.2f}'))
+            with bc5:
+                st.metric("R²", _fmt(b.get('r_squared_252d'), '{:.2f}'))
+
+            # Interpretive note
+            beta_val = b.get('beta_252d')
+            if beta_val is not None and not (isinstance(beta_val, float) and np.isnan(beta_val)):
+                if beta_val > 1.5:
+                    st.caption("⚡ **High beta** — significantly more volatile than the market")
+                elif beta_val > 1.0:
+                    st.caption("📈 **Above-market beta** — amplifies market movements")
+                elif beta_val > 0.5:
+                    st.caption("🛡️ **Defensive** — less volatile than the market")
+                elif beta_val > 0:
+                    st.caption("🏠 **Very defensive** — largely independent of market swings")
+                else:
+                    st.caption("🔄 **Negative beta** — tends to move opposite to the market")
+
+        # Show all-index comparison table (latest beta across all indices)
+        all_beta_df = gui_data.get_stock_beta(ticker)
+        if not all_beta_df.empty and len(all_beta_df) > 1:
+            with st.expander("Compare across all indices", expanded=False):
+                display_beta = all_beta_df[['index_code', 'beta_60d', 'beta_120d',
+                                             'beta_252d', 'correlation_252d']].copy()
+                display_beta = display_beta.rename(columns={
+                    'index_code': 'Index',
+                    'beta_60d': 'Beta (60d)',
+                    'beta_120d': 'Beta (120d)',
+                    'beta_252d': 'Beta (1Y)',
+                    'correlation_252d': 'Correlation',
+                })
+                for col in ['Beta (60d)', 'Beta (120d)', 'Beta (1Y)', 'Correlation']:
+                    display_beta[col] = display_beta[col].apply(
+                        lambda x: f"{x:.2f}" if pd.notna(x) else "–"
+                    )
+                st.dataframe(display_beta, width="stretch", hide_index=True)
+    else:
+        st.info(
+            f"No beta data for {ticker}. Beta will be calculated when the data pipeline "
+            f"runs next, or you can trigger it manually."
+        )
+
     # ── Kursmål (ML Price Targets) — Nordnet-style forecast chart ─
     st.markdown("---")
     st.subheader("Kursmål  (ML Price Targets)")
