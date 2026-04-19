@@ -26,6 +26,8 @@ can be handed to an AI agent (or a developer) as a standalone, unambiguous task.
 15. [Ridge & SVR Full Ensemble Integration](#ridge--svr-full-ensemble-integration)
 16. [Docker-Based Development](#16-docker-based-development)
 17. [Prerequisite Verification Prompts](#17-prerequisite-verification-prompts)
+18. [Beta Values — Stock vs Market Index](#18-beta-values--stock-vs-market-index)
+19. [Country-Specific Sharpe Ratio](#19-country-specific-sharpe-ratio)
 
 ---
 
@@ -168,6 +170,16 @@ ER diagram.  Below is a text representation of the schema.
                          │ (run_id, ticker)  │
                          │  weight, return   │
                          └──────────────────┘
+
+  ┌─────────────────────┐
+  │ stock_beta_data      │  ← Rolling beta vs market indices
+  │ (date, ticker,       │
+  │  index_code) PK      │
+  │  index_symbol        │
+  │  beta_60d/120d/252d  │
+  │  correlation_252d    │
+  │  r_squared_252d      │
+  └─────────────────────┘
 ```
 
 ### `model_hyperparameters` — model_type ENUM
@@ -196,6 +208,7 @@ ALTER TABLE model_hyperparameters
 | `database_files/migrate_add_prediction_mc_tables.sql` | Prediction + Monte Carlo tables |
 | `database_files/migrate_add_financial_date_used.sql` | Financial date metadata |
 | `database_files/migrate_add_quarterly_fetch_metadata.sql` | Quarterly fetch tracking |
+| `database_files/migrate_add_stock_beta.sql` | Beta data table (stock vs index) |
 
 ---
 
@@ -609,17 +622,31 @@ ALTER TABLE model_hyperparameters
 - Calculate all technical indicators (see `technical_indicators.py`).
 - Calculate all return periods (1D through 5Y).
 - Calculate valuation ratios (P/E, P/S, P/B, P/FCF) using TTM when available.
+- **Beta calculation pipeline** via `calculate_and_export_beta()`:
+  - `INDEX_BETA_SYMBOLS` maps 19 index codes to yfinance symbols (e.g., `SP500` → `^GSPC`).
+  - For each stock, downloads index price history, computes rolling beta using
+    `technical_indicators.calculate_beta()`, and exports to `stock_beta_data` table.
+  - Supports optional `index_codes` filter and custom `years` lookback.
 - Export to database via `db_interactions`.
 - **Test:** Mock `yfinance.Ticker`, verify DataFrame schema matches §5.1.
+  Verify `calculate_and_export_beta()` returns `{index_code: beta_252d}` dict.
 
 ### Step 1.7: Technical Indicators (`technical_indicators.py`)
 
 - Calculate: RSI-14, ATR-14, MACD (12/26/9), Bollinger Bands (5/20/40/120/200 day),
   SMA/EMA (5/20/40/120/200), VWAP, OBV, volume SMA/EMA, volume ratio,
   volatility (5d/20d/60d), momentum.
-- Input: DataFrame with OHLCV columns.
-- Output: Same DataFrame with indicator columns appended.
+- **Beta calculation** via `calculate_beta(stock_df, index_df)`:
+  - Rolling beta over configurable windows (default: 60d, 120d, 252d).
+  - Formula: `Beta = Cov(stock_returns, index_returns) / Var(index_returns)`.
+  - Also outputs rolling correlation (252d) and R-squared (252d).
+  - Inner-joins stock and index DataFrames on `date`, computes daily returns, then applies
+    rolling window statistics.
+- Input: DataFrame with OHLCV columns (for indicators) or date + close_Price (for beta).
+- Output: Same DataFrame with indicator columns appended (for indicators), or new DataFrame
+  with date, beta_60d, beta_120d, beta_252d, correlation_252d, r_squared_252d (for beta).
 - **Test:** Verify RSI range [0, 100], MACD sign changes.
+  Verify beta ≈ 1.0 when stock = index. Verify ValueError on empty inputs.
 
 ### Step 1.8: Enhanced Financial Fetcher (`enhanced_financial_fetcher.py`)
 
@@ -899,15 +926,24 @@ This function orchestrates training of **all five models** and computes ensemble
 - `InvestmentStrategy` enum: BALANCED, DIVIDEND, GROWTH, VALUE, GARP, QUALITY, MOMENTUM.
 - `InvestorProfile` dataclass with validation.
 - Volatility caps per risk level (15% / 25% / 40%).
-- **Test:** Verify validation rejects out-of-range values.
+- **Country-specific risk-free rates** via `COUNTRY_RISK_FREE_RATES`:
+  - 18 countries with approximate 10Y government bond yields (e.g., Denmark 2.8%, US 4.3%, Switzerland 0.8%).
+  - Each entry: `{"rate": float, "currency": str, "bond": str}`.
+  - `COUNTRY_NAMES`: sorted list for GUI dropdowns.
+  - `get_risk_free_rate(country)`: returns country rate or `DEFAULT_RISK_FREE_RATE` (4%) as fallback.
+- **Test:** Verify validation rejects out-of-range values. Verify `get_risk_free_rate("Denmark")` returns 0.028.
+  Verify `get_risk_free_rate(None)` returns `DEFAULT_RISK_FREE_RATE`.
 
 ### Step 3.2: Efficient Frontier (`efficient_frontier.py`)
 
 - Monte Carlo simulation + scipy `minimize(method='SLSQP')`.
 - Find: minimum variance portfolio, maximum Sharpe portfolio, risk-constrained max return.
 - Input: covariance matrix + expected returns from historical data.
+- Accepts `risk_free_rate` parameter — now passed through from the Portfolio Builder
+  with the user's selected country-specific rate (see §19).
 - Output: optimal weights, return, volatility, Sharpe ratio.
 - **Test:** Verify weights sum to 1.0, verify Sharpe formula.
+  Verify that changing `risk_free_rate` changes the resulting Sharpe ratio.
 
 ### Step 3.3: Portfolio Builder (`portfolio_builder.py`)
 
@@ -936,10 +972,17 @@ This function orchestrates training of **all five models** and computes ensemble
 - Market overview metrics.
 - Portfolio summary if one exists.
 - Recent pipeline run status.
+- Sharpe Ratio metric includes help tooltip explaining that country-specific risk-free
+  rates can be configured in Portfolio Builder.
 
 ### Step 4.3: Portfolio Builder (`pages/2_Portfolio_Builder.py`)
 
 - Interactive investor profile controls (risk level, strategy, horizon).
+- **Country selector** in sidebar for risk-free rate:
+  - Dropdown with 18 countries + "Default (4.0%)".
+  - Shows bond name, currency, and rate for the selected country.
+  - Selected rate is passed to `efficient_frontier.optimize_portfolio()`.
+  - Results display shows which country/rate was used for Sharpe calculation.
 - Trigger portfolio construction.
 - Display optimized weights, expected return, Sharpe ratio.
 
@@ -947,6 +990,11 @@ This function orchestrates training of **all five models** and computes ensemble
 
 - Per-stock deep dive: price chart, predictions, model performance.
 - Display individual model contributions to ensemble.
+- **Beta section** (vs Market Index):
+  - Dropdown to select benchmark index (dynamically populated from `stock_beta_data`).
+  - Displays: Beta (60d), Beta (120d), Beta (1Y / 252d), Correlation, R².
+  - Interpretive note (high beta / defensive / negative beta, etc.).
+  - Expandable "Compare across all indices" table showing beta for every available index.
 
 ### Step 4.5: Data Quality (`pages/4_Data_Quality.py`)
 
@@ -977,6 +1025,9 @@ This function orchestrates training of **all five models** and computes ensemble
 
 - Data preparation functions specific to Streamlit pages.
 - Query helpers for GUI-specific views.
+- **Beta data helpers** (cached with `st.cache_data`):
+  - `get_stock_beta(ticker, index_code=None)` — returns latest beta for one or all indices.
+  - `get_available_beta_indices(ticker=None)` — returns list of index codes with beta data.
 
 ### Step 5.5: Validate Stock Data (`validate_stock_data.py`)
 
@@ -1848,8 +1899,8 @@ mysql -u ${DB_USER:-stock_user} -p${DB_PASS} -h ${DB_HOST:-localhost} \
     ${DB_NAME:-stock_portefolio_builder} -e "
 SELECT
   CASE
-    WHEN COUNT(*) = 16 THEN '✅ All 16 expected tables found'
-    ELSE CONCAT('❌ Only ', COUNT(*), ' tables found — expected 16')
+    WHEN COUNT(*) = 17 THEN '✅ All 17 expected tables found'
+    ELSE CONCAT('❌ Only ', COUNT(*), ' tables found — expected 17')
   END AS status
 FROM information_schema.TABLES
 WHERE TABLE_SCHEMA = '${DB_NAME:-stock_portefolio_builder}';
@@ -1908,6 +1959,230 @@ curl -s http://localhost:8501 | head -5 && echo "✅ Streamlit is running" || ec
 | **Switching from native to Docker** | §17.1 + §17.2 + update `dev.env` |
 | **CI/CD pipeline setup** | §17.1 + §17.4 + §17.5 (automated, non-interactive) |
 | **After upgrading Python/TF version** | §17.4 + §17.3 |
+
+---
+
+## 18. Beta Values — Stock vs Market Index
+
+### 18.1 Overview
+
+Beta measures a stock's sensitivity to market movements relative to a benchmark index.
+A beta of 1.0 means the stock moves with the market; > 1 means more volatile; < 1 means
+less volatile; < 0 means inverse correlation.
+
+The system calculates **rolling beta** for each stock against **19 market indices** over
+three time windows (60-day, 120-day, 252-day) plus correlation and R-squared statistics.
+
+### 18.2 Supported Indices
+
+| Index Code | yfinance Symbol | Market |
+|---|---|---|
+| `SP500` | `^GSPC` | S&P 500 (US) |
+| `NASDAQ100` | `^NDX` | NASDAQ-100 (US) |
+| `DOW30` | `^DJI` | Dow Jones (US) |
+| `C25` | `^OMXC25` | OMX Copenhagen 25 (DK) |
+| `DAX40` | `^GDAXI` | DAX 40 (DE) |
+| `CAC40` | `^FCHI` | CAC 40 (FR) |
+| `FTSE100` | `^FTSE` | FTSE 100 (UK) |
+| `AEX25` | `^AEX` | AEX 25 (NL) |
+| `OMX30` | `^OMX` | OMX Stockholm 30 (SE) |
+| `IBEX35` | `^IBEX` | IBEX 35 (ES) |
+| `OMXH25` | `^OMXH25` | OMX Helsinki 25 (FI) |
+| `STOXX600` | `^STOXX` | STOXX Europe 600 |
+| `STOXX50` | `^STOXX50E` | Euro Stoxx 50 |
+| `SMI` | `^SSMI` | Swiss Market Index (CH) |
+| `FTSEMIB` | `FTSEMIB.MI` | FTSE MIB (IT) |
+| `BEL20` | `^BFX` | BEL 20 (BE) |
+| `ATX` | `^ATX` | Austrian Traded Index (AT) |
+| `OBX` | `OBX.OL` | OBX Index (NO) |
+| `PSI20` | `^PSI20` | PSI-20 (PT) |
+
+The mapping is stored in `stock_data_fetch.INDEX_BETA_SYMBOLS`.
+
+### 18.3 Database Schema — `stock_beta_data`
+
+```sql
+CREATE TABLE IF NOT EXISTS stock_beta_data (
+  date          DATE NOT NULL,
+  ticker        VARCHAR(255) NOT NULL,
+  index_code    VARCHAR(50) NOT NULL,       -- e.g., 'SP500', 'C25'
+  index_symbol  VARCHAR(50),                -- e.g., '^GSPC'
+  beta_60d      FLOAT,                      -- 60-day rolling beta
+  beta_120d     FLOAT,                      -- 120-day rolling beta
+  beta_252d     FLOAT,                      -- 252-day rolling beta (≈1 year)
+  correlation_252d FLOAT,                   -- 252-day correlation with index
+  r_squared_252d   FLOAT,                   -- R² (variance explained)
+  last_updated  TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (date, ticker, index_code),
+  FOREIGN KEY (ticker) REFERENCES stock_info_data(ticker) ON DELETE CASCADE
+);
+```
+
+Migration file: `database_files/migrate_add_stock_beta.sql`.
+
+### 18.4 Calculation Pipeline
+
+**`technical_indicators.calculate_beta(stock_df, index_df)`**
+
+1. Inner-joins stock and index DataFrames on `date` column.
+2. Computes daily percentage returns for both.
+3. For each window (60, 120, 252 trading days):
+   - `beta = Cov(stock_return, index_return) / Var(index_return)`.
+4. Computes 252-day rolling correlation and R-squared.
+5. Returns DataFrame: `date, beta_60d, beta_120d, beta_252d, correlation_252d, r_squared_252d`.
+
+**`stock_data_fetch.calculate_and_export_beta(stock_ticker, ...)`**
+
+1. Loads stock price data (from DB or passed DataFrame).
+2. For each index in `INDEX_BETA_SYMBOLS` (or specified subset):
+   a. Downloads index price history via `yf.download()`.
+   b. Calls `calculate_beta()`.
+   c. Adds metadata: `ticker`, `index_code`, `index_symbol`.
+   d. Exports to DB via `db_interactions.export_stock_beta_data()`.
+3. Returns `{index_code: latest_beta_252d}` dict.
+
+### 18.5 Database Functions (`db_interactions.py`)
+
+| Function | Purpose |
+|---|---|
+| `export_stock_beta_data(beta_df)` | UPSERT beta records (delete range + insert). |
+| `import_stock_beta_data(ticker, index_code=None, amount=1)` | Get latest beta data. If `index_code` is None, returns latest for all indices. |
+| `get_available_beta_indices(ticker=None)` | List distinct index codes that have beta data. |
+
+### 18.6 GUI Integration
+
+**Stock Explorer** (`pages/3_Stock_Explorer.py`):
+- **Beta section** in the Oversigt (Overview) tab, after the Nøgletal (Key Ratios) section.
+- Benchmark index dropdown — populated from `gui_data.get_available_beta_indices(ticker)`.
+- Displays 5 metrics: Beta (60d), Beta (120d), Beta (1Y), Correlation, R².
+- Interpretive label:
+  - β > 1.5 → ⚡ **High beta**
+  - β > 1.0 → 📈 **Above-market beta**
+  - β > 0.5 → 🛡️ **Defensive**
+  - β > 0   → 🏠 **Very defensive**
+  - β ≤ 0   → 🔄 **Negative beta**
+- Expandable "Compare across all indices" table.
+
+**GUI data layer** (`gui_data.py`):
+- `get_stock_beta(ticker, index_code=None)` — cached with `st.cache_data`.
+- `get_available_beta_indices(ticker=None)` — cached with `st.cache_data`.
+
+### 18.7 Use in ML Pipeline (Future)
+
+Beta values can be incorporated as features in the ML prediction pipeline by:
+1. Joining `stock_beta_data.beta_252d` onto the stock price dataset used for training.
+2. Adding `beta_252d` (for a chosen reference index) as a feature column in
+   `split_dataset.dataset_train_test_split()`.
+3. The `dimension_reduction.feature_selection_rf()` step will automatically evaluate
+   whether beta has predictive power for each stock.
+
+---
+
+## 19. Country-Specific Sharpe Ratio
+
+### 19.1 Overview
+
+The Sharpe ratio measures risk-adjusted return:
+
+```
+Sharpe = (Portfolio Return − Risk-Free Rate) / Portfolio Volatility
+```
+
+Previously the system used a hardcoded 4% risk-free rate (`DEFAULT_RISK_FREE_RATE`).
+Now users can select a **country** from the Portfolio Builder interface, and the system
+uses that country's approximate 10-year government bond yield as the risk-free rate.
+
+### 19.2 Supported Countries
+
+| Country | Rate | Currency | Bond |
+|---|---|---|---|
+| Australia | 4.2% | AUD | 10Y Australian Gov Bond |
+| Austria | 2.9% | EUR | 10Y Austrian Gov Bond |
+| Belgium | 3.0% | EUR | 10Y Belgian OLO |
+| Canada | 3.4% | CAD | 10Y Canadian Gov Bond |
+| Denmark | 2.8% | DKK | 10Y Danish Gov Bond |
+| Finland | 3.0% | EUR | 10Y Finnish Gov Bond |
+| France | 3.1% | EUR | 10Y French OAT |
+| Germany | 2.5% | EUR | 10Y German Bund |
+| Italy | 3.8% | EUR | 10Y Italian BTP |
+| Japan | 1.0% | JPY | 10Y JGB |
+| Netherlands | 2.7% | EUR | 10Y Dutch Gov Bond |
+| Norway | 3.5% | NOK | 10Y Norwegian Gov Bond |
+| Portugal | 3.1% | EUR | 10Y Portuguese OT |
+| Spain | 3.3% | EUR | 10Y Spanish Bono |
+| Sweden | 2.7% | SEK | 10Y Swedish Gov Bond |
+| Switzerland | 0.8% | CHF | 10Y Swiss Confed Bond |
+| United Kingdom | 4.1% | GBP | 10Y UK Gilt |
+| United States | 4.3% | USD | 10Y US Treasury |
+
+Stored in `portfolio_config.COUNTRY_RISK_FREE_RATES`.
+
+### 19.3 Configuration (`portfolio_config.py`)
+
+```python
+# Dict structure
+COUNTRY_RISK_FREE_RATES: Dict[str, Dict] = {
+    "Denmark": {"rate": 0.028, "currency": "DKK", "bond": "10Y Danish Gov Bond"},
+    # ... 17 more countries
+}
+
+# Sorted country names for dropdowns
+COUNTRY_NAMES: List[str] = sorted(COUNTRY_RISK_FREE_RATES.keys())
+
+# Lookup function with fallback
+def get_risk_free_rate(country: str = None) -> float:
+    """Returns country rate or DEFAULT_RISK_FREE_RATE (4%) if country is None/unknown."""
+```
+
+### 19.4 Data Flow
+
+```
+Portfolio Builder sidebar
+  ├─ Country dropdown  →  get_risk_free_rate(country)  →  risk_free_rate
+  │
+  └─ Build button clicked
+       └─ efficient_frontier.optimize_portfolio(
+              price_df=...,
+              risk_free_rate=risk_free_rate,  ← country-specific
+              ...
+          )
+          ├─ find_optimal_weights(..., risk_free_rate)
+          │    └─ _neg_sharpe(weights, mean_returns, cov_matrix, risk_free_rate)
+          │         └─ Sharpe = (Return − risk_free_rate) / Volatility
+          └─ returns {sharpe_ratio, return, volatility, weights}
+               └─ Stored in session state + DB (portfolio_runs table)
+```
+
+### 19.5 GUI Integration
+
+**Portfolio Builder** (`pages/2_Portfolio_Builder.py`):
+- Sidebar → "Risk-Free Rate" section with country dropdown.
+- Options: "Default (4.0%)" + 18 country names (sorted alphabetically).
+- Shows bond name, currency, and rate when a country is selected.
+- The selected `risk_free_rate` is passed to `efficient_frontier.optimize_portfolio()`.
+- Session state stores `last_risk_free_rate` and `last_risk_free_country` for display.
+- Results section shows: "Sharpe ratio calculated with **{country}** risk-free rate: **{rate}**".
+
+**Dashboard** (`pages/1_Dashboard.py`):
+- Sharpe Ratio KPI metric includes a `help` tooltip: "Country-specific risk-free rate
+  can be set in Portfolio Builder."
+
+### 19.6 Maintaining Risk-Free Rates
+
+The rates in `COUNTRY_RISK_FREE_RATES` are approximate static values. To keep them current:
+
+1. **Manual update**: Edit `portfolio_config.py` periodically (e.g., quarterly).
+2. **Dynamic fetch (future)**: Could be extended to fetch live yields from an API
+   (e.g., FRED for US Treasury, ECB for Euro area bonds).
+
+### 19.7 Testing
+
+- Verify `get_risk_free_rate("Denmark")` returns `0.028`.
+- Verify `get_risk_free_rate(None)` returns `DEFAULT_RISK_FREE_RATE` (0.04).
+- Verify `get_risk_free_rate("Nonexistent")` returns `DEFAULT_RISK_FREE_RATE`.
+- Verify `COUNTRY_NAMES` is sorted.
+- Verify that changing the risk-free rate passed to `optimize_portfolio()` changes the
+  resulting `sharpe_ratio` in the output dict.
 
 ---
 
