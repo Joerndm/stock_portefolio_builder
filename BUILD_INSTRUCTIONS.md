@@ -1,0 +1,2215 @@
+# Stock Portfolio Builder — AI Build Instructions
+
+A complete, structured instruction set for recreating or extending the Stock Portfolio Builder
+system using AI-assisted development.  These instructions are designed so that each section
+can be handed to an AI agent (or a developer) as a standalone, unambiguous task.
+
+---
+
+## Table of Contents
+
+0. [Prerequisites](#0-prerequisites)
+1. [Architecture Overview](#1-architecture-overview)
+2. [Data Model / ER Diagram](#2-data-model--er-diagram)
+3. [Configuration Management](#3-configuration-management)
+4. [Error Handling & Logging Standards](#4-error-handling--logging-standards)
+5. [Data Validation Contracts](#5-data-validation-contracts)
+6. [Idempotency Requirements](#6-idempotency-requirements)
+7. [Testing Standards](#7-testing-standards)
+8. [Phase 0 — Environment & Infrastructure Setup](#phase-0--environment--infrastructure-setup)
+9. [Phase 1 — Data Pipeline (Data Ingestion)](#phase-1--data-pipeline-data-ingestion)
+10. [Phase 2 — Machine Learning Pipeline](#phase-2--machine-learning-pipeline)
+11. [Phase 3 — Portfolio Construction](#phase-3--portfolio-construction)
+12. [Phase 4 — Streamlit GUI](#phase-4--streamlit-gui)
+13. [Phase 5 — Supporting Utilities](#phase-5--supporting-utilities)
+14. [ML Module Splitting Guide](#ml-module-splitting-guide)
+15. [Ridge & SVR Full Ensemble Integration](#ridge--svr-full-ensemble-integration)
+16. [Docker-Based Development](#16-docker-based-development)
+17. [Prerequisite Verification Prompts](#17-prerequisite-verification-prompts)
+18. [Beta Values — Stock vs Market Index](#18-beta-values--stock-vs-market-index)
+19. [Country-Specific Sharpe Ratio](#19-country-specific-sharpe-ratio)
+
+---
+
+## 0. Prerequisites
+
+Before any code is written, the following **non-Python** tools and infrastructure must be
+available on the target machine.
+
+| Requirement | Version / Notes |
+|---|---|
+| **Git** | 2.30+ recommended |
+| **conda** or **mamba** | Package / environment manager (Miniconda or Mambaforge) |
+| **MySQL Server** | 8.0+ — The application requires a running MySQL instance |
+| **MySQL client tools** | `mysql` CLI for executing DDL scripts |
+| **NVIDIA GPU Driver** | 470+ *(only if using TensorFlow GPU on the Py 3.10 environment)* |
+| **NVIDIA CUDA Toolkit** | **11.2** *(only for TensorFlow 2.10 GPU)* |
+| **NVIDIA cuDNN** | **8.1** *(only for TensorFlow 2.10 GPU)* |
+| **Python 3.12** | Primary environment (data pipeline, Streamlit, scikit-learn models) |
+| **Python 3.10** | Legacy environment (TensorFlow 2.10 GPU — LSTM/TCN training only) |
+
+> **Windows users:** TensorFlow 2.10 is the *last* version with native Windows GPU support.
+> For TensorFlow ≥ 2.11 GPU on Windows you must use WSL2.
+
+### Quick validation
+
+```bash
+# Verify conda
+conda --version
+
+# Verify MySQL
+mysql --version
+
+# Verify GPU (optional)
+nvidia-smi          # Shows GPU + driver
+nvcc --version      # Shows CUDA toolkit
+```
+
+---
+
+## 1. Architecture Overview
+
+The system is a **three-phase pipeline** with a Streamlit GUI overlay.
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         STREAMLIT GUI                               │
+│  ┌───────────┐  ┌──────────────────┐  ┌──────────────┐  ┌────────┐│
+│  │ Dashboard  │  │ Portfolio Builder │  │Stock Explorer │  │Data QA ││
+│  └───────────┘  └──────────────────┘  └──────────────┘  └────────┘│
+└──────────────────────────┬──────────────────────────────────────────┘
+                           │ reads from DB
+┌──────────────────────────▼──────────────────────────────────────────┐
+│                        MySQL DATABASE                               │
+│  stock_info ─┬─ stock_price ─ stock_income ─ stock_balancesheet     │
+│              │  stock_cashflow ─ stock_ratio ─ quarterly tables      │
+│              │  model_hyperparameters ─ stock_predictions            │
+│              └─ portfolio_runs ─ portfolio_holdings ─ monte_carlo    │
+└──────┬──────────────────┬──────────────────────┬────────────────────┘
+       │                  │                      │
+       ▼                  ▼                      ▼
+┌──────────────┐  ┌────────────────────┐  ┌───────────────────────┐
+│ PHASE 1      │  │ PHASE 2            │  │ PHASE 3               │
+│ Data Pipeline│  │ ML Training &      │  │ Portfolio Construction │
+│              │  │ Prediction         │  │                       │
+│ • Fetch      │  │ • Ridge            │  │ • Ranking by predicted│
+│   symbols    │  │ • SVR              │  │   return / risk       │
+│ • Fetch      │  │ • Random Forest    │  │ • Efficient frontier  │
+│   prices     │  │ • XGBoost          │  │   optimization        │
+│ • Fetch      │  │ • LSTM / TCN       │  │ • Monte Carlo sim     │
+│   financials │  │ • Ensemble (all 5) │  │ • Export holdings     │
+│ • Technical  │  │ • Overfitting      │  │   to DB               │
+│   indicators │  │   detection        │  │                       │
+│ • TTM ratios │  │ • Price prediction  │  │                       │
+│ • DB export  │  │ • MC simulation    │  │                       │
+└──────────────┘  └────────────────────┘  └───────────────────────┘
+
+Execution order:
+  stock_orchestrator.py → model_trainer.py → price_predictor.py → portfolio_builder.py
+                          ▲ Runs on Py 3.10     ▲ Runs on Py 3.10
+                          │ (GPU environment)    │ (GPU environment)
+```
+
+### Key files per phase
+
+| Phase | Entry Point | Modules Used |
+|---|---|---|
+| **1 — Data** | `stock_orchestrator.py` | `dynamic_index_fetcher`, `enhanced_financial_fetcher`, `ttm_financial_calculator`, `technical_indicators`, `stock_data_fetch`, `db_interactions`, `blacklist_manager` |
+| **2 — ML** | `model_trainer.py` | `ml_builder` (or split modules — see §14), `split_dataset`, `dimension_reduction`, `data_scalers`, `monte_carlo_sim` |
+| **3 — Portfolio** | `portfolio_builder.py` | `portfolio_config`, `efficient_frontier`, `monte_carlo_sim`, `db_interactions` |
+| **GUI** | `streamlit_app.py` | `pages/*`, `gui_data` |
+
+---
+
+## 2. Data Model / ER Diagram
+
+The MySQL Workbench file `database_files/Stock_db diagram.mwb` contains the canonical
+ER diagram.  Below is a text representation of the schema.
+
+```
+                               ┌─────────────────┐
+                               │ stock_info_data  │  ← FK parent for all
+                               │─────────────────│
+                               │ ticker (PK)     │
+                               │ company_Name    │
+                               │ industry        │
+                               └────────┬────────┘
+          ┌──────────┬──────────┬───────┤────────┬──────────┬──────────┐
+          ▼          ▼          ▼       ▼        ▼          ▼          ▼
+  ┌──────────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌───────┐ ┌──────────┐
+  │stock_price   │ │income    │ │balance   │ │cashflow  │ │ratio  │ │index     │
+  │_data         │ │_stmt_data│ │sheet_data│ │_data     │ │_data  │ │membership│
+  │(date,ticker) │ │(date,    │ │(date,    │ │(date,    │ │(date, │ │(ticker,  │
+  │PK            │ │ ticker)  │ │ ticker)  │ │ ticker)  │ │ticker)│ │index)    │
+  │ OHLCV        │ │ revenue  │ │ assets   │ │ OCF      │ │ P/E   │ │ index    │
+  │ returns      │ │ EPS      │ │ equity   │ │ FCF      │ │ P/S   │ │ exchange │
+  │ SMA/EMA      │ │ margins  │ │ ROA/ROE  │ │ capex    │ │ P/B   │ │ is_cur   │
+  │ RSI/MACD     │ │ growth%  │ │ ratios   │ │ growth%  │ │ P/FCF │ │          │
+  │ vol/momentum │ │          │ │          │ │          │ │       │ │          │
+  └──────────────┘ └──────────┘ └──────────┘ └──────────┘ └───────┘ └──────────┘
+
+  ┌────────────────┐  ┌────────────────┐  ┌────────────────────┐
+  │ Quarterly       │  │ stock_ratio    │  │ model_hyper        │
+  │ Tables          │  │ _data_ttm      │  │ parameters         │
+  │ (3 tables:      │  │ (date, ticker) │  │ (ticker, model_    │
+  │  income, BS,    │  │  p_s_ttm       │  │  type) PK          │
+  │  cashflow)      │  │  p_e_ttm       │  │  hyperparams JSON  │
+  │ + TTM columns   │  │  p_b           │  │  tuning metadata   │
+  └────────────────┘  │  p_fcf_ttm     │  │  val_mse/r2/mae    │
+                      └────────────────┘  └────────────────────┘
+
+  ┌───────────────────┐  ┌──────────────────┐  ┌────────────────────┐
+  │ stock_predictions  │  │ portfolio_runs   │  │ monte_carlo_yearly │
+  │ (date, ticker) PK  │  │ (run_id) PK      │  │ (mc_id, ticker) PK │
+  │  predicted_price   │  │  risk_level       │  │  year              │
+  │  confidence_low    │  │  strategy         │  │  percentiles       │
+  │  confidence_high   │  │  sharpe_ratio     │  │  mean/median       │
+  │  model_type        │  │  total_return     │  │                    │
+  └───────────────────┘  │──────────────────│  └────────────────────┘
+                         │ portfolio_holdings│
+                         │ (run_id, ticker)  │
+                         │  weight, return   │
+                         └──────────────────┘
+
+  ┌─────────────────────┐
+  │ stock_beta_data      │  ← Rolling beta vs market indices
+  │ (date, ticker,       │
+  │  index_code) PK      │
+  │  index_symbol        │
+  │  beta_60d/120d/252d  │
+  │  correlation_252d    │
+  │  r_squared_252d      │
+  └─────────────────────┘
+```
+
+### `model_hyperparameters` — model_type ENUM
+
+The current schema defines `model_type` as:
+
+```sql
+ENUM('rf', 'xgb', 'lstm', 'tcn')
+```
+
+**To support Ridge and SVR**, this ENUM must be expanded:
+
+```sql
+ALTER TABLE model_hyperparameters
+  MODIFY COLUMN model_type ENUM('rf', 'xgb', 'lstm', 'tcn', 'ridge', 'svr') NOT NULL;
+```
+
+### DDL Files
+
+| File | Purpose |
+|---|---|
+| `database_files/ddl.sql` | Complete schema (drop-and-recreate) |
+| `database_files/ddl_legacy.sql` | Pre-TTM legacy schema |
+| `database_files/migrate_add_quarterly_tables.sql` | Quarterly table migration |
+| `database_files/migrate_add_hyperparameter_storage.sql` | Hyperparameter table migration |
+| `database_files/migrate_add_prediction_mc_tables.sql` | Prediction + Monte Carlo tables |
+| `database_files/migrate_add_financial_date_used.sql` | Financial date metadata |
+| `database_files/migrate_add_quarterly_fetch_metadata.sql` | Quarterly fetch tracking |
+| `database_files/migrate_add_stock_beta.sql` | Beta data table (stock vs index) |
+
+---
+
+## 3. Configuration Management
+
+**Problem:** The codebase contains many magic numbers spread across multiple files
+(`time_steps=30`, `validation_size=0.20`, `overfitting_threshold=0.15`,
+`max_retrains=150`, `MIN_ENSEMBLE_WEIGHT=0.005`, `MAX_DAILY_RETURN=0.20`, etc.).
+
+**Requirement:** Create a centralized configuration module that all other modules import from.
+
+### 3.1 Create `pipeline_config.py`
+
+This file consolidates every tunable parameter.  It loads overrides from environment
+variables (via `dev.env`) but always provides sensible defaults.
+
+```
+pipeline_config.py
+├── DataPipelineConfig     (dataclass)
+│   ├── indices: List[str] = ['SP500', 'C25']
+│   ├── max_workers: int = 4
+│   ├── prefer_ttm: bool = True
+│   └── blacklist_path: str = 'blacklisted_tickers.json'
+│
+├── MLTrainingConfig       (dataclass)
+│   ├── time_steps: int = 30
+│   ├── validation_size: float = 0.20
+│   ├── test_size: float = 0.10
+│   ├── min_training_rows: int = 252
+│   ├── max_retrains: int = 150
+│   ├── overfitting_threshold: float = 0.15
+│   ├── min_ensemble_weight: float = 0.005
+│   ├── max_daily_return_clip: float = 0.20
+│   │
+│   ├── # Per-model tuning budgets
+│   ├── rf_trials: int = 100
+│   ├── rf_retrain_increment: int = 25
+│   ├── xgb_trials: int = 60
+│   ├── xgb_retrain_increment: int = 10
+│   ├── ridge_trials: int = 40
+│   ├── ridge_retrain_increment: int = 10
+│   ├── svr_trials: int = 40
+│   ├── svr_retrain_increment: int = 10
+│   ├── lstm_trials: int = 50
+│   ├── lstm_executions: int = 10
+│   ├── lstm_epochs: int = 500
+│   ├── lstm_retrain_trials_increment: int = 10
+│   ├── lstm_retrain_executions_increment: int = 2
+│   ├── tcn_trials: int = 30
+│   ├── tcn_epochs: int = 100
+│   └── tcn_retrain_increment: int = 10
+│
+├── PredictionConfig       (dataclass)
+│   ├── prediction_days: int = 252
+│   ├── mc_dropout_enabled: bool = True
+│   ├── mc_iterations: int = 30
+│   ├── monte_carlo_simulations: int = 1000
+│   └── max_prediction_age_days: int = 1
+│
+├── PortfolioConfig        (dataclass — extends InvestorProfile)
+│   ├── risk_free_rate: float = 0.04
+│   └── investment_years: int = 5
+│
+├── GPUConfig              (dataclass)
+│   ├── memory_limit_mb: int = 7168
+│   └── tf_log_level: str = '2'
+│
+└── DatabaseConfig         (loaded from dev.env)
+    ├── DB_HOST, DB_USER, DB_PASS, DB_NAME
+```
+
+### 3.2 Rules
+
+1. **No magic numbers** in any module.  Every tunable constant is defined in `pipeline_config.py`.
+2. Each module imports the relevant config dataclass at the top.
+3. Environment-variable overrides are loaded via `python-dotenv` inside `pipeline_config.py`.
+4. The configuration classes use `@dataclass` with type hints for IDE/AI autocompletion.
+5. Add a `validate()` method on each config that raises `ValueError` for out-of-range values.
+
+---
+
+## 4. Error Handling & Logging Standards
+
+### 4.1 Replace all `print()` calls with `logging`
+
+The current codebase mixes `print()` statements (hundreds of them) with no log-level
+control.  Every module must:
+
+1. Create a module-level logger at the top of the file:
+   ```python
+   import logging
+   logger = logging.getLogger(__name__)
+   ```
+
+2. Use appropriate log levels:
+   | Level | Use for |
+   |---|---|
+   | `logger.debug()` | Detailed diagnostic output (feature values, shape checks) |
+   | `logger.info()` | Normal operation events (ticker processed, model trained) |
+   | `logger.warning()` | Recoverable issues (missing data, fallback used) |
+   | `logger.error()` | Failures that affect a single ticker but not the pipeline |
+   | `logger.critical()` | Failures that halt the entire pipeline |
+
+3. Configure the root logger in each entry-point script (`stock_orchestrator.py`,
+   `model_trainer.py`, `price_predictor.py`, `portfolio_builder.py`):
+   ```python
+   logging.basicConfig(
+       level=logging.INFO,
+       format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+       datefmt="%Y-%m-%d %H:%M:%S"
+   )
+   ```
+
+### 4.2 Exception handling
+
+1. **Never silently swallow exceptions.**  At minimum, log the traceback:
+   ```python
+   except Exception as e:
+       logger.error("Failed to train %s: %s", ticker, e, exc_info=True)
+   ```
+2. Use specific exception types (`ValueError`, `KeyError`, `ConnectionError`) rather than
+   bare `except Exception` wherever the failure mode is known.
+3. Wrap all database operations in try/except with rollback:
+   ```python
+   try:
+       with engine.begin() as conn:
+           conn.execute(...)
+   except sqlalchemy.exc.SQLAlchemyError:
+       logger.error("DB write failed for %s", ticker, exc_info=True)
+   ```
+
+---
+
+## 5. Data Validation Contracts
+
+Every pipeline boundary must validate data before passing it downstream.  The following
+defines the **exact DataFrame schemas** expected at each stage.
+
+### 5.1 Stock Price Data — `stock_price_data` table / DataFrame
+
+After Phase 1, every row must contain:
+
+| Column | Type | Nullable | Description |
+|---|---|---|---|
+| `date` | `datetime64[ns]` | No | Trading date |
+| `ticker` | `str` | No | Stock symbol |
+| `open_Price` | `float64` | No | Opening price |
+| `high_Price` | `float64` | No | High price |
+| `low_Price` | `float64` | No | Low price |
+| `close_Price` | `float64` | No | Closing price |
+| `trade_Volume` | `int64` | No | Volume |
+| `1D` | `float64` | Yes (first row) | 1-day return |
+| `sma_5` … `sma_200` | `float64` | Yes (leading rows) | Simple moving averages |
+| `ema_5` … `ema_200` | `float64` | Yes (leading rows) | Exponential moving averages |
+| `rsi_14` | `float64` | Yes (first 14 rows) | Relative Strength Index |
+| `macd` / `macd_signal` / `macd_histogram` | `float64` | Yes (first 26 rows) | MACD family |
+| `volatility_5d/20d/60d` | `float64` | Yes (leading rows) | Volatility measures |
+
+### 5.2 ML Training Input — output of `split_dataset.dataset_train_test_split()`
+
+| Output | Shape | Notes |
+|---|---|---|
+| `scaler_x` | `MinMaxScaler` (fitted) | Feature scaler |
+| `scaler_y` | `MinMaxScaler` (fitted) | Target scaler |
+| `x_train_scaled` | `(n_train, n_features)` float32 | Scaled features |
+| `x_val_scaled` | `(n_val, n_features)` float32 | Scaled features |
+| `x_test_scaled` | `(n_test, n_features)` float32 | Scaled features |
+| `y_train_scaled` | `(n_train,)` float32 | Scaled close_Price return (1D) |
+| `y_val_scaled` | `(n_val,)` float32 | Scaled target |
+| `y_test_scaled` | `(n_test,)` float32 | Scaled target |
+| `x_predictions` | `(1, n_features)` float32 | Latest row for future prediction |
+
+### 5.3 Feature Selection Output — `dimension_reduction.feature_selection_rf()`
+
+| Output | Shape |
+|---|---|
+| `x_train_selected` | `(n_train, k)` — `k ≤ n_features` |
+| `x_val_selected` | `(n_val, k)` |
+| `x_test_selected` | `(n_test, k)` |
+| `x_prediction_selected` | `(1, k)` |
+| `selector_model` | fitted `RandomForestRegressor` |
+| `selected_features_list` | `List[str]` of length `k` |
+
+### 5.4 Model Output — `train_and_validate_models()` return values
+
+```python
+models: dict = {
+    'sequence_model': <keras.Model>,       # The trained TCN or LSTM
+    'sequence_model_type': 'tcn' | 'lstm', # Which sequence model was used
+    'lstm': <Model> | None,                # Legacy key
+    'tcn': <Model> | None,                 # Legacy key
+    'rf': <RandomForestRegressor>,         # Trained RF model
+    'xgb': <XGBRegressor>,                 # Trained XGBoost model
+    'ridge': <Ridge>,                      # Trained Ridge model  ← NEW
+    'svr': <SVR>,                          # Trained SVR model    ← NEW
+    'ensemble_weights': {                  # Weight per model for ensemble
+        'tcn': float, 'rf': float, 'xgb': float,
+        'ridge': float, 'svr': float       # ← NEW
+    }
+}
+```
+
+### 5.5 Validation Functions
+
+Every module that receives a DataFrame must call a shared validation function:
+
+```python
+def validate_dataframe(df, required_columns, name=""):
+    """Raises ValueError if df is missing columns or has unexpected dtypes."""
+```
+
+Place this in a new `data_contracts.py` module.
+
+---
+
+## 6. Idempotency Requirements
+
+**Every pipeline step must be safely re-runnable** without producing duplicate data or
+corrupting state.
+
+| Step | Idempotency Mechanism |
+|---|---|
+| **Symbol fetching** | Monthly cache with timestamp check; re-fetch only if cache expired |
+| **Price data fetch** | Upsert (`INSERT … ON DUPLICATE KEY UPDATE`) keyed on `(date, ticker)` |
+| **Financial data fetch** | Upsert keyed on `(financial_Statement_Date, ticker)` |
+| **Ratio calculation** | Upsert keyed on `(date, ticker)` |
+| **TTM calculation** | Recalculate from quarterly data on every run; upsert results |
+| **Model training** | Check `model_hyperparameters` freshness first; skip if fresh |
+| **Prediction** | Check `stock_predictions` freshness; skip if `< max_prediction_age_days` |
+| **Portfolio construction** | Create new `portfolio_runs` row each time (append-only) |
+| **Blacklist updates** | Merge with existing JSON; never remove unless explicitly cleared |
+
+### Rules
+
+1. **No `TRUNCATE` or `DELETE` before insert** unless explicitly a full-refresh mode.
+2. All SQL writes use `INSERT … ON DUPLICATE KEY UPDATE` or `REPLACE INTO`.
+3. All pipeline runners (`stock_orchestrator.py`, `model_trainer.py`, etc.) query DB
+   for freshness before processing each ticker.
+4. Re-running any script with the same parameters produces the same database state.
+
+---
+
+## 7. Testing Standards
+
+The repository currently **lacks automated tests**.  Every new or modified module must
+ship with corresponding tests.
+
+### 7.1 Directory Structure
+
+```
+tests/
+├── conftest.py              # Shared fixtures (mock DB, sample DataFrames)
+├── test_data_pipeline/
+│   ├── test_stock_data_fetch.py
+│   ├── test_dynamic_index_fetcher.py
+│   ├── test_technical_indicators.py
+│   ├── test_ttm_financial_calculator.py
+│   └── test_blacklist_manager.py
+├── test_ml/
+│   ├── test_split_dataset.py
+│   ├── test_dimension_reduction.py
+│   ├── test_model_definitions.py   # Unit tests for build_* functions
+│   ├── test_model_tuning.py        # Integration: tune + train small set
+│   ├── test_overfitting_detection.py
+│   ├── test_ridge_integration.py   # ← NEW: Ridge in ensemble
+│   ├── test_svr_integration.py     # ← NEW: SVR in ensemble
+│   ├── test_ensemble_weights.py    # ← NEW: 5-model weighting
+│   └── test_predict_future.py
+├── test_portfolio/
+│   ├── test_efficient_frontier.py
+│   ├── test_monte_carlo_sim.py
+│   └── test_portfolio_builder.py
+├── test_database/
+│   ├── test_db_interactions.py
+│   └── test_db_connectors.py
+└── test_gui/
+    └── test_gui_data.py
+```
+
+### 7.2 Rules
+
+1. Use **pytest** as the test runner.
+2. Add `pytest` and `pytest-cov` to both `requirements_PY_3_10.txt` and
+   `requirements_PY_3_12.txt`.
+3. **Unit tests** must run without a database or GPU.  Mock external dependencies.
+4. **Integration tests** (marked with `@pytest.mark.integration`) may use the database.
+5. Minimum coverage targets:
+   - Data pipeline: 80%
+   - ML module: 70% (model training is expensive; test build/validate functions)
+   - Portfolio: 80%
+   - Database interactions: 60% (mock-heavy)
+6. Every bug fix must include a regression test.
+7. Run the test suite with:
+   ```bash
+   pytest tests/ -v --cov=. --cov-report=term-missing
+   ```
+
+### 7.3 Test Data
+
+Create `tests/fixtures/` with small, deterministic datasets:
+- `sample_stock_data.csv` — 500 rows of synthetic OHLCV + indicators for one ticker
+- `sample_financials.json` — Quarterly income/balance/cashflow for one ticker
+- `sample_ml_input.npz` — Pre-split x_train/x_val/x_test/y_train/y_val/y_test arrays
+
+---
+
+## Phase 0 — Environment & Infrastructure Setup
+
+### Step 0.1: Create two conda environments
+
+```bash
+# Primary environment (Python 3.12)
+conda create -n stock_env python=3.12
+conda activate stock_env
+pip install -r requirements_PY_3_12.txt
+
+# GPU/DL environment (Python 3.10) — only if LSTM/TCN training needed
+conda create -n stock_env_gpu python=3.10
+conda activate stock_env_gpu
+pip install -r requirements_PY_3_10.txt
+```
+
+### Step 0.2: Configure database credentials
+
+Create `dev.env` in the project root:
+
+```ini
+DB_HOST=localhost
+DB_USER=stock_user
+DB_PASS=your_password
+DB_NAME=stock_portefolio_builder
+```
+
+### Step 0.3: Initialize the database
+
+```bash
+mysql -u root -p < database_files/ddl.sql
+```
+
+Then apply any pending migrations (in order):
+
+```bash
+mysql -u root -p stock_portefolio_builder < database_files/migrate_add_quarterly_tables.sql
+mysql -u root -p stock_portefolio_builder < database_files/migrate_add_hyperparameter_storage.sql
+mysql -u root -p stock_portefolio_builder < database_files/migrate_add_prediction_mc_tables.sql
+mysql -u root -p stock_portefolio_builder < database_files/migrate_add_financial_date_used.sql
+mysql -u root -p stock_portefolio_builder < database_files/migrate_add_quarterly_fetch_metadata.sql
+```
+
+### Step 0.4: Expand model_type ENUM for Ridge and SVR
+
+```sql
+ALTER TABLE model_hyperparameters
+  MODIFY COLUMN model_type ENUM('rf', 'xgb', 'lstm', 'tcn', 'ridge', 'svr') NOT NULL
+  COMMENT 'Model type';
+```
+
+---
+
+## Phase 1 — Data Pipeline (Data Ingestion)
+
+### Step 1.1: Secrets Loader (`fetch_secrets.py`)
+
+- Load `DB_HOST`, `DB_USER`, `DB_PASS`, `DB_NAME` from `dev.env` using `python-dotenv`.
+- Expose as module-level variables.
+- **Test:** Verify `ValueError` raised if any variable is missing.
+
+### Step 1.2: Database Connectors (`db_connectors.py`)
+
+- Create a `get_engine()` function returning a SQLAlchemy `create_engine()` instance.
+- Use `mysql+mysqlconnector` dialect.
+- Connection pool size: 5, max overflow: 10.
+- **Test:** Mock `create_engine`, verify connection string format.
+
+### Step 1.3: Database Interactions (`db_interactions.py`)
+
+- Implement import/export functions for every table in the schema.
+- All exports must use `INSERT … ON DUPLICATE KEY UPDATE` (upsert pattern).
+- Key functions:
+  - `import_ticker_list()` → `List[str]`
+  - `import_stock_dataset(ticker)` → `pd.DataFrame`
+  - `export_stock_price_data(df)` → upsert
+  - `export_stock_ratio_data(df)` → upsert
+  - `save_hyperparameters(ticker, model_type, hyperparameters, …)` → upsert
+  - `load_hyperparameters(ticker, model_type, max_age_days, num_features)` → `dict | None`
+  - `get_tickers_needing_training(max_age_days, required_model_types)` → `dict`
+  - `invalidate_hyperparameters(ticker, model_type)` → void
+- **Test:** Mock DB, verify SQL patterns, test upsert deduplication.
+
+### Step 1.4: Dynamic Index Fetcher (`dynamic_index_fetcher.py`)
+
+- Scrape Wikipedia for index constituent lists.
+- Supported indices: `SP500`, `C25`, `DAX40`, `CAC40`, `FTSE100`, `NASDAQ100`, `DOW30`,
+  `AEX25`, `OMX30`, `IBEX35`, `OMXH25`, `SMI`.
+- Cache results in a local CSV with monthly expiry.
+- Optionally include market indices (`^VIX`, `^GSPC`, `^IXIC`, `^DJI`).
+- Return `pd.DataFrame` with columns: `Symbol`, `Company`, `Index`.
+- **Test:** Mock HTTP responses, verify parsing for at least SP500 and C25.
+
+### Step 1.5: Blacklist Manager (`blacklist_manager.py`)
+
+- Manage `blacklisted_tickers.json` — a JSON file of tickers to skip.
+- Auto-blacklist tickers that fail fetching 3+ times.
+- Functions: `get_blacklist()`, `add_to_blacklist(ticker, reason)`, `remove_from_blacklist(ticker)`.
+- Thread-safe (file lock or atomic write).
+- **Test:** Test add/remove/get cycle; test duplicate add is idempotent.
+
+### Step 1.6: Stock Data Fetch (`stock_data_fetch.py`)
+
+- Use `yfinance` to fetch OHLCV history, stock info, financials.
+- Calculate all technical indicators (see `technical_indicators.py`).
+- Calculate all return periods (1D through 5Y).
+- Calculate valuation ratios (P/E, P/S, P/B, P/FCF) using TTM when available.
+- **Beta calculation pipeline** via `calculate_and_export_beta()`:
+  - `INDEX_BETA_SYMBOLS` maps 19 index codes to yfinance symbols (e.g., `SP500` → `^GSPC`).
+  - For each stock, downloads index price history, computes rolling beta using
+    `technical_indicators.calculate_beta()`, and exports to `stock_beta_data` table.
+  - Supports optional `index_codes` filter and custom `years` lookback.
+- Export to database via `db_interactions`.
+- **Test:** Mock `yfinance.Ticker`, verify DataFrame schema matches §5.1.
+  Verify `calculate_and_export_beta()` returns `{index_code: beta_252d}` dict.
+
+### Step 1.7: Technical Indicators (`technical_indicators.py`)
+
+- Calculate: RSI-14, ATR-14, MACD (12/26/9), Bollinger Bands (5/20/40/120/200 day),
+  SMA/EMA (5/20/40/120/200), VWAP, OBV, volume SMA/EMA, volume ratio,
+  volatility (5d/20d/60d), momentum.
+- **Beta calculation** via `calculate_beta(stock_df, index_df)`:
+  - Rolling beta over configurable windows (default: 60d, 120d, 252d).
+  - Formula: `Beta = Cov(stock_returns, index_returns) / Var(index_returns)`.
+  - Also outputs rolling correlation (252d) and R-squared (252d).
+  - Inner-joins stock and index DataFrames on `date`, computes daily returns, then applies
+    rolling window statistics.
+- Input: DataFrame with OHLCV columns (for indicators) or date + close_Price (for beta).
+- Output: Same DataFrame with indicator columns appended (for indicators), or new DataFrame
+  with date, beta_60d, beta_120d, beta_252d, correlation_252d, r_squared_252d (for beta).
+- **Test:** Verify RSI range [0, 100], MACD sign changes.
+  Verify beta ≈ 1.0 when stock = index. Verify ValueError on empty inputs.
+
+### Step 1.8: Enhanced Financial Fetcher (`enhanced_financial_fetcher.py`)
+
+- Fetch quarterly income statement, balance sheet, cash flow from yfinance.
+- Export quarterly data to quarterly tables in DB.
+- **Test:** Mock yfinance, verify quarterly DataFrame structure.
+
+### Step 1.9: TTM Financial Calculator (`ttm_financial_calculator.py`)
+
+- Sum last 4 quarters for income statement and cash flow items.
+- Use point-in-time for balance sheet items.
+- Calculate TTM ratios: P/E_ttm, P/S_ttm, P/B, P/FCF_ttm.
+- Fallback to annual data if < 4 quarters available.
+- **Test:** Verify TTM sum = Q1+Q2+Q3+Q4; verify fallback logic.
+
+### Step 1.10: Stock Orchestrator (`stock_orchestrator.py`)
+
+- Main entry point: chains Steps 1.4 → 1.5 → 1.6 → 1.7 → 1.8 → 1.9 → DB export.
+- Supports CLI args: `--indices`, `--ticker`, `--update-only`.
+- Supports `ThreadPoolExecutor` for parallel ticker processing.
+- Tracks stats (processed, skipped, failed, time).
+- **Test:** Mock all sub-modules, verify orchestration order.
+
+---
+
+## Phase 2 — Machine Learning Pipeline
+
+### Step 2.1: Data Scalers (`data_scalers.py`)
+
+- Wrap `MinMaxScaler` and `StandardScaler` from scikit-learn.
+- Provide `fit_transform()` and `inverse_transform()` wrappers.
+- **Test:** Round-trip test: `inverse_transform(fit_transform(x)) ≈ x`.
+
+### Step 2.2: Dataset Splitting (`split_dataset.py`)
+
+- Time-aware split (no shuffling — preserve temporal order).
+- Default split: 70% train / 20% validation / 10% test.
+- Scale x and y separately (fit on train only, transform val/test).
+- Prepare a single-row prediction set from the latest data.
+- **Test:** Verify no data leakage (val/test dates > train dates).
+
+### Step 2.3: Dimension Reduction (`dimension_reduction.py`)
+
+- **SelectKBest** using `r_regression` scoring.
+- **Random Forest feature importance** — fit RF on train, rank features, select top-k.
+- **PCA** — as alternative to feature selection.
+- All selectors fit on train only; transform val/test/prediction.
+- **Test:** Verify output shapes, verify no data leakage.
+
+### Step 2.4: ML Builder (`ml_builder.py`) — Model Definitions
+
+> **See §14 (ML Module Splitting) for the recommended file split.**
+
+This module defines and tunes all five models plus the ensemble.
+
+#### 2.4.1: Random Forest Regressor
+
+- `build_random_forest_model(hp, constrain_for_overfitting=False)` → `RandomForestRegressor`
+- Tunable hyperparameters:
+  - `n_estimators`: 100–1500
+  - `max_depth`: 3–50 (or None)
+  - `min_samples_split`: 2–20
+  - `min_samples_leaf`: 1–10
+  - `max_features`: ['sqrt', 'log2', 0.3–1.0]
+  - `criterion`: ['squared_error', 'absolute_error', 'friedman_mse']
+  - `bootstrap`: [True, False]
+  - `max_samples`: 0.5–1.0 (when bootstrap=True)
+- Tuning: Keras Tuner `Sklearn` wrapper with `Hyperband`, up to `rf_trials` trials.
+- Overfitting constraint mode: restrict `max_depth` ≤ 15, force `min_samples_leaf` ≥ 3.
+- Operates on **unscaled** y data.
+- Save best hyperparameters to DB (`model_type='rf'`).
+- **Test:** Build with mock `hp`, verify returned model type.
+
+#### 2.4.2: XGBoost Regressor
+
+- `build_xgboost_model(hp, constrain_for_overfitting=False)` → `XGBRegressor`
+- Tunable hyperparameters:
+  - `n_estimators`: 100–2000
+  - `max_depth`: 3–12
+  - `learning_rate`: 0.001–0.3 (log scale)
+  - `subsample`: 0.5–1.0
+  - `colsample_bytree`: 0.3–1.0
+  - `min_child_weight`: 1–10
+  - `gamma`: 0–5
+  - `reg_alpha`: 0–10 (L1)
+  - `reg_lambda`: 0–10 (L2)
+- Tuning: Keras Tuner `Sklearn` wrapper with `BayesianOptimization`, up to `xgb_trials` trials.
+- Overfitting constraint mode: restrict `max_depth` ≤ 6, force `reg_lambda` ≥ 1.
+- Operates on **unscaled** y data.
+- Save best hyperparameters to DB (`model_type='xgb'`).
+- **Test:** Build with mock `hp`, verify returned model type.
+
+#### 2.4.3: Ridge Regression ← NEW (Full Ensemble Integration)
+
+- `build_ridge_model(hp, constrain_for_overfitting=False)` → `Ridge`
+- Tunable hyperparameters:
+  - `alpha`: 1e-3–1e4 (log scale) — regularization strength
+  - `fit_intercept`: [True, False]
+  - `solver`: ['auto', 'svd', 'cholesky', 'lsqr', 'saga']
+  - `max_iter`: 1000–10000 (for iterative solvers)
+- Tuning: Keras Tuner `Sklearn` wrapper with `BayesianOptimization`, up to `ridge_trials` trials.
+- Overfitting constraint mode: force `alpha` ≥ 10 to increase regularization.
+- Operates on **unscaled** y data (Ridge is not scale-invariant — features are already
+  MinMax scaled, so this is acceptable).
+- Save best hyperparameters to DB (`model_type='ridge'`).
+- Retrain loop: same overfitting detection as RF/XGBoost.
+- **Test:** Build with mock `hp`, verify model type is `Ridge`. Test that
+  `alpha` constraint is applied in overfitting mode.
+
+#### 2.4.4: SVR (Support Vector Regression) ← NEW (Full Ensemble Integration)
+
+- `build_svr_model(hp, constrain_for_overfitting=False)` → `SVR`
+  - **Note:** The current codebase has `build_svm_model(hp)` and `tune_svm_model()` at
+    lines 764–824 of `ml_builder.py`.  These must be **refactored** to match the RF/XGBoost
+    pattern (overfitting constraint support, DB hyperparameter caching, retrain loop).
+- Tunable hyperparameters:
+  - `kernel`: ['linear', 'rbf', 'poly']
+  - `C`: 1e-3–1e3 (log scale)
+  - `gamma`: 1e-4–1e1 (log scale) — only for rbf/poly
+  - `epsilon`: 0.001–1.0 (log scale)
+  - `degree`: 2–5 (only for poly kernel)
+- Tuning: Keras Tuner `Sklearn` wrapper with `BayesianOptimization`, up to `svr_trials` trials.
+- Overfitting constraint mode: force `C` ≤ 10, force `epsilon` ≥ 0.01.
+- Operates on **unscaled** y data.
+- Save best hyperparameters to DB (`model_type='svr'`).
+- Retrain loop: same overfitting detection as RF/XGBoost.
+- **Test:** Build with mock `hp`, verify model type is `SVR`. Test kernel-specific params.
+
+#### 2.4.5: LSTM (Long Short-Term Memory)
+
+- `build_lstm_model(hp, input_shape)` → `keras.Model`
+- Bidirectional architecture with multiple stacked layers.
+- Batch normalization, L2 regularization, dropout, gradient clipping.
+- Tunable: layer count (1–4), units (32–256), dropout (0.1–0.5), learning rate,
+  optimizer (Adam/RMSprop), loss function (MAE/MSE/Huber/MAPE).
+- Tuning: Keras Tuner `BayesianOptimization`, up to `lstm_trials` trials.
+- Requires 3D input: `(samples, time_steps, features)`.
+- Operates on **scaled** y data.
+- Save best hyperparameters to DB (`model_type='lstm'`).
+- **Test:** Build with mock `hp`, verify output shape.
+
+#### 2.4.6: TCN (Temporal Convolutional Network)
+
+- `build_tcn_model(hp, input_shape)` → `keras.Model`
+- Causal dilated convolutions with residual connections.
+- Tunable: filters, kernel size, dilation rates, dropout.
+- Same tuning/caching/retraining pattern as LSTM.
+- Save best hyperparameters to DB (`model_type='tcn'`).
+- **Test:** Build with mock `hp`, verify output shape.
+
+### Step 2.5: Overfitting Detection
+
+- Multi-metric system comparing train/validation/test performance:
+  - **MSE degradation** (35% weight)
+  - **R² degradation** (25% weight)
+  - **MAE degradation** (30% weight)
+  - **Consistency score** (10% weight)
+- Combined score > `overfitting_threshold` triggers constrained retraining.
+- Maximum `max_retrains` attempts.
+- Early stop if hyperparameters converge (3 consecutive identical sets).
+- **Applied to all 5 models individually**, plus the ensemble.
+- **Test:** Feed known overfitting metrics, verify detection triggers.
+
+### Step 2.6: `train_and_validate_models()` — the Master Training Function
+
+This function orchestrates training of **all five models** and computes ensemble weights.
+
+**Current state:** Trains TCN/LSTM + RF + XGBoost (3 models).
+
+**Required changes for Ridge + SVR integration:**
+
+1. **Add Ridge training loop** (same pattern as RF):
+   ```
+   ridge_model = None
+   ridge_overfitted = False
+   for attempt in range(max_retrains):
+       ridge_model = tune_ridge_model(...)
+       ridge_metrics = evaluate_model(ridge_model, ...)
+       ridge_overfitted, score = detect_overfitting(...)
+       if not ridge_overfitted:
+           break
+       constrain = True
+       ridge_trials += ridge_retrain_increment
+   ```
+
+2. **Add SVR training loop** (same pattern as RF):
+   ```
+   svr_model = None
+   svr_overfitted = False
+   for attempt in range(max_retrains):
+       svr_model = tune_svr_model(...)
+       svr_metrics = evaluate_model(svr_model, ...)
+       svr_overfitted, score = detect_overfitting(...)
+       if not svr_overfitted:
+           break
+       constrain = True
+       svr_trials += svr_retrain_increment
+   ```
+
+3. **Update ensemble weight calculation** to include all 5 models:
+   ```python
+   # Inverse MSE weights (lower MSE = higher weight)
+   inv_mse = {
+       'seq': 1 / seq_val_mse,
+       'rf':  1 / rf_val_mse,
+       'xgb': 1 / xgb_val_mse,
+       'ridge': 1 / ridge_val_mse,
+       'svr': 1 / svr_val_mse,
+   }
+   total = sum(inv_mse.values())
+   weights = {k: v / total for k, v in inv_mse.items()}
+
+   # Zero out negligible weights (< MIN_ENSEMBLE_WEIGHT)
+   # Renormalize remaining weights
+   ```
+
+4. **Update ensemble prediction** to be a 5-model weighted average:
+   ```python
+   ensemble_pred = (
+       weights['seq'] * seq_pred +
+       weights['rf']  * rf_pred +
+       weights['xgb'] * xgb_pred +
+       weights['ridge'] * ridge_pred +
+       weights['svr']  * svr_pred
+   )
+   ```
+
+5. **Update `models` dict return value** to include `'ridge'` and `'svr'` keys.
+
+6. **Update `training_history` dict** to include `'ridge': []` and `'svr': []`.
+
+7. **Update `training_history['ensemble']['weights']`** to include all 5 model keys.
+
+8. **Update `required_model_types`** in `model_trainer.py`:
+   ```python
+   required_model_types=['rf', 'xgb', 'ridge', 'svr', 'tcn' if use_tcn else 'lstm']
+   ```
+
+9. **Update `predict_future_price_changes()`** to extract and use Ridge + SVR models
+   from the `model` dict alongside the existing 3 models.
+
+### Step 2.7: Model Trainer (`model_trainer.py`)
+
+- Phase 1 entry point.
+- Query DB for untrained → stale → fresh tickers.
+- For each ticker: fetch data → split → feature select → `train_and_validate_models()`.
+- Configure GPU (TF 2.10 with memory limit).
+- CLI args: `--max-age`, `--max-stocks`, `--use-lstm`, `--time-steps`.
+- **Test:** Mock `ml_builder`, verify training loop logic.
+
+### Step 2.8: Price Predictor (`price_predictor.py`)
+
+- Phase 2 entry point.
+- For tickers with trained models but missing/stale predictions:
+  1. Load hyperparameters from DB.
+  2. Rebuild models from cached hyperparameters.
+  3. Generate day-by-day forecasts using `predict_future_price_changes()`.
+  4. Run Monte Carlo simulation.
+  5. Export predictions + MC results to DB.
+- **Test:** Mock model loading, verify prediction DataFrame schema.
+
+### Step 2.9: Monte Carlo Simulation (`monte_carlo_sim.py`)
+
+- Geometric Brownian Motion (GBM) simulation.
+- Configurable: seed, number of simulations, forecast years.
+- Output percentiles: 5th, 16th, 50th (median), 84th, 95th.
+- Shapiro-Wilk normality test on returns.
+- **Test:** Verify output shape, verify seed reproducibility.
+
+---
+
+## Phase 3 — Portfolio Construction
+
+### Step 3.1: Portfolio Config (`portfolio_config.py`)
+
+- `RiskLevel` enum: LOW, MEDIUM, HIGH.
+- `InvestmentStrategy` enum: BALANCED, DIVIDEND, GROWTH, VALUE, GARP, QUALITY, MOMENTUM.
+- `InvestorProfile` dataclass with validation.
+- Volatility caps per risk level (15% / 25% / 40%).
+- **Country-specific risk-free rates** via `COUNTRY_RISK_FREE_RATES`:
+  - 18 countries with approximate 10Y government bond yields (e.g., Denmark 2.8%, US 4.3%, Switzerland 0.8%).
+  - Each entry: `{"rate": float, "currency": str, "bond": str}`.
+  - `COUNTRY_NAMES`: sorted list for GUI dropdowns.
+  - `get_risk_free_rate(country)`: returns country rate or `DEFAULT_RISK_FREE_RATE` (4%) as fallback.
+- **Test:** Verify validation rejects out-of-range values. Verify `get_risk_free_rate("Denmark")` returns 0.028.
+  Verify `get_risk_free_rate(None)` returns `DEFAULT_RISK_FREE_RATE`.
+
+### Step 3.2: Efficient Frontier (`efficient_frontier.py`)
+
+- Monte Carlo simulation + scipy `minimize(method='SLSQP')`.
+- Find: minimum variance portfolio, maximum Sharpe portfolio, risk-constrained max return.
+- Input: covariance matrix + expected returns from historical data.
+- Accepts `risk_free_rate` parameter — now passed through from the Portfolio Builder
+  with the user's selected country-specific rate (see §19).
+- Output: optimal weights, return, volatility, Sharpe ratio.
+- **Test:** Verify weights sum to 1.0, verify Sharpe formula.
+  Verify that changing `risk_free_rate` changes the resulting Sharpe ratio.
+
+### Step 3.3: Portfolio Builder (`portfolio_builder.py`)
+
+- Phase 3 entry point.
+- Steps:
+  1. Query DB for tickers with recent predictions.
+  2. Rank by predicted return / risk score (strategy-aware).
+  3. Select top N stocks.
+  4. Fetch historical prices.
+  5. Run efficient frontier optimization.
+  6. Run portfolio-level Monte Carlo simulation.
+  7. Export holdings + metrics to DB.
+- **Test:** Mock DB queries, verify ranking logic and output schema.
+
+---
+
+## Phase 4 — Streamlit GUI
+
+### Step 4.1: Main App (`streamlit_app.py`)
+
+- Multi-page Streamlit app with dark theme.
+- Define pages: Dashboard, Portfolio Builder, Stock Explorer, Data Quality.
+
+### Step 4.2: Dashboard (`pages/1_Dashboard.py`)
+
+- Market overview metrics.
+- Portfolio summary if one exists.
+- Recent pipeline run status.
+- Sharpe Ratio metric includes help tooltip explaining that country-specific risk-free
+  rates can be configured in Portfolio Builder.
+
+### Step 4.3: Portfolio Builder (`pages/2_Portfolio_Builder.py`)
+
+- Interactive investor profile controls (risk level, strategy, horizon).
+- **Country selector** in sidebar for risk-free rate:
+  - Dropdown with 18 countries + "Default (4.0%)".
+  - Shows bond name, currency, and rate for the selected country.
+  - Selected rate is passed to `efficient_frontier.optimize_portfolio()`.
+  - Results display shows which country/rate was used for Sharpe calculation.
+- Trigger portfolio construction.
+- Display optimized weights, expected return, Sharpe ratio.
+
+### Step 4.4: Stock Explorer (`pages/3_Stock_Explorer.py`)
+
+- Per-stock deep dive: price chart, predictions, model performance.
+- Display individual model contributions to ensemble.
+- **Beta section** (vs Market Index):
+  - Dropdown to select benchmark index (dynamically populated from `stock_beta_data`).
+  - Displays: Beta (60d), Beta (120d), Beta (1Y / 252d), Correlation, R².
+  - Interpretive note (high beta / defensive / negative beta, etc.).
+  - Expandable "Compare across all indices" table showing beta for every available index.
+
+### Step 4.5: Data Quality (`pages/4_Data_Quality.py`)
+
+- Pipeline health monitoring.
+- Missing data detection.
+- TTM vs annual comparison.
+
+---
+
+## Phase 5 — Supporting Utilities
+
+### Step 5.1: ML Data Integrity (`ml_data_integrity.py`)
+
+- Pre-training data validation.
+- Verify TTM vs annual consistency.
+- Check for data staleness.
+
+### Step 5.2: Market Hours Utils (`market_hours_utils.py`)
+
+- Determine if a market is open.
+- Generate trading day calendars.
+
+### Step 5.3: Data Scalers (`data_scalers.py`)
+
+- Wrappers around scikit-learn scalers with serialization support.
+
+### Step 5.4: GUI Data (`gui_data.py`)
+
+- Data preparation functions specific to Streamlit pages.
+- Query helpers for GUI-specific views.
+- **Beta data helpers** (cached with `st.cache_data`):
+  - `get_stock_beta(ticker, index_code=None)` — returns latest beta for one or all indices.
+  - `get_available_beta_indices(ticker=None)` — returns list of index codes with beta data.
+
+### Step 5.5: Validate Stock Data (`validate_stock_data.py`)
+
+- Post-fetch validation of stock data completeness.
+- Schema checks against §5.1 contract.
+
+---
+
+## 14. ML Module Splitting Guide
+
+**Problem:** `ml_builder.py` is ~5,000+ lines and contains model definitions, tuning logic,
+overfitting detection, ensemble weighting, and prediction — all in one file.
+
+**Requirement:** Split into focused, testable modules while maintaining backward compatibility.
+
+### Recommended Split
+
+```
+ml/
+├── __init__.py                  # Re-export public API for backward compat
+├── model_definitions.py         # build_random_forest_model(), build_xgboost_model(),
+│                                # build_ridge_model(), build_svr_model(),
+│                                # build_lstm_model(), build_tcn_model()
+│
+├── model_tuning.py              # tune_rf_model(), tune_xgb_model(),
+│                                # tune_ridge_model(), tune_svr_model(),
+│                                # tune_lstm_model(), tune_tcn_model()
+│                                # HP caching (save/load from DB)
+│
+├── overfitting_detection.py     # detect_overfitting(), check_data_health()
+│                                # Multi-metric scoring logic
+│
+├── ensemble.py                  # calculate_ensemble_weights()
+│                                # create_ensemble_predictions()
+│                                # Zero-out negligible weights logic
+│
+├── training_pipeline.py         # train_and_validate_models()
+│                                # Orchestrates model_tuning + overfitting + ensemble
+│
+├── prediction.py                # predict_future_price_changes()
+│                                # predict_with_uncertainty()
+│                                # multi_run_prediction()
+│                                # apply_mean_reversion()
+│
+├── sequence_utils.py            # create_sequences()
+│                                # LSTM/TCN data preparation
+│
+└── diagnostics.py               # Data health checks, feature importance
+```
+
+### Backward Compatibility
+
+To avoid breaking existing imports (`from ml_builder import train_and_validate_models`),
+keep `ml_builder.py` as a thin re-export wrapper:
+
+```python
+# ml_builder.py (after split)
+from ml.training_pipeline import train_and_validate_models
+from ml.prediction import predict_future_price_changes
+from ml.model_definitions import *
+from ml.model_tuning import *
+from ml.overfitting_detection import detect_overfitting, check_data_health
+from ml.ensemble import calculate_ensemble_weights
+```
+
+---
+
+## 15. Ridge & SVR Full Ensemble Integration
+
+This section provides the **complete specification** for integrating Ridge and SVR as
+first-class ensemble members alongside the existing RF, XGBoost, and TCN/LSTM models.
+
+### 15.1 Current State (3-Model Ensemble)
+
+The current ensemble in `train_and_validate_models()` combines:
+1. **Sequence model** (TCN or LSTM) — operates on scaled data
+2. **Random Forest** — operates on unscaled data
+3. **XGBoost** — operates on unscaled data
+
+Weights are computed as inverse-MSE on the validation set (unscaled space).
+
+### 15.2 Target State (5-Model Ensemble)
+
+The ensemble must combine:
+1. **Sequence model** (TCN or LSTM) — operates on scaled data
+2. **Random Forest** — operates on unscaled data
+3. **XGBoost** — operates on unscaled data
+4. **Ridge** — operates on unscaled data ← NEW
+5. **SVR** — operates on unscaled data ← NEW
+
+### 15.3 Database Changes
+
+```sql
+-- Expand ENUM to include new model types
+ALTER TABLE model_hyperparameters
+  MODIFY COLUMN model_type ENUM('rf', 'xgb', 'lstm', 'tcn', 'ridge', 'svr') NOT NULL;
+```
+
+### 15.4 New Functions Required
+
+#### `build_ridge_model(hp, constrain_for_overfitting=False)`
+
+```
+Input:
+  - hp: Keras Tuner hyperparameters object
+  - constrain_for_overfitting: bool
+
+Hyperparameter search space:
+  Normal mode:
+    alpha:         Float(1e-3, 1e4, sampling='log')
+    fit_intercept: Choice([True, False])
+    solver:        Choice(['auto', 'svd', 'cholesky', 'lsqr', 'saga'])
+
+  Constrained mode (overfitting detected):
+    alpha:         Float(10, 1e4, sampling='log')   ← stronger regularization
+    fit_intercept: Fixed(True)
+    solver:        Choice(['auto', 'svd', 'lsqr'])  ← drop cholesky for stability
+
+Output: sklearn.linear_model.Ridge instance
+```
+
+#### `tune_ridge_model(stock_symbol, x_train, y_train, x_val, y_val, max_trials, constrain_for_overfitting=False)`
+
+```
+Pattern: Same as existing tune_rf_model / tune_xgb_model
+  1. Check DB for cached hyperparameters (load_hyperparameters(ticker, 'ridge', ...))
+  2. If fresh and valid → rebuild model from cached HPs, skip tuning
+  3. Otherwise → run Keras Tuner Sklearn wrapper with BayesianOptimization
+  4. Save best HPs to DB (save_hyperparameters(ticker, 'ridge', ...))
+  5. Evaluate on train/val/test → return metrics + model
+
+Tuner config:
+  oracle: kt.oracles.BayesianOptimization(max_trials=ridge_trials)
+  scoring: neg_mean_squared_error
+  cv: PredefinedSplit (train vs val)
+
+Output: (model, train_metrics, val_metrics, test_metrics)
+```
+
+#### `build_svr_model(hp, constrain_for_overfitting=False)`
+
+```
+Input:
+  - hp: Keras Tuner hyperparameters object
+  - constrain_for_overfitting: bool
+
+Hyperparameter search space:
+  Normal mode:
+    kernel:  Choice(['linear', 'rbf', 'poly'])
+    C:       Float(1e-3, 1e3, sampling='log')
+    gamma:   Float(1e-4, 1e1, sampling='log')  [rbf/poly only]
+    epsilon: Float(0.001, 1.0, sampling='log')
+    degree:  Int(2, 5)                          [poly only]
+
+  Constrained mode:
+    C:       Float(1e-3, 10, sampling='log')    ← restrict complexity
+    epsilon: Float(0.01, 1.0, sampling='log')   ← wider margin
+    kernel:  Choice(['linear', 'rbf'])          ← drop poly
+
+Output: sklearn.svm.SVR instance
+```
+
+#### `tune_svr_model(stock_symbol, x_train, y_train, x_val, y_val, max_trials, constrain_for_overfitting=False)`
+
+```
+Same pattern as tune_ridge_model above, but for SVR.
+  - DB caching with model_type='svr'
+  - Tuner: BayesianOptimization, up to svr_trials trials
+  - PredefinedSplit for validation
+
+Output: (model, train_metrics, val_metrics, test_metrics)
+```
+
+### 15.5 Changes to `train_and_validate_models()`
+
+#### New parameters:
+```python
+def train_and_validate_models(
+    ...,
+    # Existing params remain unchanged
+    # New params:
+    ridge_trials: int = 40,
+    ridge_retrain_increment: int = 10,
+    svr_trials: int = 40,
+    svr_retrain_increment: int = 10,
+):
+```
+
+#### New training blocks (insert after XGBoost block, before ensemble):
+
+```
+# ─── RIDGE TRAINING ───
+ridge_model = None
+ridge_overfitted = False
+ridge_constrained = False
+for ridge_attempt in range(max_retrains):
+    ridge_model, ridge_train_m, ridge_val_m, ridge_test_m = tune_ridge_model(
+        stock_symbol, x_train_df, y_train_unscaled,
+        x_val_df, y_val_unscaled, x_test_df, y_test_unscaled,
+        max_trials=ridge_trials, constrain=ridge_constrained
+    )
+    ridge_overfitted, ridge_score = detect_overfitting(
+        ridge_train_m, ridge_val_m, ridge_test_m,
+        "Ridge", overfitting_threshold
+    )
+    training_history['ridge'].append({...})
+    if not ridge_overfitted: break
+    ridge_constrained = True
+    ridge_trials += ridge_retrain_increment
+
+# ─── SVR TRAINING ───
+svr_model = None
+svr_overfitted = False
+svr_constrained = False
+for svr_attempt in range(max_retrains):
+    svr_model, svr_train_m, svr_val_m, svr_test_m = tune_svr_model(
+        stock_symbol, x_train_df, y_train_unscaled,
+        x_val_df, y_val_unscaled, x_test_df, y_test_unscaled,
+        max_trials=svr_trials, constrain=svr_constrained
+    )
+    svr_overfitted, svr_score = detect_overfitting(
+        svr_train_m, svr_val_m, svr_test_m,
+        "SVR", overfitting_threshold
+    )
+    training_history['svr'].append({...})
+    if not svr_overfitted: break
+    svr_constrained = True
+    svr_trials += svr_retrain_increment
+```
+
+#### Updated ensemble weight calculation:
+
+```python
+# Align Ridge/SVR predictions with sequence model (trim first time_steps-1)
+ridge_train_pred = ridge_model.predict(x_train_df.values)[time_steps-1:]
+ridge_val_pred   = ridge_model.predict(x_val_df.values)[time_steps-1:]
+ridge_test_pred  = ridge_model.predict(x_test_df.values)[time_steps-1:]
+
+svr_train_pred = svr_model.predict(x_train_df.values)[time_steps-1:]
+svr_val_pred   = svr_model.predict(x_val_df.values)[time_steps-1:]
+svr_test_pred  = svr_model.predict(x_test_df.values)[time_steps-1:]
+
+# Compute validation MSE for all 5 models (all in unscaled space)
+ridge_val_mse = mean_squared_error(y_val_aligned, ridge_val_pred)
+svr_val_mse   = mean_squared_error(y_val_aligned, svr_val_pred)
+
+# Inverse MSE weighting for 5 models
+inv_mse = {
+    seq_model_key: 1 / seq_val_mse,
+    'rf':    1 / rf_val_mse,
+    'xgb':   1 / xgb_val_mse,
+    'ridge': 1 / ridge_val_mse,
+    'svr':   1 / svr_val_mse,
+}
+total = sum(inv_mse.values())
+weights = {k: v / total for k, v in inv_mse.items()}
+
+# Zero out negligible weights (< MIN_ENSEMBLE_WEIGHT = 0.005)
+for name in list(weights.keys()):
+    if weights[name] < MIN_ENSEMBLE_WEIGHT:
+        weights[name] = 0.0
+remaining = sum(weights.values())
+if remaining > 0:
+    weights = {k: v / remaining for k, v in weights.items()}
+```
+
+#### Updated ensemble predictions:
+
+```python
+ensemble_train_pred = (
+    weights[seq_model_key] * seq_train_pred +
+    weights['rf']    * rf_train_pred +
+    weights['xgb']   * xgb_train_pred +
+    weights['ridge'] * ridge_train_pred +
+    weights['svr']   * svr_train_pred
+)
+# Same for val and test
+```
+
+#### Updated return dict:
+
+```python
+models = {
+    'sequence_model': sequence_model,
+    'sequence_model_type': seq_model_key,
+    'lstm': lstm_model if not use_tcn else None,
+    'tcn': tcn_model if use_tcn else None,
+    'rf': rf_model,
+    'xgb': xgb_model,
+    'ridge': ridge_model,    # ← NEW
+    'svr': svr_model,        # ← NEW
+    'ensemble_weights': weights  # Now includes 'ridge' and 'svr' keys
+}
+```
+
+### 15.6 Changes to `predict_future_price_changes()`
+
+The prediction function must be updated to use all 5 models:
+
+1. **Extract Ridge and SVR from model dict:**
+   ```python
+   ridge_model = model.get('ridge', None)
+   svr_model = model.get('svr', None)
+   ```
+
+2. **Get weights for all 5 models:**
+   ```python
+   ridge_weight = ensemble_weights.get('ridge', 0.0)
+   svr_weight = ensemble_weights.get('svr', 0.0)
+   ```
+
+3. **Generate predictions from Ridge and SVR in the day-by-day loop:**
+   ```python
+   # Inside the prediction loop, after RF and XGBoost predictions:
+   if ridge_model is not None:
+       forecast_ridge = ridge_model.predict(x_input_rf_df.values)[0]
+       forecast_ridge = np.clip(forecast_ridge, -MAX_DAILY_RETURN, MAX_DAILY_RETURN)
+   else:
+       forecast_ridge = 0.0
+       ridge_weight = 0.0
+
+   if svr_model is not None:
+       forecast_svr = svr_model.predict(x_input_rf_df.values)[0]
+       forecast_svr = np.clip(forecast_svr, -MAX_DAILY_RETURN, MAX_DAILY_RETURN)
+   else:
+       forecast_svr = 0.0
+       svr_weight = 0.0
+   ```
+
+4. **Update the ensemble combination:**
+   ```python
+   raw_ensemble = (
+       seq_weight   * forecast_seq +
+       rf_weight    * forecast_rf +
+       xgb_weight   * forecast_xgb +
+       ridge_weight * forecast_ridge +
+       svr_weight   * forecast_svr
+   )
+   ```
+
+5. **Update uncertainty estimation** to include Ridge/SVR variance:
+   ```python
+   ensemble_std = np.sqrt(
+       seq_weight**2   * forecast_seq_std**2 +
+       rf_weight**2    * (historical_std * 0.5)**2 +
+       xgb_weight**2   * (historical_std * 0.5)**2 +
+       ridge_weight**2 * (historical_std * 0.5)**2 +
+       svr_weight**2   * (historical_std * 0.5)**2
+   )
+   ```
+
+6. **Update print/log statements** to show all 5 model predictions.
+
+7. **Handle variable-model fallback** — the current code has a 2-model fallback path
+   (when XGBoost is `None`) that only uses the sequence model + RF.  With 5 models, any
+   subset may be `None` (e.g., SVR failed to converge, or Ridge was not yet trained).
+   The prediction loop must:
+   - Collect all available (non-`None`) models and their weights.
+   - Set the weight to 0 for any model that is `None`.
+   - Renormalize the remaining weights to sum to 1.0.
+   - Log which models are participating in each prediction.
+   This replaces the hard-coded 2-model vs 3-model branching with a generic N-model path.
+
+### 15.7 Changes to `model_trainer.py`
+
+```python
+# Update required_model_types to include ridge and svr
+training_needs = db_interactions.get_tickers_needing_training(
+    max_age_days=max_model_age_days,
+    required_model_types=['rf', 'xgb', 'ridge', 'svr', 'tcn' if use_tcn else 'lstm']
+)
+```
+
+### 15.8 Changes to `price_predictor.py`
+
+When rebuilding models from cached hyperparameters, also load and rebuild Ridge and SVR:
+
+```python
+ridge_hp = db_interactions.load_hyperparameters(ticker, 'ridge', max_age_days, num_features)
+svr_hp = db_interactions.load_hyperparameters(ticker, 'svr', max_age_days, num_features)
+```
+
+### 15.9 Changes to `db_interactions.py`
+
+- Update `invalidate_hyperparameters()` — already supports arbitrary model_type strings.
+- Update `save_hyperparameters()` — validation of model_type must include 'ridge' and 'svr'.
+- Update `load_hyperparameters()` — validation of model_type must include 'ridge' and 'svr'.
+
+### 15.10 Testing Requirements for Ridge & SVR Integration
+
+| Test | File | Validates |
+|---|---|---|
+| `test_build_ridge_model` | `test_model_definitions.py` | Ridge model creation with mock HP |
+| `test_build_ridge_constrained` | `test_model_definitions.py` | Overfitting constraints applied |
+| `test_build_svr_model` | `test_model_definitions.py` | SVR model creation with mock HP |
+| `test_build_svr_constrained` | `test_model_definitions.py` | Overfitting constraints applied |
+| `test_tune_ridge_model` | `test_model_tuning.py` | Full tuning on small dataset |
+| `test_tune_svr_model` | `test_model_tuning.py` | Full tuning on small dataset |
+| `test_ridge_hp_caching` | `test_model_tuning.py` | Save/load hyperparameters from DB |
+| `test_svr_hp_caching` | `test_model_tuning.py` | Save/load hyperparameters from DB |
+| `test_5_model_ensemble_weights` | `test_ensemble_weights.py` | 5-model inverse-MSE weighting |
+| `test_ensemble_zero_weight` | `test_ensemble_weights.py` | Negligible weights zeroed out |
+| `test_prediction_5_models` | `test_predict_future.py` | All 5 models used in prediction loop |
+| `test_prediction_missing_ridge` | `test_predict_future.py` | Graceful fallback if Ridge is None |
+| `test_prediction_missing_svr` | `test_predict_future.py` | Graceful fallback if SVR is None |
+| `test_db_model_type_enum` | `test_db_interactions.py` | 'ridge' and 'svr' accepted |
+| `test_required_model_types` | `test_model_trainer.py` | All 5 types in freshness check |
+
+### 15.11 Shared Model Integration Pattern (Applicable to All Sklearn Models)
+
+The Ridge and SVR integration in §15 is **not unique** — it follows the exact same
+contract that the existing Random Forest and XGBoost models already use.  Any future
+sklearn-based model can be added to the ensemble by implementing this same pattern.
+
+**Every sklearn-based model (RF, XGBoost, Ridge, SVR, and any future additions) must
+implement all six components below.  The only things that change per model are the
+hyperparameter search space and the scikit-learn class being instantiated.**
+
+#### Component 1: `build_{model}_model(hp, constrain_for_overfitting=False)`
+
+Every model must provide a builder function that:
+- Accepts a Keras Tuner `hp` object and a `constrain_for_overfitting` boolean.
+- Defines the full hyperparameter search space using `hp.Choice()`, `hp.Float()`,
+  `hp.Int()`, `hp.Boolean()`.
+- When `constrain_for_overfitting=True`, **narrows** the search space toward stronger
+  regularization / simpler models (e.g., lower `max_depth`, higher `alpha`, lower `C`).
+- Returns a **configured but unfitted** sklearn estimator instance.
+
+This pattern is already implemented for:
+- `build_random_forest_model()` (line 205 of `ml_builder.py`)
+- `build_xgboost_model()` (line 486 of `ml_builder.py`)
+
+And must be implemented identically for Ridge and SVR (see §15.4).
+
+#### Component 2: `tune_{model}_model(stock_symbol, x_train, y_train, x_val, y_val, ...)`
+
+Every model must provide a tuning function that:
+1. **Checks DB cache first** — calls `db_interactions.load_hyperparameters(ticker, model_type)`.
+   If cached HPs exist and are fresh, rebuild the model from them and skip tuning.
+2. **Runs Keras Tuner** — wraps the `build_{model}_model` function in a `Sklearn` tuner
+   with `BayesianOptimization` or `Hyperband` oracle.
+3. **Saves best HPs to DB** — calls `db_interactions.save_hyperparameters(ticker, model_type, ...)`.
+4. **Fits the final model** on training data.
+5. **Cleans up tuning directory** after completion.
+6. Returns the fitted model.
+
+This pattern is already implemented for:
+- `tune_random_forest_model()` (line 255 of `ml_builder.py`)
+- `tune_xgboost_model()` (line 486+ of `ml_builder.py`)
+
+The existing `tune_svm_model()` (line 783) does **NOT** follow this pattern — it lacks
+DB caching, overfitting constraints, and temp-directory cleanup.  It must be refactored.
+
+#### Component 3: Overfitting Detection + Retrain Loop
+
+Inside `train_and_validate_models()`, every model is wrapped in:
+```
+for attempt in range(max_retrains):
+    model = tune_{model}_model(..., constrain=constrain_flag)
+    metrics = evaluate(model, train/val/test)
+    overfitted, score = detect_overfitting(train_m, val_m, test_m, ...)
+    if not overfitted: break
+    constrain_flag = True
+    trials += retrain_increment
+```
+This loop is identical for RF, XGBoost, Ridge, and SVR.  Only the function name and
+trial-increment variable change.
+
+#### Component 4: Ensemble Weight Calculation
+
+After all models are trained, each model's validation MSE (in **unscaled** space) is
+used to compute inverse-MSE weights:
+```python
+weight_i = (1 / val_mse_i) / sum(1 / val_mse_j for all models j)
+```
+Negligible weights (< `MIN_ENSEMBLE_WEIGHT`) are zeroed and the remainder renormalized.
+This logic is model-agnostic — adding a new model just means adding another entry to the
+inverse-MSE dictionary.
+
+#### Component 5: Prediction Integration
+
+In `predict_future_price_changes()`, every sklearn model:
+1. Receives the same 2D feature vector (`x_input_rf_df.values`).
+2. Calls `model.predict(...)` to get a scalar prediction.
+3. Clips the prediction to `[-MAX_DAILY_RETURN, +MAX_DAILY_RETURN]`.
+4. Contributes to the weighted ensemble sum.
+5. Falls back gracefully (weight=0, prediction=0) if the model is `None`.
+
+#### Component 6: DB Hyperparameter Storage
+
+Every model must:
+1. Register its `model_type` string in the `model_hyperparameters` ENUM.
+2. Serialize hyperparameters as JSON via `save_hyperparameters()`.
+3. Deserialize and rebuild via `load_hyperparameters()`.
+4. Support `invalidate_hyperparameters()` when retraining is forced.
+
+#### Summary: Adding a New Sklearn Model to the Ensemble
+
+To add any new sklearn model (e.g., `ElasticNet`, `GradientBoostingRegressor`, `KNN`):
+
+1. Add `'{model_type}'` to the `model_hyperparameters` ENUM in the database.
+2. Implement `build_{model}_model(hp, constrain_for_overfitting)`.
+3. Implement `tune_{model}_model(...)` following the DB-cache + tuner + cleanup pattern.
+4. Add a training loop block in `train_and_validate_models()`.
+5. Add the model to the inverse-MSE weight calculation.
+6. Add the model to the `predict_future_price_changes()` day-by-day loop.
+7. Add `'{model_type}'` to `required_model_types` in `model_trainer.py`.
+8. Add `'{model_type}'` to `db_interactions.py` validation lists.
+9. Add the model key to the `models` return dict and `ensemble_weights` sub-dict.
+10. Write tests covering build, tune, cache, ensemble weight, and prediction.
+
+---
+
+## 16. Docker-Based Development
+
+If **Docker Desktop** (or Docker Engine on Linux) is available, the entire system —
+MySQL, Python environments, and the Streamlit GUI — can be containerized.  This
+eliminates manual prerequisite installation and provides reproducible builds.
+
+> **Can an AI agent use Docker?**  Yes — any AI agent with shell access (e.g., GitHub
+> Copilot Workspace, Cursor, Codespaces, or a local agent with terminal access) can
+> execute `docker build`, `docker compose up`, and `docker exec` commands just like a
+> developer.  The AI does not need Docker Desktop's GUI — only the Docker CLI.
+
+### 16.1 Container Architecture
+
+```
+docker-compose.yml
+├── db           (MySQL 8.0)     ─ port 3306
+├── app-cpu      (Python 3.12)   ─ data pipeline + Streamlit + sklearn models
+└── app-gpu      (Python 3.10)   ─ LSTM/TCN training (nvidia runtime)
+```
+
+### 16.2 Dockerfile — CPU Application (`Dockerfile.cpu`)
+
+```dockerfile
+FROM python:3.12-slim
+
+# System dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    default-mysql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY requirements_PY_3_12.txt .
+RUN pip install --no-cache-dir -r requirements_PY_3_12.txt
+
+COPY . .
+
+# Streamlit port
+EXPOSE 8501
+
+# Default: run Streamlit GUI
+CMD ["streamlit", "run", "streamlit_app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+```
+
+### 16.3 Dockerfile — GPU Application (`Dockerfile.gpu`)
+
+```dockerfile
+FROM nvidia/cuda:11.2.2-cudnn8-runtime-ubuntu20.04
+
+# Avoid interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Python 3.10 + system deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common git default-mysql-client \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y python3.10 python3.10-venv python3.10-dev python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3.10 -m pip install --upgrade pip
+
+WORKDIR /app
+COPY requirements_PY_3_10.txt .
+RUN python3.10 -m pip install --no-cache-dir -r requirements_PY_3_10.txt
+
+COPY . .
+
+# Default: run model trainer
+CMD ["python3.10", "model_trainer.py"]
+```
+
+### 16.4 Docker Compose (`docker-compose.yml`)
+
+```yaml
+version: "3.9"
+
+services:
+  db:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASS:-rootpassword}
+      MYSQL_DATABASE: stock_portefolio_builder
+      MYSQL_USER: ${DB_USER:-stock_user}
+      MYSQL_PASSWORD: ${DB_PASS:-stock_pass}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./database_files/ddl.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./database_files/migrate_add_quarterly_tables.sql:/docker-entrypoint-initdb.d/02-quarterly.sql
+      - ./database_files/migrate_add_hyperparameter_storage.sql:/docker-entrypoint-initdb.d/03-hyperparams.sql
+      - ./database_files/migrate_add_prediction_mc_tables.sql:/docker-entrypoint-initdb.d/04-predictions.sql
+      - ./database_files/migrate_add_financial_date_used.sql:/docker-entrypoint-initdb.d/05-findate.sql
+      - ./database_files/migrate_add_quarterly_fetch_metadata.sql:/docker-entrypoint-initdb.d/06-quarterly-meta.sql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app-cpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.cpu
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_USER: ${DB_USER:-stock_user}
+      DB_PASS: ${DB_PASS:-stock_pass}
+      DB_NAME: stock_portefolio_builder
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./:/app
+
+  app-gpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_USER: ${DB_USER:-stock_user}
+      DB_PASS: ${DB_PASS:-stock_pass}
+      DB_NAME: stock_portefolio_builder
+    volumes:
+      - ./:/app
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    profiles:
+      - gpu   # Only started with: docker compose --profile gpu up app-gpu
+
+volumes:
+  mysql_data:
+```
+
+### 16.5 Running with Docker
+
+```bash
+# 1. Start MySQL + CPU app (Streamlit + sklearn models)
+docker compose up -d db app-cpu
+
+# 2. Run data pipeline inside the CPU container
+docker compose exec app-cpu python stock_orchestrator.py
+
+# 3. Run model training (CPU-only models: RF, XGBoost, Ridge, SVR)
+docker compose exec app-cpu python model_trainer.py --use-lstm  # Uses CPU LSTM fallback
+
+# 4. (Optional) Run GPU model training
+docker compose --profile gpu up -d app-gpu
+docker compose exec app-gpu python3.10 model_trainer.py
+
+# 5. Run price predictions
+docker compose exec app-cpu python price_predictor.py
+
+# 6. Build portfolio
+docker compose exec app-cpu python portfolio_builder.py
+
+# 7. Access Streamlit GUI
+# Open http://localhost:8501 in your browser
+```
+
+### 16.6 What Changes in Docker Mode
+
+| Area | Without Docker | With Docker |
+|---|---|---|
+| **MySQL** | Install + configure manually | Auto-started container, schema auto-loaded |
+| **Python envs** | Two conda envs to create | Two Dockerfiles handle it |
+| **CUDA / cuDNN** | Manual driver + toolkit install | NVIDIA base image includes them |
+| **`dev.env`** | Points to `localhost` | Points to `db` (Docker service name) |
+| **Streamlit** | `streamlit run ...` | Runs inside container, exposed on `:8501` |
+| **File paths** | Absolute local paths | Volume-mounted at `/app` |
+| **GPU access** | Native GPU access | Requires `nvidia-docker` / `nvidia-container-toolkit` |
+
+### 16.7 Docker Prerequisites
+
+| Requirement | Version / Notes |
+|---|---|
+| **Docker Desktop** | 4.0+ (Windows/Mac) or **Docker Engine** 20.10+ (Linux) |
+| **Docker Compose** | V2 (included in Docker Desktop; `docker compose` not `docker-compose`) |
+| **NVIDIA Container Toolkit** | *(GPU only)* — enables `--gpus` flag in Docker |
+| **Disk space** | ~8 GB for images (MySQL + Python + CUDA) |
+
+> **Important:** On Windows, Docker Desktop must be set to use **WSL 2 backend** for
+> Linux containers.  GPU passthrough to Docker requires WSL 2 + NVIDIA Container Toolkit.
+
+### 16.8 Build Instructions Adjustments for Docker
+
+When using Docker, the following sections change:
+
+- **§0 Prerequisites** — only Docker (+ NVIDIA Container Toolkit for GPU) is needed.
+  MySQL, conda, Python, CUDA, and cuDNN are all handled by containers.
+- **Phase 0** — replace conda environment creation with `docker compose build`.
+  Replace manual MySQL setup with `docker compose up db`.
+- **`dev.env`** — set `DB_HOST=db` instead of `DB_HOST=localhost`.
+- **All `python` commands** — prefix with `docker compose exec app-cpu` or `app-gpu`.
+
+The rest of the build instructions (Phase 1–5, §14, §15) remain unchanged — the code
+itself is the same regardless of whether it runs in Docker or natively.
+
+---
+
+## 17. Prerequisite Verification Prompts
+
+When an AI agent or developer begins working with these instructions, they should
+systematically verify that all prerequisites are met **before writing any code**.
+
+The following checklists serve as **interactive prompts** — an AI agent should ask the
+user to confirm each item, or attempt to verify them automatically via shell commands.
+
+### 17.1 Core Environment Checklist
+
+> **Prompt for AI:** Before starting any phase, run the following verification commands
+> and report the results.  If any check fails, stop and help the user resolve it before
+> proceeding.
+
+```bash
+# ─── CORE TOOLS ───
+echo "=== Git ==="
+git --version || echo "❌ Git not found — install from https://git-scm.com"
+
+echo "=== Python ==="
+python3 --version || python --version || echo "❌ Python not found"
+
+echo "=== pip ==="
+pip --version || echo "❌ pip not found"
+
+echo "=== conda/mamba (if not using Docker) ==="
+conda --version 2>/dev/null || mamba --version 2>/dev/null || echo "⚠️  conda/mamba not found (OK if using Docker)"
+
+echo "=== Docker (if using containerized setup) ==="
+docker --version 2>/dev/null || echo "⚠️  Docker not found (OK if using native setup)"
+docker compose version 2>/dev/null || echo "⚠️  Docker Compose V2 not found"
+```
+
+### 17.2 Database Checklist
+
+> **Prompt for AI:** Verify MySQL is accessible.  If using Docker, verify the container
+> is running.  If native, verify the service is started.
+
+```bash
+# ─── NATIVE MYSQL ───
+echo "=== MySQL Server ==="
+mysql --version || echo "❌ MySQL client not found"
+mysql -u root -p -e "SELECT 1;" 2>/dev/null && echo "✅ MySQL connection OK" || echo "❌ Cannot connect to MySQL"
+
+# ─── DOCKER MYSQL ───
+docker compose ps db 2>/dev/null | grep -q "running" && echo "✅ MySQL container running" || echo "❌ MySQL container not running — run: docker compose up -d db"
+```
+
+### 17.3 GPU Checklist (Optional)
+
+> **Prompt for AI:** Only run these checks if the user wants GPU-accelerated LSTM/TCN
+> training.  All sklearn models (RF, XGBoost, Ridge, SVR) run on CPU.
+
+```bash
+echo "=== NVIDIA GPU ==="
+nvidia-smi || echo "❌ No NVIDIA GPU detected (sklearn models will still work on CPU)"
+
+echo "=== CUDA Toolkit ==="
+nvcc --version || echo "❌ CUDA toolkit not installed"
+
+echo "=== cuDNN ==="
+ldconfig -p | grep cudnn || echo "❌ cuDNN not found in library path"
+
+# Docker GPU check
+docker run --rm --gpus all nvidia/cuda:11.2.2-base-ubuntu20.04 nvidia-smi 2>/dev/null \
+    && echo "✅ Docker GPU passthrough OK" \
+    || echo "❌ Docker GPU passthrough failed — install nvidia-container-toolkit"
+```
+
+### 17.4 Python Dependencies Checklist
+
+> **Prompt for AI:** After creating the environment (conda or Docker), verify critical
+> packages are importable.
+
+```bash
+# ─── Python 3.12 environment ───
+python3 -c "
+import sys
+print(f'Python: {sys.version}')
+
+checks = {
+    'pandas': 'pandas',
+    'numpy': 'numpy',
+    'sklearn': 'sklearn',
+    'xgboost': 'xgboost',
+    'yfinance': 'yfinance',
+    'streamlit': 'streamlit',
+    'sqlalchemy': 'sqlalchemy',
+    'mysql.connector': 'mysql.connector',
+    'dotenv': 'dotenv',
+    'scipy': 'scipy',
+    'plotly': 'plotly',
+}
+
+for name, module in checks.items():
+    try:
+        __import__(module)
+        print(f'  ✅ {name}')
+    except ImportError:
+        print(f'  ❌ {name} — run: pip install {name}')
+"
+
+# ─── Python 3.10 environment (GPU only) ───
+# conda activate stock_env_gpu  (or docker compose exec app-gpu)
+python3 -c "
+import sys
+print(f'Python: {sys.version}')
+
+gpu_checks = {
+    'tensorflow': 'tensorflow',
+    'keras_tuner': 'keras_tuner',
+    'numpy': 'numpy',
+    'pandas': 'pandas',
+    'sklearn': 'sklearn',
+    'xgboost': 'xgboost',
+}
+
+for name, module in gpu_checks.items():
+    try:
+        __import__(module)
+        print(f'  ✅ {name}')
+    except ImportError:
+        print(f'  ❌ {name}')
+
+# TensorFlow GPU check
+try:
+    import tensorflow as tf
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        print(f'  ✅ TensorFlow GPU: {len(gpus)} device(s)')
+    else:
+        print(f'  ⚠️  TensorFlow: no GPU detected (will use CPU)')
+except Exception as e:
+    print(f'  ❌ TensorFlow GPU check failed: {e}')
+"
+```
+
+### 17.5 Database Schema Checklist
+
+> **Prompt for AI:** After database setup, verify all required tables exist.
+
+```bash
+mysql -u ${DB_USER:-stock_user} -p${DB_PASS} -h ${DB_HOST:-localhost} \
+    ${DB_NAME:-stock_portefolio_builder} -e "
+SELECT
+  CASE
+    WHEN COUNT(*) = 17 THEN '✅ All 17 expected tables found'
+    ELSE CONCAT('❌ Only ', COUNT(*), ' tables found — expected 17')
+  END AS status
+FROM information_schema.TABLES
+WHERE TABLE_SCHEMA = '${DB_NAME:-stock_portefolio_builder}';
+
+-- List all tables
+SELECT TABLE_NAME FROM information_schema.TABLES
+WHERE TABLE_SCHEMA = '${DB_NAME:-stock_portefolio_builder}'
+ORDER BY TABLE_NAME;
+
+-- Verify model_type ENUM includes ridge and svr
+SELECT COLUMN_TYPE
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = '${DB_NAME:-stock_portefolio_builder}'
+  AND TABLE_NAME = 'model_hyperparameters'
+  AND COLUMN_NAME = 'model_type';
+"
+```
+
+### 17.6 End-to-End Smoke Test
+
+> **Prompt for AI:** After all prerequisites are verified, run a minimal smoke test
+> with a single ticker to confirm the full pipeline works before processing hundreds.
+
+```bash
+# 1. Fetch data for a single well-known ticker
+python stock_orchestrator.py --ticker AAPL
+
+# 2. Train models for that ticker only
+python model_trainer.py --max-stocks 1
+
+# 3. Generate predictions
+python price_predictor.py --max-stocks 1
+
+# 4. Verify data landed in DB
+mysql -u ${DB_USER} -p${DB_PASS} -h ${DB_HOST} ${DB_NAME} -e "
+SELECT 'stock_price_data' AS tbl, COUNT(*) AS rows FROM stock_price_data WHERE ticker='AAPL'
+UNION ALL
+SELECT 'model_hyperparameters', COUNT(*) FROM model_hyperparameters WHERE ticker='AAPL'
+UNION ALL
+SELECT 'stock_predictions', COUNT(*) FROM stock_predictions WHERE ticker='AAPL';
+"
+
+# 5. Start Streamlit and confirm it loads
+streamlit run streamlit_app.py &
+sleep 5
+curl -s http://localhost:8501 | head -5 && echo "✅ Streamlit is running" || echo "❌ Streamlit failed to start"
+```
+
+### 17.7 When to Use These Prompts
+
+| Situation | Which Checklists |
+|---|---|
+| **Fresh clone of repo** | All (§17.1 → §17.6) |
+| **Adding a new model to ensemble** | §17.4 (deps) + §17.5 (ENUM check) |
+| **Setting up Docker for first time** | §17.1 (Docker checks) + §17.2 (Docker MySQL) + §17.3 (GPU if needed) |
+| **Switching from native to Docker** | §17.1 + §17.2 + update `dev.env` |
+| **CI/CD pipeline setup** | §17.1 + §17.4 + §17.5 (automated, non-interactive) |
+| **After upgrading Python/TF version** | §17.4 + §17.3 |
+
+---
+
+## 18. Beta Values — Stock vs Market Index
+
+### 18.1 Overview
+
+Beta measures a stock's sensitivity to market movements relative to a benchmark index.
+A beta of 1.0 means the stock moves with the market; > 1 means more volatile; < 1 means
+less volatile; < 0 means inverse correlation.
+
+The system calculates **rolling beta** for each stock against **19 market indices** over
+three time windows (60-day, 120-day, 252-day) plus correlation and R-squared statistics.
+
+### 18.2 Supported Indices
+
+| Index Code | yfinance Symbol | Market |
+|---|---|---|
+| `SP500` | `^GSPC` | S&P 500 (US) |
+| `NASDAQ100` | `^NDX` | NASDAQ-100 (US) |
+| `DOW30` | `^DJI` | Dow Jones (US) |
+| `C25` | `^OMXC25` | OMX Copenhagen 25 (DK) |
+| `DAX40` | `^GDAXI` | DAX 40 (DE) |
+| `CAC40` | `^FCHI` | CAC 40 (FR) |
+| `FTSE100` | `^FTSE` | FTSE 100 (UK) |
+| `AEX25` | `^AEX` | AEX 25 (NL) |
+| `OMX30` | `^OMX` | OMX Stockholm 30 (SE) |
+| `IBEX35` | `^IBEX` | IBEX 35 (ES) |
+| `OMXH25` | `^OMXH25` | OMX Helsinki 25 (FI) |
+| `STOXX600` | `^STOXX` | STOXX Europe 600 |
+| `STOXX50` | `^STOXX50E` | Euro Stoxx 50 |
+| `SMI` | `^SSMI` | Swiss Market Index (CH) |
+| `FTSEMIB` | `FTSEMIB.MI` | FTSE MIB (IT) |
+| `BEL20` | `^BFX` | BEL 20 (BE) |
+| `ATX` | `^ATX` | Austrian Traded Index (AT) |
+| `OBX` | `OBX.OL` | OBX Index (NO) |
+| `PSI20` | `^PSI20` | PSI-20 (PT) |
+
+The mapping is stored in `stock_data_fetch.INDEX_BETA_SYMBOLS`.
+
+### 18.3 Database Schema — `stock_beta_data`
+
+```sql
+CREATE TABLE IF NOT EXISTS stock_beta_data (
+  date          DATE NOT NULL,
+  ticker        VARCHAR(255) NOT NULL,
+  index_code    VARCHAR(50) NOT NULL,       -- e.g., 'SP500', 'C25'
+  index_symbol  VARCHAR(50),                -- e.g., '^GSPC'
+  beta_60d      FLOAT,                      -- 60-day rolling beta
+  beta_120d     FLOAT,                      -- 120-day rolling beta
+  beta_252d     FLOAT,                      -- 252-day rolling beta (≈1 year)
+  correlation_252d FLOAT,                   -- 252-day correlation with index
+  r_squared_252d   FLOAT,                   -- R² (variance explained)
+  last_updated  TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (date, ticker, index_code),
+  FOREIGN KEY (ticker) REFERENCES stock_info_data(ticker) ON DELETE CASCADE
+);
+```
+
+Migration file: `database_files/migrate_add_stock_beta.sql`.
+
+### 18.4 Calculation Pipeline
+
+**`technical_indicators.calculate_beta(stock_df, index_df)`**
+
+1. Inner-joins stock and index DataFrames on `date` column.
+2. Computes daily percentage returns for both.
+3. For each window (60, 120, 252 trading days):
+   - `beta = Cov(stock_return, index_return) / Var(index_return)`.
+4. Computes 252-day rolling correlation and R-squared.
+5. Returns DataFrame: `date, beta_60d, beta_120d, beta_252d, correlation_252d, r_squared_252d`.
+
+**`stock_data_fetch.calculate_and_export_beta(stock_ticker, ...)`**
+
+1. Loads stock price data (from DB or passed DataFrame).
+2. For each index in `INDEX_BETA_SYMBOLS` (or specified subset):
+   a. Downloads index price history via `yf.download()`.
+   b. Calls `calculate_beta()`.
+   c. Adds metadata: `ticker`, `index_code`, `index_symbol`.
+   d. Exports to DB via `db_interactions.export_stock_beta_data()`.
+3. Returns `{index_code: latest_beta_252d}` dict.
+
+### 18.5 Database Functions (`db_interactions.py`)
+
+| Function | Purpose |
+|---|---|
+| `export_stock_beta_data(beta_df)` | UPSERT beta records (delete range + insert). |
+| `import_stock_beta_data(ticker, index_code=None, amount=1)` | Get latest beta data. If `index_code` is None, returns latest for all indices. |
+| `get_available_beta_indices(ticker=None)` | List distinct index codes that have beta data. |
+
+### 18.6 GUI Integration
+
+**Stock Explorer** (`pages/3_Stock_Explorer.py`):
+- **Beta section** in the Oversigt (Overview) tab, after the Nøgletal (Key Ratios) section.
+- Benchmark index dropdown — populated from `gui_data.get_available_beta_indices(ticker)`.
+- Displays 5 metrics: Beta (60d), Beta (120d), Beta (1Y), Correlation, R².
+- Interpretive label:
+  - β > 1.5 → ⚡ **High beta**
+  - β > 1.0 → 📈 **Above-market beta**
+  - β > 0.5 → 🛡️ **Defensive**
+  - β > 0   → 🏠 **Very defensive**
+  - β ≤ 0   → 🔄 **Negative beta**
+- Expandable "Compare across all indices" table.
+
+**GUI data layer** (`gui_data.py`):
+- `get_stock_beta(ticker, index_code=None)` — cached with `st.cache_data`.
+- `get_available_beta_indices(ticker=None)` — cached with `st.cache_data`.
+
+### 18.7 Use in ML Pipeline (Future)
+
+Beta values can be incorporated as features in the ML prediction pipeline by:
+1. Joining `stock_beta_data.beta_252d` onto the stock price dataset used for training.
+2. Adding `beta_252d` (for a chosen reference index) as a feature column in
+   `split_dataset.dataset_train_test_split()`.
+3. The `dimension_reduction.feature_selection_rf()` step will automatically evaluate
+   whether beta has predictive power for each stock.
+
+---
+
+## 19. Country-Specific Sharpe Ratio
+
+### 19.1 Overview
+
+The Sharpe ratio measures risk-adjusted return:
+
+```
+Sharpe = (Portfolio Return − Risk-Free Rate) / Portfolio Volatility
+```
+
+Previously the system used a hardcoded 4% risk-free rate (`DEFAULT_RISK_FREE_RATE`).
+Now users can select a **country** from the Portfolio Builder interface, and the system
+uses that country's approximate 10-year government bond yield as the risk-free rate.
+
+### 19.2 Supported Countries
+
+| Country | Rate | Currency | Bond |
+|---|---|---|---|
+| Australia | 4.2% | AUD | 10Y Australian Gov Bond |
+| Austria | 2.9% | EUR | 10Y Austrian Gov Bond |
+| Belgium | 3.0% | EUR | 10Y Belgian OLO |
+| Canada | 3.4% | CAD | 10Y Canadian Gov Bond |
+| Denmark | 2.8% | DKK | 10Y Danish Gov Bond |
+| Finland | 3.0% | EUR | 10Y Finnish Gov Bond |
+| France | 3.1% | EUR | 10Y French OAT |
+| Germany | 2.5% | EUR | 10Y German Bund |
+| Italy | 3.8% | EUR | 10Y Italian BTP |
+| Japan | 1.0% | JPY | 10Y JGB |
+| Netherlands | 2.7% | EUR | 10Y Dutch Gov Bond |
+| Norway | 3.5% | NOK | 10Y Norwegian Gov Bond |
+| Portugal | 3.1% | EUR | 10Y Portuguese OT |
+| Spain | 3.3% | EUR | 10Y Spanish Bono |
+| Sweden | 2.7% | SEK | 10Y Swedish Gov Bond |
+| Switzerland | 0.8% | CHF | 10Y Swiss Confed Bond |
+| United Kingdom | 4.1% | GBP | 10Y UK Gilt |
+| United States | 4.3% | USD | 10Y US Treasury |
+
+Stored in `portfolio_config.COUNTRY_RISK_FREE_RATES`.
+
+### 19.3 Configuration (`portfolio_config.py`)
+
+```python
+# Dict structure
+COUNTRY_RISK_FREE_RATES: Dict[str, Dict] = {
+    "Denmark": {"rate": 0.028, "currency": "DKK", "bond": "10Y Danish Gov Bond"},
+    # ... 17 more countries
+}
+
+# Sorted country names for dropdowns
+COUNTRY_NAMES: List[str] = sorted(COUNTRY_RISK_FREE_RATES.keys())
+
+# Lookup function with fallback
+def get_risk_free_rate(country: str = None) -> float:
+    """Returns country rate or DEFAULT_RISK_FREE_RATE (4%) if country is None/unknown."""
+```
+
+### 19.4 Data Flow
+
+```
+Portfolio Builder sidebar
+  ├─ Country dropdown  →  get_risk_free_rate(country)  →  risk_free_rate
+  │
+  └─ Build button clicked
+       └─ efficient_frontier.optimize_portfolio(
+              price_df=...,
+              risk_free_rate=risk_free_rate,  ← country-specific
+              ...
+          )
+          ├─ find_optimal_weights(..., risk_free_rate)
+          │    └─ _neg_sharpe(weights, mean_returns, cov_matrix, risk_free_rate)
+          │         └─ Sharpe = (Return − risk_free_rate) / Volatility
+          └─ returns {sharpe_ratio, return, volatility, weights}
+               └─ Stored in session state + DB (portfolio_runs table)
+```
+
+### 19.5 GUI Integration
+
+**Portfolio Builder** (`pages/2_Portfolio_Builder.py`):
+- Sidebar → "Risk-Free Rate" section with country dropdown.
+- Options: "Default (4.0%)" + 18 country names (sorted alphabetically).
+- Shows bond name, currency, and rate when a country is selected.
+- The selected `risk_free_rate` is passed to `efficient_frontier.optimize_portfolio()`.
+- Session state stores `last_risk_free_rate` and `last_risk_free_country` for display.
+- Results section shows: "Sharpe ratio calculated with **{country}** risk-free rate: **{rate}**".
+
+**Dashboard** (`pages/1_Dashboard.py`):
+- Sharpe Ratio KPI metric includes a `help` tooltip: "Country-specific risk-free rate
+  can be set in Portfolio Builder."
+
+### 19.6 Maintaining Risk-Free Rates
+
+The rates in `COUNTRY_RISK_FREE_RATES` are approximate static values. To keep them current:
+
+1. **Manual update**: Edit `portfolio_config.py` periodically (e.g., quarterly).
+2. **Dynamic fetch (future)**: Could be extended to fetch live yields from an API
+   (e.g., FRED for US Treasury, ECB for Euro area bonds).
+
+### 19.7 Testing
+
+- Verify `get_risk_free_rate("Denmark")` returns `0.028`.
+- Verify `get_risk_free_rate(None)` returns `DEFAULT_RISK_FREE_RATE` (0.04).
+- Verify `get_risk_free_rate("Nonexistent")` returns `DEFAULT_RISK_FREE_RATE`.
+- Verify `COUNTRY_NAMES` is sorted.
+- Verify that changing the risk-free rate passed to `optimize_portfolio()` changes the
+  resulting `sharpe_ratio` in the output dict.
+
+---
+
+## Summary
+
+This document provides complete, unambiguous instructions for building or extending the
+Stock Portfolio Builder.  The key additions beyond the existing README are:
+
+1. **Prerequisites** — all non-Python requirements listed explicitly.
+2. **Architecture diagram** — visual overview of the 3-phase pipeline.
+3. **Data model** — ER diagram with all tables and relationships.
+4. **Ridge & SVR integration** — complete specification for expanding the ensemble from
+   3 models to 5 models, including hyperparameter tuning, overfitting detection, DB
+   schema changes, ensemble weighting, prediction updates, and testing.
+5. **Shared model integration pattern** — the 6-component contract that all sklearn models
+   must follow, extracted from the Ridge/SVR spec to make adding future models trivial.
+6. **Testing standards** — directory structure, coverage targets, fixture requirements.
+7. **Error handling & logging** — replace `print()` with `logging`, structured exceptions.
+8. **Configuration management** — centralized `pipeline_config.py` with all magic numbers.
+9. **ML module splitting** — decompose `ml_builder.py` into 8 focused modules.
+10. **Data validation contracts** — exact DataFrame schemas at each boundary.
+11. **Idempotency requirements** — every step safely re-runnable.
+12. **Docker-based development** — complete containerization with `docker-compose.yml`,
+    Dockerfiles for CPU and GPU, and adjusted workflow instructions.
+13. **Prerequisite verification prompts** — interactive checklists that AI agents and
+    developers can use to verify the environment is ready before writing code.
+14. **Beta values** — rolling beta (60d, 120d, 252d) for every stock against 19 market
+    indices, stored in `stock_beta_data`, displayed in Stock Explorer with index selector.
+15. **Country-specific Sharpe ratio** — 18 countries with government bond yields as
+    risk-free rates, selectable in Portfolio Builder sidebar, used by efficient frontier.

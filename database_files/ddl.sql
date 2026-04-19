@@ -660,6 +660,37 @@ CREATE TABLE IF NOT EXISTS `index_membership` (
 
 
 -- ============================================
+-- SECTION 7A: STOCK BETA DATA
+-- ============================================
+-- Rolling beta values for each stock against multiple market indices.
+-- Beta measures a stock's sensitivity to market movements.
+
+CREATE TABLE IF NOT EXISTS `stock_beta_data` (
+  `date` DATE NOT NULL COMMENT 'Calculation date',
+  `ticker` VARCHAR(255) NOT NULL COMMENT 'Stock ticker symbol',
+  `index_code` VARCHAR(50) NOT NULL COMMENT 'Benchmark index code (e.g., SP500, C25, DAX40)',
+  `index_symbol` VARCHAR(50) COMMENT 'yfinance symbol for the index (e.g., ^GSPC, ^GDAXI)',
+
+  -- Beta values over different lookback windows
+  `beta_60d` FLOAT COMMENT '60-day rolling beta (approx 3 months)',
+  `beta_120d` FLOAT COMMENT '120-day rolling beta (approx 6 months)',
+  `beta_252d` FLOAT COMMENT '252-day rolling beta (approx 1 year)',
+
+  -- Supporting statistics
+  `correlation_252d` FLOAT COMMENT '252-day rolling correlation with index',
+  `r_squared_252d` FLOAT COMMENT '252-day R-squared (proportion of variance explained by index)',
+
+  `last_updated` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (`date`, `ticker`, `index_code`),
+  FOREIGN KEY (`ticker`) REFERENCES `stock_info_data`(`ticker`) ON DELETE CASCADE,
+  INDEX `idx_beta_ticker` (`ticker`),
+  INDEX `idx_beta_index` (`index_code`),
+  INDEX `idx_beta_date` (`date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Rolling beta values for stocks vs market indices';
+
+
+-- ============================================
 -- SECTION 7B: QUARTERLY FETCH METADATA TABLE
 -- ============================================
 -- Tracks when quarterly data was last fetched for each ticker
@@ -775,6 +806,9 @@ ORDER BY im.index_code, si.company_Name;
 --
 -- Optional Tables (not used by ML pipeline):
 --   - index_membership: Index constituent tracking (for future use)
+--
+-- Beta Data:
+--   - stock_beta_data: Rolling beta values (60d, 120d, 252d) for stocks vs market indices
 --
 -- Metadata Tables:
 --   - quarterly_fetch_metadata: Tracks quarterly data fetch timestamps for smart caching

@@ -441,6 +441,89 @@ def add_all_technical_indicators(df: pd.DataFrame,
     return df
 
 
+def calculate_beta(stock_df: pd.DataFrame, index_df: pd.DataFrame,
+                   price_col: str = 'close_Price',
+                   windows: list = None) -> pd.DataFrame:
+    """
+    Calculate rolling beta of a stock relative to a market index.
+    
+    Beta = Cov(stock_returns, index_returns) / Var(index_returns)
+    
+    Also calculates rolling correlation and R-squared.
+    
+    Args:
+        stock_df: DataFrame with stock price data (must contain 'date' and price_col)
+        index_df: DataFrame with index price data (must contain 'date' and price_col)
+        price_col: Name of the close price column
+        windows: List of rolling window sizes in trading days (default: [60, 120, 252])
+        
+    Returns:
+        DataFrame with columns: date, beta_60d, beta_120d, beta_252d,
+        correlation_252d, r_squared_252d
+        
+    Raises:
+        ValueError: If DataFrames are empty or missing required columns
+    """
+    if stock_df.empty or index_df.empty:
+        raise ValueError("Stock and index DataFrames cannot be empty")
+    
+    if price_col not in stock_df.columns:
+        raise ValueError(f"Column '{price_col}' not found in stock DataFrame")
+    
+    if price_col not in index_df.columns:
+        raise ValueError(f"Column '{price_col}' not found in index DataFrame")
+    
+    windows = windows or [60, 120, 252]
+    
+    # Ensure date columns are datetime
+    stock = stock_df[['date', price_col]].copy()
+    index = index_df[['date', price_col]].copy()
+    stock['date'] = pd.to_datetime(stock['date'])
+    index['date'] = pd.to_datetime(index['date'])
+    
+    # Merge on date (inner join — only dates where both have data)
+    merged = pd.merge(
+        stock.rename(columns={price_col: 'stock_price'}),
+        index.rename(columns={price_col: 'index_price'}),
+        on='date',
+        how='inner'
+    ).sort_values('date').reset_index(drop=True)
+    
+    if len(merged) < min(windows):
+        raise ValueError(
+            f"Not enough overlapping trading days ({len(merged)}) "
+            f"for minimum window size ({min(windows)})"
+        )
+    
+    # Calculate daily returns
+    merged['stock_return'] = merged['stock_price'].pct_change()
+    merged['index_return'] = merged['index_price'].pct_change()
+    
+    result = merged[['date']].copy()
+    
+    for window in windows:
+        col_name = f'beta_{window}d'
+        
+        # Rolling covariance and variance
+        cov = merged['stock_return'].rolling(window=window, min_periods=window).cov(
+            merged['index_return']
+        )
+        var = merged['index_return'].rolling(window=window, min_periods=window).var()
+        
+        # Beta = Cov(Rs, Rm) / Var(Rm)
+        result[col_name] = (cov / var).where(var > 0)
+    
+    # Correlation and R-squared using the largest window (252d)
+    max_window = max(windows)
+    corr = merged['stock_return'].rolling(window=max_window, min_periods=max_window).corr(
+        merged['index_return']
+    )
+    result[f'correlation_{max_window}d'] = corr
+    result[f'r_squared_{max_window}d'] = corr ** 2
+    
+    return result
+
+
 if __name__ == "__main__":
     # Demo with sample data
     print("Technical Indicators Module - Demo")
