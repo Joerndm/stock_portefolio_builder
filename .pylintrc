@@ -1,0 +1,10 @@
+[MASTER]
+# Modules that may not be installed in the CI environment (Python 3.10-only dependencies)
+# These are used by ml_builder.py, price_predictor.py, and model_trainer.py
+# but are not available in the Python 3.12 linting environment.
+ignored-modules=tensorflow,tensorflow.keras,tensorflow.keras.models,tensorflow.keras.layers,tensorflow.keras.optimizers,tensorflow.keras.callbacks,tensorflow.keras.regularizers,keras,keras.callbacks,keras_tuner,keras_tuner.tuners,xgboost,memory_profiler,psutil
+
+[MESSAGES CONTROL]
+# Disable duplicate-code check (R0801) as it flags shared constants/patterns
+# across files which is expected in this codebase.
+disable=duplicate-code
