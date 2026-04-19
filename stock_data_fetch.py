@@ -770,7 +770,7 @@ def _safe_growth(current, previous):
 # to the yfinance ticker symbols needed to download index price data.
 INDEX_BETA_SYMBOLS = {
     'SP500': '^GSPC',
-    'NASDAQ100': '^IXIC',
+    'NASDAQ100': '^NDX',
     'DOW30': '^DJI',
     'C25': '^OMXC25',
     'DAX40': '^GDAXI',

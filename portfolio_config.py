@@ -116,7 +116,7 @@ COUNTRY_RISK_FREE_RATES: Dict[str, Dict] = {
     "Norway": {"rate": 0.035, "currency": "NOK", "bond": "10Y Norwegian Gov Bond"},
     "Finland": {"rate": 0.030, "currency": "EUR", "bond": "10Y Finnish Gov Bond"},
     "Netherlands": {"rate": 0.027, "currency": "EUR", "bond": "10Y Dutch Gov Bond"},
-    "Switzerland": {"rate": 0.008, "currency": "CHF", "bond": "10Y Swiss Conf Bond"},
+    "Switzerland": {"rate": 0.008, "currency": "CHF", "bond": "10Y Swiss Confed Bond"},
     "Spain": {"rate": 0.033, "currency": "EUR", "bond": "10Y Spanish Bono"},
     "Italy": {"rate": 0.038, "currency": "EUR", "bond": "10Y Italian BTP"},
     "Belgium": {"rate": 0.030, "currency": "EUR", "bond": "10Y Belgian OLO"},

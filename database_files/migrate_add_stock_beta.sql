@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS `stock_beta_data` (
   `last_updated` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
   PRIMARY KEY (`date`, `ticker`, `index_code`),
-  FOREIGN KEY (`ticker`) REFERENCES `stock_info_data`(`ticker`),
+  FOREIGN KEY (`ticker`) REFERENCES `stock_info_data`(`ticker`) ON DELETE CASCADE,
   INDEX `idx_beta_ticker` (`ticker`),
   INDEX `idx_beta_index` (`index_code`),
   INDEX `idx_beta_date` (`date`)
