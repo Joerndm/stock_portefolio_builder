@@ -1,0 +1,11 @@
+[MASTER]
+# Modules that are not installed in the Python 3.12 CI environment.
+# These packages are only listed in requirements_PY_3_10.txt (the legacy ML/GPU stack)
+# and are used by ml_builder.py, price_predictor.py, and model_trainer.py.
+# memory_profiler and psutil are test-only dependencies not in any requirements file.
+ignored-modules=tensorflow,tensorflow.keras,tensorflow.keras.models,tensorflow.keras.layers,tensorflow.keras.optimizers,tensorflow.keras.callbacks,tensorflow.keras.regularizers,keras,keras.callbacks,keras_tuner,keras_tuner.tuners,xgboost,memory_profiler,psutil
+
+[MESSAGES CONTROL]
+# Disable duplicate-code check (R0801) as it flags shared constants/patterns
+# across files which is expected in this codebase.
+disable=duplicate-code
