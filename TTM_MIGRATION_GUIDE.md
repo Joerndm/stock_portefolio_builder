@@ -1,5 +1,11 @@
 # TTM Data Migration Guide
 
+> **⚠️ ARCHIVED (April 2026):** This migration is fully complete. All production code paths
+> now use TTM calculations with annual fallback. The core modules (`ttm_financial_calculator.py`,
+> `ml_data_integrity.py`, `stock_data_fetch.py`, `db_interactions.py`) and database schema
+> (quarterly tables, TTM ratio table) are integrated. This document is retained for historical
+> reference only — no action items remain.
+
 ## Overview
 
 This document describes the transition from annual financial data to TTM (Trailing Twelve Months) data for financial ratio calculations. The transition enables more current financial metrics while maintaining backward compatibility with existing annual-based data.

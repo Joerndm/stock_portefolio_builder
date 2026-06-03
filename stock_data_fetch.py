@@ -65,9 +65,12 @@ import datetime
 import logging
 import threading
 from dateutil.relativedelta import relativedelta
+import numpy as np
 import pandas as pd
 import yfinance as yf
 import pandas_ta as ta
+
+from financial_data_utils import calculate_available_annual_ratios, ensure_current_liabilities_column
 
 # Suppress yfinance HTTP error noise (401 Invalid Crumb, etc.)
 # Actual errors are still caught and handled by our retry logic
@@ -1191,14 +1194,10 @@ def fetch_stock_financial_data(stock_symbol = ""):
             balancesheet_df = balancesheet_df.reset_index()
             # Rename the index column to Date
             balancesheet_df = balancesheet_df.rename(columns={"index": "Date"})
+            balancesheet_df = ensure_current_liabilities_column(balancesheet_df)
             if _is_financial_sector:
                 if "Current Assets" not in balancesheet_df.columns:
                     balancesheet_df["Current Assets"] = 0.0
-                    # Safely rename Current Liabilities from available column
-                    if "Derivative Product Liabilities" in balancesheet_df.columns:
-                        balancesheet_df = balancesheet_df.rename(columns={"Derivative Product Liabilities": "Current Liabilities"})
-                    elif "Current Liabilities" not in balancesheet_df.columns:
-                        balancesheet_df["Current Liabilities"] = 0.0
                     for index, row in balancesheet_df.iterrows():
                         # Safely compute Current Assets from available columns
                         _cash = balancesheet_df.loc[index, "Cash And Cash Equivalents"] if "Cash And Cash Equivalents" in balancesheet_df.columns else 0
@@ -1285,6 +1284,8 @@ def fetch_stock_financial_data(stock_symbol = ""):
                             balancesheet_df.loc[index, "Quick Ratio growth"] = _safe_growth(balancesheet_df.iloc[index]["Quick Ratio"], balancesheet_df.iloc[index-1]["Quick Ratio"])
                             balancesheet_df.loc[index, "Debt to Equity growth"] = _safe_growth(balancesheet_df.iloc[index]["Debt to Equity"], balancesheet_df.iloc[index-1]["Debt to Equity"])
             else:
+                if "Current Assets" not in balancesheet_df.columns:
+                    balancesheet_df["Current Assets"] = 0.0
                 for index, row in balancesheet_df.iterrows():
                     balancesheet_df.loc[index, "Book Value"] = balancesheet_df.loc[index, "Total Equity Gross Minority Interest"]
                     balancesheet_df.loc[index, "Book Value per share"] = balancesheet_df.loc[index, "Total Equity Gross Minority Interest"] / income_stmt_df.loc[index, "Diluted Average Shares"]
@@ -1550,18 +1551,8 @@ def calculate_ratios(combined_stock_data_df, stock_symbol=None, prefer_ttm=True)
 
     # Fallback to original annual-based calculation
     try:
-        # Calculate the P/S ratio
-        combined_stock_data_df["P/S"] = combined_stock_data_df["close_Price"] / (combined_stock_data_df["revenue"] / combined_stock_data_df["average_shares"])
-        # Calculate the P/E ratio
-        combined_stock_data_df["P/E"] = combined_stock_data_df["close_Price"] / combined_stock_data_df["eps"]
-        # Calculate the P/B ratio
-        combined_stock_data_df["P/B"] = combined_stock_data_df["close_Price"] / combined_stock_data_df["book_Value_Per_Share"]
-        # Calculate the P/FCF ratio
-        combined_stock_data_df["P/FCF"] = combined_stock_data_df["close_Price"] / combined_stock_data_df["free_Cash_Flow_Per_Share"]
-        # Replace inf/-inf from zero-division (e.g. eps=0) with NaN
-        combined_stock_data_df[["P/S", "P/E", "P/B", "P/FCF"]] = combined_stock_data_df[["P/S", "P/E", "P/B", "P/FCF"]].replace([np.inf, -np.inf], np.nan)
+        combined_stock_data_df = calculate_available_annual_ratios(combined_stock_data_df)
         print("Ratios have been calculated successfully using annual data, and added to the dataframe.")
-        combined_stock_data_df[["P/S", "P/E", "P/B", "P/FCF"]] = combined_stock_data_df[["P/S", "P/E", "P/B", "P/FCF"]].shift(1)
         
         # Add source tracking for consistency
         combined_stock_data_df['ratio_data_source'] = 'annual'

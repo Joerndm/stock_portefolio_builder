@@ -28,6 +28,7 @@ can be handed to an AI agent (or a developer) as a standalone, unambiguous task.
 17. [Prerequisite Verification Prompts](#17-prerequisite-verification-prompts)
 18. [Beta Values — Stock vs Market Index](#18-beta-values--stock-vs-market-index)
 19. [Country-Specific Sharpe Ratio](#19-country-specific-sharpe-ratio)
+20. [Future ML & Feature Improvements](#20-future-ml--feature-improvements)
 
 ---
 
@@ -455,6 +456,26 @@ corrupting state.
 
 The repository currently **lacks automated tests**.  Every new or modified module must
 ship with corresponding tests.
+
+### 7.0 Python Environment Routing For Tests
+
+The comprehensive test runner must use both supported Python environments:
+
+- `test_reports/comprehensive_test_runner.py` routes TensorFlow-heavy unit files to Python 3.10.
+- The same runner routes fetch/data categories and fetch/data unit files to Python 3.12 because `stock_data_fetch.py` and related modules import `pandas_ta`.
+
+Default interpreter lookup:
+
+- Python 3.10: `C:\Users\joern\anaconda3\envs\tf_gpu_py_3_10\python.exe`
+- Python 3.12: `C:\Users\joern\anaconda3\envs\fetch_stock_data_py_3_12\python.exe`
+
+Override these paths when local env names differ:
+
+```powershell
+$env:SPB_TEST_PY310 = "C:\path\to\python310\python.exe"
+$env:SPB_TEST_PY312 = "C:\path\to\python312\python.exe"
+python test_reports/comprehensive_test_runner.py --verbose
+```
 
 ### 7.1 Directory Structure
 
@@ -901,11 +922,13 @@ This function orchestrates training of **all five models** and computes ensemble
 
 - Phase 2 entry point.
 - For tickers with trained models but missing/stale predictions:
-  1. Load hyperparameters from DB.
-  2. Rebuild models from cached hyperparameters.
+  1. Require valid cached hyperparameters for every model needed by the current ensemble.
+  2. Rebuild models from cached hyperparameters in cache-only mode.
   3. Generate day-by-day forecasts using `predict_future_price_changes()`.
   4. Run Monte Carlo simulation.
   5. Export predictions + MC results to DB.
+- If cache prerequisites are missing or invalid, return explicit statuses such as `training_required`
+  or `cache_invalidated` and stop prediction for that ticker without tuning.
 - **Test:** Mock model loading, verify prediction DataFrame schema.
 
 ### Step 2.9: Monte Carlo Simulation (`monte_carlo_sim.py`)
@@ -1033,6 +1056,13 @@ This function orchestrates training of **all five models** and computes ensemble
 
 - Post-fetch validation of stock data completeness.
 - Schema checks against §5.1 contract.
+- After generating `data_validation_report.json`, run `python repair_cohort_planner.py --report data_validation_report.json`
+  to build dry-run repair cohorts in `repair_cohorts.json` and `repair_cohort_summary.txt`.
+- Use the generated cohort outputs to separate safe ticker-scoped reruns from manual spike-review work
+  before applying any database repairs.
+- To build an executable repair queue without mutating the database, run `python repair_ticker_cohorts.py --plan repair_cohorts.json`.
+- To execute only the safe cohorts after review, rerun with `--execute`; the runner writes
+  `repair_execution_report.json` and `repair_execution_summary.txt` for auditability.
 
 ---
 
@@ -1931,7 +1961,7 @@ python stock_orchestrator.py --ticker AAPL
 # 2. Train models for that ticker only
 python model_trainer.py --max-stocks 1
 
-# 3. Generate predictions
+# 3. Generate predictions (cache-first; this will not tune missing models)
 python price_predictor.py --max-stocks 1
 
 # 4. Verify data landed in DB
@@ -2213,3 +2243,142 @@ Stock Portfolio Builder.  The key additions beyond the existing README are:
     indices, stored in `stock_beta_data`, displayed in Stock Explorer with index selector.
 15. **Country-specific Sharpe ratio** — 18 countries with government bond yields as
     risk-free rates, selectable in Portfolio Builder sidebar, used by efficient frontier.
+16. **Future ML & feature improvements** — technical patterns, data quality enhancements,
+    walk-forward validation, and advanced research items (see §20).
+
+---
+
+## 20. Future ML & Feature Improvements
+
+This section covers planned improvements that are tracked in `IMPROVEMENT_RECOMMENDATIONS.md`
+and should be built into the system as capacity allows.
+
+### 20.1 Technical Pattern Features
+
+**Priority:** Medium
+**Implementation file:** Create `technical_patterns.py`
+
+Add binary signal features (0/1) that capture market psychology and regime changes.
+These signals don't suffer from the mode collapse that affects continuous features.
+
+| Pattern | Type | Detection Logic |
+|---------|------|-----------------|
+| Golden Cross | Bullish | SMA(50) crosses above SMA(200) |
+| Death Cross | Bearish | SMA(50) crosses below SMA(200) |
+| RSI Oversold | Bullish | RSI < 30 |
+| RSI Overbought | Bearish | RSI > 70 |
+| MACD Crossover | Signal | MACD crosses signal line |
+| Bollinger Squeeze | Volatility | Bands narrowing |
+| Support Break | Bearish | Price breaks recent support |
+| Resistance Break | Bullish | Price breaks recent resistance |
+| Volume Spike | Confirmation | Volume > 2x 20-day average |
+
+**Integration points:**
+- Called from `stock_data_fetch.py` after technical indicator calculation.
+- Pattern columns appended to the stock price DataFrame.
+- Exported to DB via `db_interactions.export_stock_price_data()`.
+- Available as ML features through the standard pipeline.
+
+### 20.2 Remove Correlated Features
+
+**Priority:** Medium
+**Implementation location:** `dimension_reduction.py`
+
+Add a `remove_correlated_features(df, threshold=0.85)` function that drops one of
+each pair of features with Pearson correlation above the threshold. Reduces
+multicollinearity and improves model generalization.
+
+**Rules:**
+- Fit on training set only.
+- Apply same column drops to validation, test, and prediction sets.
+- Run before or after `feature_selection_rf()` (configurable).
+
+### 20.3 Outlier Removal
+
+**Priority:** Medium
+**Implementation location:** `split_dataset.py` or `data_scalers.py`
+
+Add `remove_outliers(x, y, threshold=3)` using z-score based filtering.
+Apply only to training data (not validation/test) to avoid data leakage.
+
+### 20.4 Walk-Forward Validation
+
+**Priority:** Medium
+**Implementation location:** `split_dataset.py`
+
+Replace or augment the single fixed train/val/test split with walk-forward
+(expanding window) cross-validation for more realistic performance estimates:
+
+```
+Window 1: Train 2020-2021 → Test 2022
+Window 2: Train 2020-2022 → Test 2023
+Window 3: Train 2020-2023 → Test 2024
+Final:    Average performance across all windows
+```
+
+### 20.5 Feature Degradation Factor
+
+**Priority:** Low
+**Implementation location:** `price_predictor.py` (inside `predict_future_price_changes()`)
+
+For multi-day predictions, apply exponential decay to features that lose relevance
+over time. Currently only momentum has a decay factor (0.90). Extend to:
+
+| Feature | Decay Rate | Rationale |
+|---------|-----------|-----------|
+| `volume_sma_20` | 0.02 | Volume patterns change slowly |
+| `volume_ratio` | 0.05 | Short-term volume signal |
+| `ATR_14` | 0.01 | Volatility is somewhat persistent |
+| `VIX_close` | 0.10 | Market-wide sentiment changes fast |
+
+### 20.6 Extended Historical Data
+
+**Priority:** Low
+
+Extend default data fetch from ~15 years to maximum available history (20+ years)
+using `yf.Ticker.history(start="1990-01-01")`. Benefits: more training data,
+captures multiple market cycles, reduces overfitting to recent patterns.
+
+### 20.7 Competitor/Sector Data Integration
+
+**Priority:** Low
+
+Add competitor stock returns as features. For each stock, define 2-3 competitors
+and compute relative strength metrics (5-day, 20-day return differentials).
+Requires a competitor mapping dict and joining external price data.
+
+### 20.8 Portfolio Optimization with Transformer
+
+**Priority:** Low (Research)
+
+Use a Transformer model with cross-stock attention to optimize portfolio weights
+based on Monte Carlo simulation results. Custom Sharpe-ratio loss function.
+
+### 20.9 SHAP Interpretability
+
+**Priority:** Low
+
+Add SHAP (SHapley Additive exPlanations) for model interpretation. Useful for
+debugging feature importance and understanding per-prediction explanations.
+
+### 20.10 MLflow Experiment Tracking
+
+**Priority:** Low
+
+Add MLflow for tracking model training experiments, hyperparameters, metrics,
+and artifacts. Enables comparison across training runs.
+
+### 20.11 Market Regime Detection
+
+**Priority:** Low (Research)
+
+Detect market regimes (bull/bear/sideways) and train regime-specific models.
+Could use Hidden Markov Models or clustering on volatility + trend features.
+
+### 20.12 Online Learning
+
+**Priority:** Low (Research)
+
+Implement incremental/online learning so models adapt to new market data without
+full retraining. Applicable to Ridge (via `partial_fit` on SGDRegressor) and
+potentially XGBoost (via `xgb_model` parameter for warm-starting).

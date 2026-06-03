@@ -157,8 +157,9 @@ Notes:
 """
 import os, shutil, time, io, sys
 import datetime
-import math
 import tempfile
+import warnings
+from typing import Any
 
 import pandas as pd
 from dateutil.relativedelta import relativedelta
@@ -170,24 +171,32 @@ if not hasattr(np, 'int'):
     np.int = int
 import matplotlib
 import matplotlib.pyplot as plt
-from sklearn import tree
+try:
+    import xgboost as xgb
+except ImportError:
+    class _MissingXGBoostModule:
+        class XGBRegressor:
+            def __init__(self, *args, **kwargs):
+                raise ImportError("XGBoost not installed. Install with: pip install xgboost")
+
+    xgb = _MissingXGBoostModule()
 from sklearn.svm import SVR
+from sklearn.compose import TransformedTargetRegressor
+from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.linear_model import LinearRegression, Ridge
-from sklearn.neural_network import MLPRegressor
+from sklearn.linear_model import Ridge
+from sklearn.exceptions import ConvergenceWarning
 from sklearn.metrics import make_scorer
 from sklearn.model_selection import KFold
 from sklearn.metrics import mean_absolute_error
 from sklearn.metrics import mean_squared_error
 from sklearn.metrics import r2_score
-from sklearn.model_selection import RepeatedKFold
 import tensorflow as tf
 from tensorflow.keras.models import Sequential, Model
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional, BatchNormalization, Input, Conv1D, Add, LayerNormalization, GlobalAveragePooling1D, Activation
 from tensorflow.keras.optimizers import Adam, RMSprop
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from tensorflow.keras import regularizers
-import keras
 import keras_tuner as kt
 from keras_tuner.tuners import Sklearn
 
@@ -197,10 +206,164 @@ pd.set_option('future.no_silent_downcasting', True)
 import split_dataset
 import dimension_reduction
 import monte_carlo_sim
+from gpu_runtime_utils import configure_tensorflow_gpu
+from model_cache_utils import (
+    build_cached_random_forest_model,
+    build_cached_ridge_model,
+    build_cached_svr_model,
+    build_cached_xgboost_model,
+    fit_cached_lstm_model,
+    fit_cached_tcn_model,
+    invalidate_hyperparameter_cache,
+    serialize_random_forest_hyperparameters,
+    serialize_ridge_hyperparameters,
+    serialize_svr_hyperparameters,
+    serialize_xgboost_hyperparameters,
+)
+from pipeline_config import get_pred_config
+from prediction_cache_contract import (
+    PredictionTrainingRequiredError,
+    raise_cache_invalidated_error,
+)
+from prediction_runtime_controls import (
+    build_prediction_history_cache,
+    clip_scaled_features,
+    combine_flat_model_predictions,
+    stabilize_prediction,
+    summarize_scaled_feature_drift,
+)
+
+
+CACHED_HP_LOAD_EXCEPTIONS = (ImportError,)
+CACHED_MODEL_RESTORE_EXCEPTIONS = (
+    AttributeError,
+    ImportError,
+    KeyError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+HYPERPARAMETER_SAVE_EXCEPTIONS = (ImportError, KeyError, ValueError)
+TUNER_CHECKPOINT_RESTORE_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    ValueError,
+    tf.errors.NotFoundError,
+)
 
 # Force UTF-8 logging globally
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="ignore")
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="ignore")
+
+
+def _coerce_hparam_choice(value, allowed_values, default):
+    if value in allowed_values:
+        return value
+
+    if isinstance(value, str):
+        normalized_lookup = {
+            str(allowed).lower(): allowed
+            for allowed in allowed_values
+            if isinstance(allowed, str)
+        }
+        normalized_value = normalized_lookup.get(value.strip().lower())
+        if normalized_value is not None:
+            return normalized_value
+
+    return default
+
+
+def _coerce_hparam_int(value, default):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_hparam_float(value, default):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_hparam_bool(value, default):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {'true', '1', 'yes', 'y'}:
+            return True
+        if normalized in {'false', '0', 'no', 'n'}:
+            return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return default
+
+
+def _restore_or_refit_sequence_tuner_model(
+    tuner,
+    best_hp,
+    build_model,
+    fit_model,
+    x_train,
+    y_train,
+    x_val,
+    y_val,
+    time_steps,
+    num_features,
+    epochs,
+    model_label,
+):
+    try:
+        best_models = tuner.get_best_models(num_models=1) if hasattr(tuner, 'get_best_models') else []
+    except TUNER_CHECKPOINT_RESTORE_EXCEPTIONS as restore_error:
+        print(
+            f"[WARN] Failed to restore best {model_label} model from tuner checkpoint, "
+            f"rebuilding from best hyperparameters: {restore_error}"
+        )
+        best_models = []
+
+    if best_models:
+        return best_models[0]
+
+    best_model = build_model(best_hp, input_shape=(time_steps, num_features))
+    best_model.build(input_shape=(None, time_steps, num_features))
+    fit_model(
+        best_model,
+        dict(best_hp.values),
+        x_train,
+        y_train,
+        x_val,
+        y_val,
+        epochs=epochs,
+        verbose=0,
+    )
+    print(f"[OK] Rebuilt and fit {model_label} model from best hyperparameters")
+    return best_model
+
+
+def _fit_svr_without_convergence_warnings(model, x_values, y_values):
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=ConvergenceWarning)
+        model.fit(x_values, y_values)
+    return model
+
+
+def _run_svr_tuning_search_without_convergence_warnings(tuner, x_values, y_values):
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=ConvergenceWarning)
+        tuner.search(x_values, y_values)
+
+
+def _alignment_start_from_sequence_predictions(target_values, sequence_predictions, split_label):
+    alignment_start = len(target_values) - len(sequence_predictions)
+    if alignment_start < 0:
+        raise ValueError(
+            f"Sequence predictions for {split_label} exceed target length: "
+            f"targets={len(target_values)}, predictions={len(sequence_predictions)}"
+        )
+    return alignment_start
 
 def build_random_forest_model(hp, constrain_for_overfitting=False):
     """
@@ -211,7 +374,11 @@ def build_random_forest_model(hp, constrain_for_overfitting=False):
     - constrain_for_overfitting: If True, apply stricter constraints to reduce overfitting
     """
     
-    max_features_choice = hp.Choice('max_features', ['sqrt', 'log2', '0.3', '0.5', '0.8'])
+    max_features_choice = _coerce_hparam_choice(
+        hp.Choice('max_features', ['sqrt', 'log2', '0.3', '0.5', '0.8']),
+        ['sqrt', 'log2', '0.3', '0.5', '0.8'],
+        'sqrt',
+    )
     
     if max_features_choice in ['0.3', '0.5', '0.8']:
         max_features_value = float(max_features_choice)
@@ -220,11 +387,19 @@ def build_random_forest_model(hp, constrain_for_overfitting=False):
     
     # Always register all hyperparameters to avoid KeyError when Hyperband
     # replays trials from different brackets/rounds
-    bootstrap = hp.Boolean('bootstrap', default=True)
-    max_samples_value = hp.Float('max_samples', 0.5, 1.0, step=0.1, default=0.8)
-    max_depth_value = hp.Int('max_depth', 3, 50, step=2, default=15)
-    min_samples_leaf_value = hp.Choice('min_samples_leaf', [1, 2, 4, 8, 16], default=2)
-    min_samples_split_value = hp.Choice('min_samples_split', [2, 5, 10, 15, 20], default=5)
+    bootstrap = _coerce_hparam_bool(hp.Boolean('bootstrap', default=True), True)
+    max_samples_value = _coerce_hparam_float(hp.Float('max_samples', 0.5, 1.0, step=0.1, default=0.8), 0.8)
+    max_depth_value = _coerce_hparam_int(hp.Int('max_depth', 3, 50, step=2, default=15), 15)
+    min_samples_leaf_value = _coerce_hparam_choice(
+        hp.Choice('min_samples_leaf', [1, 2, 4, 8, 16], default=2),
+        [1, 2, 4, 8, 16],
+        2,
+    )
+    min_samples_split_value = _coerce_hparam_choice(
+        hp.Choice('min_samples_split', [2, 5, 10, 15, 20], default=5),
+        [2, 5, 10, 15, 20],
+        5,
+    )
     
     if constrain_for_overfitting:
         # Override with stricter values to reduce overfitting
@@ -243,7 +418,11 @@ def build_random_forest_model(hp, constrain_for_overfitting=False):
         max_depth=max_depth_value,
         min_samples_split=min_samples_split_value,
         min_samples_leaf=min_samples_leaf_value,
-        criterion=hp.Choice('criterion', ['squared_error', 'absolute_error', 'friedman_mse']),
+        criterion=_coerce_hparam_choice(
+            hp.Choice('criterion', ['squared_error', 'absolute_error', 'friedman_mse']),
+            ['squared_error', 'absolute_error', 'friedman_mse'],
+            'squared_error',
+        ),
         bootstrap=bootstrap,
         max_features=max_features_value,
         max_samples=max_samples_value,
@@ -252,7 +431,7 @@ def build_random_forest_model(hp, constrain_for_overfitting=False):
     )
     return model
 
-def tune_random_forest_model(stock_symbol, x_training_dataset_df, y_training_dataset_df, x_val_dataset_df, y_val_dataset_df, max_trials=20, constrain_for_overfitting=False, use_cached_hp=True, cache_max_age_days=30, cleanup_after_tuning=True):
+def tune_random_forest_model(stock_symbol, x_training_dataset_df, y_training_dataset_df, x_val_dataset_df, y_val_dataset_df, max_trials=20, constrain_for_overfitting=False, use_cached_hp=True, cache_max_age_days=30, cleanup_after_tuning=True, require_cached_hp=False):
     """
     Improved Random Forest tuning with better hyperparameters and optimization.
     Uses validation set for hyperparameter selection (industry standard).
@@ -283,6 +462,7 @@ def tune_random_forest_model(stock_symbol, x_training_dataset_df, y_training_dat
 
     # Try to load cached hyperparameters
     if use_cached_hp:
+        cached_hp = None
         try:
             import db_interactions
             cached_hp = db_interactions.load_hyperparameters(
@@ -290,27 +470,42 @@ def tune_random_forest_model(stock_symbol, x_training_dataset_df, y_training_dat
                 model_type='rf',
                 max_age_days=cache_max_age_days,
                 feature_list=feature_list,
-                require_same_features=False  # Allow different features (RF is robust)
+                require_same_features=True
             )
             
-            if cached_hp:
-                print(f"[CACHE] Using cached RF hyperparameters for {stock_symbol}")
-                best_rf_model = RandomForestRegressor(
-                    n_estimators=cached_hp.get('n_estimators', 500),
-                    max_depth=cached_hp.get('max_depth'),
-                    min_samples_split=cached_hp.get('min_samples_split', 5),
-                    min_samples_leaf=cached_hp.get('min_samples_leaf', 2),
-                    criterion=cached_hp.get('criterion', 'squared_error'),
-                    bootstrap=cached_hp.get('bootstrap', True),
-                    max_features=cached_hp.get('max_features', 'sqrt'),
-                    max_samples=cached_hp.get('max_samples'),
-                    random_state=42,
-                    n_jobs=-1
-                )
+        except CACHED_HP_LOAD_EXCEPTIONS as e:
+            if require_cached_hp:
+                raise PredictionTrainingRequiredError(
+                    ticker=stock_symbol,
+                    required_model_types=['rf'],
+                    missing_model_types=['rf'],
+                    message=f"Cached RF hyperparameters are unavailable for {stock_symbol}: {e}",
+                ) from e
+            print(f"[CACHE] Could not load cached HP: {e}, proceeding with tuning")
+
+        if cached_hp:
+            print(f"[CACHE] Using cached RF hyperparameters for {stock_symbol}")
+            try:
+                best_rf_model = build_cached_random_forest_model(cached_hp)
                 best_rf_model.fit(x_train, y_train)
                 return best_rf_model
-        except Exception as e:
-            print(f"[CACHE] Could not load cached HP: {e}, proceeding with tuning")
+            except CACHED_MODEL_RESTORE_EXCEPTIONS as e:
+                db_interactions.invalidate_hyperparameters(ticker=stock_symbol, model_type='rf')
+                if require_cached_hp:
+                    raise_cache_invalidated_error(
+                        stock_symbol,
+                        'rf',
+                        e,
+                        invalidator=invalidate_hyperparameter_cache,
+                    )
+                print(f"[CACHE] Could not restore cached RF HP: {e}, proceeding with tuning")
+
+    if require_cached_hp:
+        raise PredictionTrainingRequiredError(
+            ticker=stock_symbol,
+            required_model_types=['rf'],
+            missing_model_types=['rf'],
+        )
 
     # Define the MSE scorer
     mse_scorer = make_scorer(mean_squared_error, greater_is_better=False)
@@ -337,7 +532,7 @@ def tune_random_forest_model(stock_symbol, x_training_dataset_df, y_training_dat
             print(f"[RESUME] Found existing RF tuning at {project_path}. Continuing...")
             overwrite_val = False
         else:
-            print(f"[WARN] Found incomplete RF tuning directory (no oracle.json). Starting fresh...")
+            print("[WARN] Found incomplete RF tuning directory (no oracle.json). Starting fresh...")
             try:
                 shutil.rmtree(project_path)
             except (OSError, PermissionError) as e:
@@ -409,7 +604,7 @@ def tune_random_forest_model(stock_symbol, x_training_dataset_df, y_training_dat
         'importance': importances
     }).sort_values('importance', ascending=False)
 
-    for idx, row in feature_importance_df.head(10).iterrows():
+    for _, row in feature_importance_df.head(10).iterrows():
         print(f"  - {row['feature']}: {row['importance']:.4f}")
 
     # Save hyperparameters to database for future use
@@ -427,7 +622,7 @@ def tune_random_forest_model(stock_symbol, x_training_dataset_df, y_training_dat
         db_interactions.save_hyperparameters(
             ticker=stock_symbol,
             model_type='rf',
-            hyperparameters=best_hp.values,
+            hyperparameters=serialize_random_forest_hyperparameters(best_rf_model),
             num_trials=max_trials,
             best_score=val_mse,
             tuning_time_seconds=tuning_time,
@@ -439,7 +634,7 @@ def tune_random_forest_model(stock_symbol, x_training_dataset_df, y_training_dat
             val_mae=val_mae,
             is_constrained=constrain_for_overfitting
         )
-    except Exception as e:
+    except HYPERPARAMETER_SAVE_EXCEPTIONS as e:
         print(f"[WARNING] Could not save RF hyperparameters to DB: {e}")
 
     # Cleanup tuning directory to save disk space
@@ -492,11 +687,6 @@ def build_xgboost_model(hp, constrain_for_overfitting=False):
     - hp: Keras Tuner hyperparameters object
     - constrain_for_overfitting: If True, apply stricter constraints to reduce overfitting
     """
-    try:
-        import xgboost as xgb
-    except ImportError as exc:
-        raise ImportError("XGBoost not installed. Install with: pip install xgboost") from exc
-    
     if constrain_for_overfitting:
         # Stricter constraints when overfitting is detected
         model = xgb.XGBRegressor(
@@ -531,7 +721,7 @@ def build_xgboost_model(hp, constrain_for_overfitting=False):
         )
     return model
 
-def tune_xgboost_model(stock_symbol, x_training_dataset_df, y_training_dataset_df, x_val_dataset_df, y_val_dataset_df, max_trials=30, constrain_for_overfitting=False, use_cached_hp=True, cache_max_age_days=30, cleanup_after_tuning=True):
+def tune_xgboost_model(stock_symbol, x_training_dataset_df, y_training_dataset_df, x_val_dataset_df, y_val_dataset_df, max_trials=30, constrain_for_overfitting=False, use_cached_hp=True, cache_max_age_days=30, cleanup_after_tuning=True, require_cached_hp=False):
     """
     Tunes XGBoost model using validation set for hyperparameter selection.
     
@@ -561,37 +751,50 @@ def tune_xgboost_model(stock_symbol, x_training_dataset_df, y_training_dataset_d
 
     # Try to load cached hyperparameters
     if use_cached_hp:
+        cached_hp = None
         try:
             import db_interactions
-            import xgboost as xgb
             cached_hp = db_interactions.load_hyperparameters(
                 ticker=stock_symbol,
                 model_type='xgb',
                 max_age_days=cache_max_age_days,
                 feature_list=feature_list,
-                require_same_features=False
+                require_same_features=True
             )
             
-            if cached_hp:
-                print(f"[CACHE] Using cached XGBoost hyperparameters for {stock_symbol}")
-                best_xgb_model = xgb.XGBRegressor(
-                    n_estimators=cached_hp.get('n_estimators', 500),
-                    max_depth=cached_hp.get('max_depth', 6),
-                    learning_rate=cached_hp.get('learning_rate', 0.1),
-                    subsample=cached_hp.get('subsample', 0.8),
-                    colsample_bytree=cached_hp.get('colsample_bytree', 0.8),
-                    min_child_weight=cached_hp.get('min_child_weight', 3),
-                    gamma=cached_hp.get('gamma', 0.0),
-                    reg_alpha=cached_hp.get('reg_alpha', 0.0),
-                    reg_lambda=cached_hp.get('reg_lambda', 0.0),
-                    random_state=42,
-                    n_jobs=-1,
-                    tree_method='hist'
-                )
+        except CACHED_HP_LOAD_EXCEPTIONS as e:
+            if require_cached_hp:
+                raise PredictionTrainingRequiredError(
+                    ticker=stock_symbol,
+                    required_model_types=['xgb'],
+                    missing_model_types=['xgb'],
+                    message=f"Cached XGB hyperparameters are unavailable for {stock_symbol}: {e}",
+                ) from e
+            print(f"[CACHE] Could not load cached HP: {e}, proceeding with tuning")
+
+        if cached_hp:
+            print(f"[CACHE] Using cached XGBoost hyperparameters for {stock_symbol}")
+            try:
+                best_xgb_model = build_cached_xgboost_model(cached_hp)
                 best_xgb_model.fit(x_train, y_train)
                 return best_xgb_model
-        except Exception as e:
-            print(f"[CACHE] Could not load cached HP: {e}, proceeding with tuning")
+            except CACHED_MODEL_RESTORE_EXCEPTIONS as e:
+                db_interactions.invalidate_hyperparameters(ticker=stock_symbol, model_type='xgb')
+                if require_cached_hp:
+                    raise_cache_invalidated_error(
+                        stock_symbol,
+                        'xgb',
+                        e,
+                        invalidator=invalidate_hyperparameter_cache,
+                    )
+                print(f"[CACHE] Could not restore cached XGB HP: {e}, proceeding with tuning")
+
+    if require_cached_hp:
+        raise PredictionTrainingRequiredError(
+            ticker=stock_symbol,
+            required_model_types=['xgb'],
+            missing_model_types=['xgb'],
+        )
 
     # Define the MSE scorer
     mse_scorer = make_scorer(mean_squared_error, greater_is_better=False)
@@ -618,7 +821,7 @@ def tune_xgboost_model(stock_symbol, x_training_dataset_df, y_training_dataset_d
             print(f"[RESUME] Found existing XGB tuning at {project_path}. Continuing...")
             overwrite_val = False
         else:
-            print(f"[WARN] Found incomplete XGB tuning directory (no oracle.json). Starting fresh...")
+            print("[WARN] Found incomplete XGB tuning directory (no oracle.json). Starting fresh...")
             try:
                 shutil.rmtree(project_path)
             except (OSError, PermissionError) as e:
@@ -687,7 +890,7 @@ def tune_xgboost_model(stock_symbol, x_training_dataset_df, y_training_dataset_d
         'importance': importances
     }).sort_values('importance', ascending=False)
 
-    for idx, row in feature_importance_df.head(10).iterrows():
+    for _, row in feature_importance_df.head(10).iterrows():
         print(f"  - {row['feature']}: {row['importance']:.4f}")
 
     # Save hyperparameters to database for future use
@@ -705,7 +908,7 @@ def tune_xgboost_model(stock_symbol, x_training_dataset_df, y_training_dataset_d
         db_interactions.save_hyperparameters(
             ticker=stock_symbol,
             model_type='xgb',
-            hyperparameters=best_hp.values,
+            hyperparameters=serialize_xgboost_hyperparameters(best_xgb_model),
             num_trials=max_trials,
             best_score=val_mse,
             tuning_time_seconds=tuning_time,
@@ -717,7 +920,7 @@ def tune_xgboost_model(stock_symbol, x_training_dataset_df, y_training_dataset_d
             val_mae=val_mae,
             is_constrained=constrain_for_overfitting
         )
-    except Exception as e:
+    except HYPERPARAMETER_SAVE_EXCEPTIONS as e:
         print(f"[WARNING] Could not save XGB hyperparameters to DB: {e}")
 
     # Cleanup tuning directory to save disk space
@@ -761,6 +964,393 @@ def evaluate_xgboost_model(model, x_train, y_train, x_val, y_val, x_test, y_test
 
     return train_metrics, val_metrics, test_metrics
 
+
+# ============================================================================
+# Ridge Regression — fast linear baseline for the ensemble (#23)
+# ============================================================================
+def build_ridge_model(hp, constrain_for_overfitting=False):
+    """
+    Builds a Ridge regression model with tunable hyperparameters.
+
+    Parameters:
+    - hp: Keras Tuner hyperparameters object
+    - constrain_for_overfitting: If True, prefer stronger regularization
+    """
+    alpha = hp.Float('alpha', 1e-3, 1e3, sampling='log', default=1.0)
+    solver = hp.Choice('solver', ['auto', 'svd', 'cholesky', 'lsqr', 'sag'], default='auto')
+
+    if constrain_for_overfitting:
+        alpha = max(alpha, 1.0)  # Ensure stronger regularization
+
+    model = Ridge(
+        alpha=alpha,
+        solver=solver,
+        random_state=42,
+        max_iter=10000
+    )
+    return model
+
+
+def tune_ridge_model(stock_symbol, x_training_dataset_df, y_training_dataset_df,
+                     x_val_dataset_df, y_val_dataset_df, max_trials=50,
+                     constrain_for_overfitting=False, use_cached_hp=True,
+                     cache_max_age_days=30, cleanup_after_tuning=True,
+                     require_cached_hp=False):
+    """
+    Tune Ridge regression using Keras Tuner with validation-set scoring.
+    Follows the same pattern as tune_random_forest_model.
+    """
+    import time as time_module
+    from sklearn.model_selection import PredefinedSplit
+
+    tuning_start_time = time_module.time()
+
+    x_train = x_training_dataset_df.values
+    y_train = y_training_dataset_df.values
+    x_val = x_val_dataset_df.values
+    y_val = y_val_dataset_df.values
+    feature_list = list(x_training_dataset_df.columns)
+
+    # Try cached hyperparameters
+    if use_cached_hp:
+        cached_hp = None
+        try:
+            import db_interactions
+            cached_hp = db_interactions.load_hyperparameters(
+                ticker=stock_symbol, model_type='ridge',
+                max_age_days=cache_max_age_days, feature_list=feature_list,
+                require_same_features=True
+            )
+        except CACHED_HP_LOAD_EXCEPTIONS as e:
+            if require_cached_hp:
+                raise PredictionTrainingRequiredError(
+                    ticker=stock_symbol,
+                    required_model_types=['ridge'],
+                    missing_model_types=['ridge'],
+                    message=f"Cached Ridge hyperparameters are unavailable for {stock_symbol}: {e}",
+                ) from e
+            print(f"[CACHE] Could not load cached Ridge HP: {e}, proceeding with tuning")
+
+        if cached_hp:
+            print(f"[CACHE] Using cached Ridge hyperparameters for {stock_symbol}")
+            try:
+                best_model = build_cached_ridge_model(cached_hp)
+                best_model.fit(x_train, y_train)
+                return best_model
+            except CACHED_MODEL_RESTORE_EXCEPTIONS as e:
+                db_interactions.invalidate_hyperparameters(ticker=stock_symbol, model_type='ridge')
+                if require_cached_hp:
+                    raise_cache_invalidated_error(
+                        stock_symbol,
+                        'ridge',
+                        e,
+                        invalidator=invalidate_hyperparameter_cache,
+                    )
+                print(f"[CACHE] Could not restore cached Ridge HP: {e}, proceeding with tuning")
+
+    if require_cached_hp:
+        raise PredictionTrainingRequiredError(
+            ticker=stock_symbol,
+            required_model_types=['ridge'],
+            missing_model_types=['ridge'],
+        )
+
+    mse_scorer = make_scorer(mean_squared_error, greater_is_better=False)
+
+    temp_dir = os.path.join(tempfile.gettempdir(), "ridge_tuning_dir")
+    project_name_val = f"Ridge_tuning_{stock_symbol}"
+    project_path = os.path.join(temp_dir, project_name_val)
+
+    overwrite_val = True
+    if os.path.exists(project_path):
+        oracle_path = os.path.join(project_path, "oracle.json")
+        if os.path.exists(oracle_path):
+            overwrite_val = False
+        else:
+            try:
+                shutil.rmtree(project_path)
+            except (OSError, PermissionError):
+                pass
+
+    x_combined = np.vstack([x_train, x_val])
+    y_combined = np.concatenate([y_train, y_val])
+    split_indices = np.concatenate([np.full(len(x_train), -1), np.zeros(len(x_val))])
+    ps = PredefinedSplit(test_fold=split_indices)
+
+    def build_ridge_wrapper(hp):
+        return build_ridge_model(hp, constrain_for_overfitting=constrain_for_overfitting)
+
+    tuner = Sklearn(
+        oracle=kt.oracles.BayesianOptimization(
+            objective=kt.Objective('score', 'min'),
+            max_trials=max_trials, seed=42
+        ),
+        hypermodel=build_ridge_wrapper,
+        scoring=mse_scorer,
+        cv=ps,
+        directory=temp_dir,
+        project_name=project_name_val,
+        overwrite=overwrite_val
+    )
+
+    print(f"[SEARCH] Starting Ridge hyperparameter tuning for {stock_symbol}...")
+    tuner.search(x_combined, y_combined)
+
+    best_hp = tuner.get_best_hyperparameters(num_trials=1)[0]
+    best_model = tuner.hypermodel.build(best_hp)
+    best_model.fit(x_train, y_train)
+
+    print("\n[RIDGE] Best Ridge hyperparameters found:")
+    for param, value in best_hp.values.items():
+        print(f"  - {param}: {value}")
+
+    # Save to DB
+    tuning_time = time_module.time() - tuning_start_time
+    try:
+        import db_interactions
+        val_pred = best_model.predict(x_val)
+        val_mse = mean_squared_error(y_val, val_pred)
+        val_r2 = r2_score(y_val, val_pred)
+        val_mae = mean_absolute_error(y_val, val_pred)
+        feature_list_str = [str(f) for f in feature_list] if feature_list else feature_list
+        db_interactions.save_hyperparameters(
+            ticker=stock_symbol, model_type='ridge',
+            hyperparameters=serialize_ridge_hyperparameters(best_model), num_trials=max_trials,
+            best_score=val_mse, tuning_time_seconds=tuning_time,
+            training_samples=len(x_train), num_features=x_train.shape[1],
+            feature_list=feature_list_str, val_mse=val_mse,
+            val_r2=val_r2, val_mae=val_mae,
+            is_constrained=constrain_for_overfitting
+        )
+    except HYPERPARAMETER_SAVE_EXCEPTIONS as e:
+        print(f"[WARNING] Could not save Ridge hyperparameters to DB: {e}")
+
+    if cleanup_after_tuning:
+        try:
+            shutil.rmtree(project_path)
+        except (OSError, PermissionError):
+            pass
+
+    return best_model
+
+
+def evaluate_ridge_model(model, x_train, y_train, x_val, y_val, x_test, y_test):
+    """Evaluate Ridge model on all three sets."""
+    train_pred = model.predict(x_train)
+    val_pred = model.predict(x_val)
+    test_pred = model.predict(x_test)
+
+    return (
+        {'mse': mean_squared_error(y_train, train_pred),
+         'r2': r2_score(y_train, train_pred),
+         'mae': mean_absolute_error(y_train, train_pred)},
+        {'mse': mean_squared_error(y_val, val_pred),
+         'r2': r2_score(y_val, val_pred),
+         'mae': mean_absolute_error(y_val, val_pred)},
+        {'mse': mean_squared_error(y_test, test_pred),
+         'r2': r2_score(y_test, test_pred),
+         'mae': mean_absolute_error(y_test, test_pred)}
+    )
+
+
+# ============================================================================
+# SVR — modernized with DB caching, constrain param, validation split (#23)
+# ============================================================================
+def build_svr_model(hp, constrain_for_overfitting=False):
+    """
+    Builds an SVR model with tunable hyperparameters.
+    Modernized version with constrain_for_overfitting support.
+
+    Search bounds are capped to prevent hangs:
+    - poly kernel excluded: produces unbounded kernel matrix entries on tabular
+      financial data (C=100, gamma=1, degree=2 → R2=-208); inappropriate for
+      this domain.
+    - C max 10: higher C with rbf causes O(n^2-n^3) kernel fit times
+    - gamma max 0.5: for ~50 MinMaxScaled features, gamma>0.5 makes rbf kernel
+      degenerate (exp(-gamma*8) ≈ 0 for gamma>=1)
+    - max_iter=10000: hard per-fit cap; ConvergenceWarning is acceptable
+    """
+    kernel_choice = hp.Choice('kernel', ['linear', 'rbf'])
+    C = hp.Float('C', 1e-3, 10.0, sampling='log', default=1.0)
+    gamma = hp.Float('gamma', 1e-4, 0.5, sampling='log', default=0.1)
+    epsilon = hp.Float('epsilon', 1e-4, 1.0, sampling='log', default=0.1)
+
+    if constrain_for_overfitting:
+        C = min(C, 10.0)
+        epsilon = max(epsilon, 0.01)
+
+    svr = SVR(
+        kernel=kernel_choice,
+        C=C,
+        gamma=gamma,
+        epsilon=epsilon,
+        max_iter=10000
+    )
+    return TransformedTargetRegressor(regressor=svr, transformer=StandardScaler())
+
+
+def tune_svr_model(stock_symbol, x_training_dataset_df, y_training_dataset_df,
+                   x_val_dataset_df, y_val_dataset_df, max_trials=40,
+                   constrain_for_overfitting=False, use_cached_hp=True,
+                   cache_max_age_days=30, cleanup_after_tuning=True,
+                   require_cached_hp=False):
+    """
+    Tune SVR using Keras Tuner with validation-set scoring.
+    Modernized version following the RF/XGB pattern with DB caching.
+    """
+    import time as time_module
+    from sklearn.model_selection import PredefinedSplit
+
+    tuning_start_time = time_module.time()
+
+    x_train = x_training_dataset_df.values
+    y_train = y_training_dataset_df.values
+    x_val = x_val_dataset_df.values
+    y_val = y_val_dataset_df.values
+    feature_list = list(x_training_dataset_df.columns)
+
+    # Try cached hyperparameters
+    if use_cached_hp:
+        cached_hp = None
+        try:
+            import db_interactions
+            cached_hp = db_interactions.load_hyperparameters(
+                ticker=stock_symbol, model_type='svr',
+                max_age_days=cache_max_age_days, feature_list=feature_list,
+                require_same_features=True
+            )
+        except CACHED_HP_LOAD_EXCEPTIONS as e:
+            if require_cached_hp:
+                raise PredictionTrainingRequiredError(
+                    ticker=stock_symbol,
+                    required_model_types=['svr'],
+                    missing_model_types=['svr'],
+                    message=f"Cached SVR hyperparameters are unavailable for {stock_symbol}: {e}",
+                ) from e
+            print(f"[CACHE] Could not load cached SVR HP: {e}, proceeding with tuning")
+
+        if cached_hp:
+            print(f"[CACHE] Using cached SVR hyperparameters for {stock_symbol}")
+            try:
+                best_model = build_cached_svr_model(cached_hp)
+                _fit_svr_without_convergence_warnings(best_model, x_train, y_train)
+                return best_model
+            except CACHED_MODEL_RESTORE_EXCEPTIONS as e:
+                db_interactions.invalidate_hyperparameters(ticker=stock_symbol, model_type='svr')
+                if require_cached_hp:
+                    raise_cache_invalidated_error(
+                        stock_symbol,
+                        'svr',
+                        e,
+                        invalidator=invalidate_hyperparameter_cache,
+                    )
+                print(f"[CACHE] Could not restore cached SVR HP: {e}, proceeding with tuning")
+
+    if require_cached_hp:
+        raise PredictionTrainingRequiredError(
+            ticker=stock_symbol,
+            required_model_types=['svr'],
+            missing_model_types=['svr'],
+        )
+
+    mse_scorer = make_scorer(mean_squared_error, greater_is_better=False)
+
+    temp_dir = os.path.join(tempfile.gettempdir(), "svr_tuning_dir")
+    project_name_val = f"SVR_tuning_{stock_symbol}"
+    project_path = os.path.join(temp_dir, project_name_val)
+
+    overwrite_val = True
+    if os.path.exists(project_path):
+        oracle_path = os.path.join(project_path, "oracle.json")
+        if os.path.exists(oracle_path):
+            overwrite_val = False
+        else:
+            try:
+                shutil.rmtree(project_path)
+            except (OSError, PermissionError):
+                pass
+
+    x_combined = np.vstack([x_train, x_val])
+    y_combined = np.concatenate([y_train, y_val])
+    split_indices = np.concatenate([np.full(len(x_train), -1), np.zeros(len(x_val))])
+    ps = PredefinedSplit(test_fold=split_indices)
+
+    def build_svr_wrapper(hp):
+        return build_svr_model(hp, constrain_for_overfitting=constrain_for_overfitting)
+
+    tuner = Sklearn(
+        oracle=kt.oracles.BayesianOptimization(
+            objective=kt.Objective('score', 'min'),
+            max_trials=max_trials, seed=42
+        ),
+        hypermodel=build_svr_wrapper,
+        scoring=mse_scorer,
+        cv=ps,
+        directory=temp_dir,
+        project_name=project_name_val,
+        overwrite=overwrite_val
+    )
+
+    print(f"[SEARCH] Starting SVR hyperparameter tuning for {stock_symbol}...")
+    _run_svr_tuning_search_without_convergence_warnings(tuner, x_combined, y_combined)
+
+    best_hp = tuner.get_best_hyperparameters(num_trials=1)[0]
+    best_model = tuner.hypermodel.build(best_hp)
+    _fit_svr_without_convergence_warnings(best_model, x_train, y_train)
+
+    print("\n[SVR] Best SVR hyperparameters found:")
+    for param, value in best_hp.values.items():
+        print(f"  - {param}: {value}")
+
+    # Save to DB
+    tuning_time = time_module.time() - tuning_start_time
+    try:
+        import db_interactions
+        val_pred = best_model.predict(x_val)
+        val_mse = mean_squared_error(y_val, val_pred)
+        val_r2 = r2_score(y_val, val_pred)
+        val_mae = mean_absolute_error(y_val, val_pred)
+        feature_list_str = [str(f) for f in feature_list] if feature_list else feature_list
+        db_interactions.save_hyperparameters(
+            ticker=stock_symbol, model_type='svr',
+            hyperparameters=serialize_svr_hyperparameters(best_model), num_trials=max_trials,
+            best_score=val_mse, tuning_time_seconds=tuning_time,
+            training_samples=len(x_train), num_features=x_train.shape[1],
+            feature_list=feature_list_str, val_mse=val_mse,
+            val_r2=val_r2, val_mae=val_mae,
+            is_constrained=constrain_for_overfitting
+        )
+    except HYPERPARAMETER_SAVE_EXCEPTIONS as e:
+        print(f"[WARNING] Could not save SVR hyperparameters to DB: {e}")
+
+    if cleanup_after_tuning:
+        try:
+            shutil.rmtree(project_path)
+        except (OSError, PermissionError):
+            pass
+
+    return best_model
+
+
+def evaluate_svr_model(model, x_train, y_train, x_val, y_val, x_test, y_test):
+    """Evaluate SVR model on all three sets."""
+    train_pred = model.predict(x_train)
+    val_pred = model.predict(x_val)
+    test_pred = model.predict(x_test)
+
+    return (
+        {'mse': mean_squared_error(y_train, train_pred),
+         'r2': r2_score(y_train, train_pred),
+         'mae': mean_absolute_error(y_train, train_pred)},
+        {'mse': mean_squared_error(y_val, val_pred),
+         'r2': r2_score(y_val, val_pred),
+         'mae': mean_absolute_error(y_val, val_pred)},
+        {'mse': mean_squared_error(y_test, test_pred),
+         'r2': r2_score(y_test, test_pred),
+         'mae': mean_absolute_error(y_test, test_pred)}
+    )
+
+
 def build_svm_model(hp):
     """
     Builds an SVR model with tunable hyperparameters.
@@ -771,14 +1361,14 @@ def build_svm_model(hp):
     Returns:
     - model: Configured SVR model
     """
-    kernel_choice = hp.Choice('kernel', ['linear', 'rbf', 'poly'])
-    model = SVR(
+    kernel_choice = hp.Choice('kernel', ['linear', 'rbf'])
+    svr = SVR(
         kernel=kernel_choice,
-        C=hp.Float('C', 1e-3, 1e3, sampling='log'),
-        gamma=hp.Float('gamma', 1e-4, 1e1, sampling='log'),
-        degree=hp.Int('degree', 2, 5) if kernel_choice == 'poly' else 3
+        C=hp.Float('C', 1e-3, 10.0, sampling='log'),
+        gamma=hp.Float('gamma', 1e-4, 0.5, sampling='log'),
+        max_iter=10000
     )
-    return model
+    return TransformedTargetRegressor(regressor=svr, transformer=StandardScaler())
 
 def tune_svm_model(stock_symbol, training_dataset_df, max_trials=20):
     """
@@ -832,37 +1422,40 @@ def create_sequences(data, time_steps):
     - time_steps (int): Number of time steps per sequence
     
     Returns:
-    - np.array: 3D array of shape (samples - time_steps + 1, time_steps, features)
-    
-    Raises:
-    - ValueError: If data is insufficient for sequence creation
+    - tuple[np.array, np.array]: Sequence inputs and next-step targets
     
     Example:
     >>> data = np.array([[1,2], [3,4], [5,6], [7,8], [9,10]])
-    >>> sequences = create_sequences(data, time_steps=3)
+    >>> sequences, targets = create_sequences(data, time_steps=3)
     >>> sequences.shape
-    (3, 3, 2)
+    (2, 3, 2)
     """
-    if len(data) < time_steps:
-        raise ValueError(
-            f"Insufficient data for sequence creation. "
-            f"Need at least {time_steps} samples, got {len(data)}"
-        )
-    
+    data = np.asarray(data)
+    if data.ndim == 1:
+        data = data.reshape(-1, 1)
+
+    if len(data) <= time_steps:
+        empty_sequences = np.empty((0, time_steps, data.shape[1]))
+        empty_targets = np.empty((0, data.shape[1]))
+        return empty_sequences, empty_targets
+
     Xs = []
-    for i in range(len(data) - time_steps + 1):
+    ys = []
+    for i in range(len(data) - time_steps):
         Xs.append(data[i:(i + time_steps)])
-    
+        ys.append(data[i + time_steps])
+
     result = np.array(Xs)
+    targets = np.array(ys)
     
     # Validate output shape
-    expected_shape = (len(data) - time_steps + 1, time_steps, data.shape[1])
+    expected_shape = (len(data) - time_steps, time_steps, data.shape[1])
     if result.shape != expected_shape:
         raise ValueError(
             f"Sequence creation failed. Expected shape {expected_shape}, got {result.shape}"
         )
     
-    return result
+    return result, targets
 
 def prepare_lstm_datasets(x_train, y_train, x_val, y_val, x_test, y_test, time_steps):
     """
@@ -889,14 +1482,14 @@ def prepare_lstm_datasets(x_train, y_train, x_val, y_val, x_test, y_test, time_s
         raise ValueError(f"Test set too small: {len(x_test)} samples, need at least {min_required_samples}")
     
     # Create sequences
-    x_train_lstm = create_sequences(x_train, time_steps)
-    y_train_lstm = y_train[time_steps-1:].reshape(-1, 1)
+    x_train_lstm, _ = create_sequences(x_train, time_steps)
+    y_train_lstm = y_train[time_steps:].reshape(-1, 1)
     
-    x_val_lstm = create_sequences(x_val, time_steps)
-    y_val_lstm = y_val[time_steps-1:].reshape(-1, 1)
+    x_val_lstm, _ = create_sequences(x_val, time_steps)
+    y_val_lstm = y_val[time_steps:].reshape(-1, 1)
     
-    x_test_lstm = create_sequences(x_test, time_steps)
-    y_test_lstm = y_test[time_steps-1:].reshape(-1, 1)
+    x_test_lstm, _ = create_sequences(x_test, time_steps)
+    y_test_lstm = y_test[time_steps:].reshape(-1, 1)
     
     # Validate shapes
     assert x_train_lstm.ndim == 3, f"x_train_lstm should be 3D, got {x_train_lstm.ndim}D"
@@ -976,7 +1569,7 @@ def build_lstm_model(hp, input_shape):
     model.add(BatchNormalization())
 
     max_amount_layers = 5
-    for i in range(1, hp.Int('n_layers', 1, max_amount_layers)):
+    for i in range(1, _coerce_hparam_int(hp.Int('n_layers', 1, max_amount_layers), 1)):
         model.add(
             Bidirectional(
                 LSTM(
@@ -1045,9 +1638,13 @@ def build_lstm_model(hp, input_shape):
                 max_value=128,
                 step=16
             ),
-            activation=hp.Choice(
-                "dense_1_activation",
-                ["relu", "tanh"]
+            activation=_coerce_hparam_choice(
+                hp.Choice(
+                    "dense_1_activation",
+                    ["relu", "tanh"]
+                ),
+                ["relu", "tanh"],
+                "relu",
             )
         )
     )
@@ -1070,9 +1667,13 @@ def build_lstm_model(hp, input_shape):
                 min_value=4,
                 max_value=96,
                 step=4),
-            activation=hp.Choice(
-                "dense_2_activation",
-                ["relu", "sigmoid"]
+            activation=_coerce_hparam_choice(
+                hp.Choice(
+                    "dense_2_activation",
+                    ["relu", "sigmoid"]
+                ),
+                ["relu", "sigmoid"],
+                "relu",
             )
         )
     )
@@ -1097,9 +1698,13 @@ def build_lstm_model(hp, input_shape):
     )
 
     # Optimizer choice with gradient clipping to prevent exploding gradients
-    optimizer_choice = hp.Choice("optimizer", ["adam", "rmsprop"])
-    learning_rate = hp.Float("learning_rate", 1e-5, 1e-3, sampling="log")
-    clipnorm = hp.Float("clipnorm", 0.5, 2.0, step=0.5)
+    optimizer_choice = _coerce_hparam_choice(
+        hp.Choice("optimizer", ["adam", "rmsprop"]),
+        ["adam", "rmsprop"],
+        "adam",
+    )
+    learning_rate = _coerce_hparam_float(hp.Float("learning_rate", 1e-5, 1e-3, sampling="log"), 1e-3)
+    clipnorm = _coerce_hparam_float(hp.Float("clipnorm", 0.5, 2.0, step=0.5), 1.0)
 
     if optimizer_choice == "adam":
         optimizer = Adam(learning_rate=learning_rate, clipnorm=clipnorm)
@@ -1107,9 +1712,13 @@ def build_lstm_model(hp, input_shape):
         optimizer = RMSprop(learning_rate=learning_rate, clipnorm=clipnorm)
 
     # Loss choice - MAE added to reduce mode collapse risk (less sensitive to outliers than MSE)
-    loss_choice = hp.Choice(
-        "loss",
-        ["mean_absolute_error", "mean_squared_error", "huber", "mean_absolute_percentage_error"]
+    loss_choice = _coerce_hparam_choice(
+        hp.Choice(
+            "loss",
+            ["mean_absolute_error", "mean_squared_error", "huber", "mean_absolute_percentage_error"]
+        ),
+        ["mean_absolute_error", "mean_squared_error", "huber", "mean_absolute_percentage_error"],
+        "mean_squared_error",
     )
 
     # Optimizer with tunable learning rate
@@ -1122,7 +1731,8 @@ def build_lstm_model(hp, input_shape):
 
 def tune_lstm_model(stock, x_train_lstm, y_train_lstm, x_val_lstm, y_val_lstm, time_steps, num_features, 
                     max_trials=25, executions_per_trial=1, epochs=50, retries=3, delay=5,
-                    use_cached_hp=True, cache_max_age_days=30, cleanup_after_tuning=True):
+                    use_cached_hp=True, cache_max_age_days=30, cleanup_after_tuning=True,
+                    require_cached_hp=False):
     """
     Tunes LSTM model hyperparameters using Keras Tuner.
     
@@ -1157,8 +1767,21 @@ def tune_lstm_model(stock, x_train_lstm, y_train_lstm, x_val_lstm, y_val_lstm, t
     
     # Check for cached hyperparameters in database first
     if use_cached_hp:
-        from db_interactions import load_hyperparameters
-        cached = load_hyperparameters(stock, 'lstm', max_age_days=cache_max_age_days)
+        cached = None
+        try:
+            from db_interactions import load_hyperparameters
+
+            cached = load_hyperparameters(stock, 'lstm', max_age_days=cache_max_age_days)
+        except CACHED_HP_LOAD_EXCEPTIONS as e:
+            if require_cached_hp:
+                raise PredictionTrainingRequiredError(
+                    ticker=stock,
+                    required_model_types=['lstm'],
+                    missing_model_types=['lstm'],
+                    message=f"Cached LSTM hyperparameters are unavailable for {stock}: {e}",
+                ) from e
+            print(f"[WARN] Failed to load cached LSTM hyperparameters, will retune: {e}")
+
         if cached is not None:
             print(f"[CACHE] Loading cached LSTM hyperparameters for {stock}")
             try:
@@ -1169,10 +1792,34 @@ def tune_lstm_model(stock, x_train_lstm, y_train_lstm, x_val_lstm, y_val_lstm, t
                 
                 best_model = build_lstm_model(hp, input_shape=(time_steps, num_features))
                 best_model.build(input_shape=(None, time_steps, num_features))
-                print(f"[CACHE] Successfully built LSTM model from cached hyperparameters")
+                fit_cached_lstm_model(
+                    best_model,
+                    cached,
+                    x_train_lstm,
+                    y_train_lstm,
+                    x_val_lstm,
+                    y_val_lstm,
+                    epochs=epochs,
+                    verbose=0,
+                )
+                print("[CACHE] Successfully rebuilt and fit LSTM model from cached hyperparameters")
                 return best_model
-            except Exception as e:
+            except CACHED_MODEL_RESTORE_EXCEPTIONS as e:
+                if require_cached_hp:
+                    raise_cache_invalidated_error(
+                        stock,
+                        'lstm',
+                        e,
+                        invalidator=invalidate_hyperparameter_cache,
+                    )
                 print(f"[WARN] Failed to build from cached HP, will retune: {e}")
+
+    if require_cached_hp:
+        raise PredictionTrainingRequiredError(
+            ticker=stock,
+            required_model_types=['lstm'],
+            missing_model_types=['lstm'],
+        )
     
     # Setup directories
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1253,8 +1900,8 @@ def tune_lstm_model(stock, x_train_lstm, y_train_lstm, x_val_lstm, y_val_lstm, t
                 initial_lr = hp.get("learning_rate")
                 decay_rate = hp.Float("decay_rate", 0.9, 0.99, step=0.01)
 
-                def lr_schedule(epoch, lr):
-                    return initial_lr * (decay_rate ** epoch)
+                def lr_schedule(_epoch, _lr):
+                    return initial_lr * (decay_rate ** _epoch)
 
                 callbacks.append(LearningRateScheduler(lr_schedule))
 
@@ -1272,6 +1919,7 @@ def tune_lstm_model(stock, x_train_lstm, y_train_lstm, x_val_lstm, y_val_lstm, t
         hypermodel,
         objective="val_loss",
         max_trials=max_trials,
+        executions_per_trial=executions_per_trial,
         num_initial_points=min(5, max_trials // 2),  # Random exploration first
         alpha=0.0001,
         beta=2.6,
@@ -1331,12 +1979,20 @@ def tune_lstm_model(stock, x_train_lstm, y_train_lstm, x_val_lstm, y_val_lstm, t
     for param, value in best_hp.values.items():
         print(f"- {param}: {value}")
 
-    best_model = build_lstm_model(
-        best_hp,
-        input_shape=(time_steps, num_features)
+    best_model = _restore_or_refit_sequence_tuner_model(
+        tuner=tuner,
+        best_hp=best_hp,
+        build_model=build_lstm_model,
+        fit_model=fit_cached_lstm_model,
+        x_train=x_train_lstm,
+        y_train=y_train_lstm,
+        x_val=x_val_lstm,
+        y_val=y_val_lstm,
+        time_steps=time_steps,
+        num_features=num_features,
+        epochs=epochs,
+        model_label='LSTM',
     )
-
-    best_model.build(input_shape=(None, time_steps, num_features))
     print("Best model architecture:")
     print(best_model.summary())
 
@@ -1369,7 +2025,7 @@ def tune_lstm_model(stock, x_train_lstm, y_train_lstm, x_val_lstm, y_val_lstm, t
             val_mae=val_mae
         )
         print(f"[OK] LSTM hyperparameters saved to database for {stock}")
-    except Exception as e:
+    except HYPERPARAMETER_SAVE_EXCEPTIONS as e:
         print(f"[WARN] Failed to save LSTM hyperparameters to database: {e}")
 
     # Cleanup temp dir
@@ -1558,7 +2214,7 @@ def build_tcn_model(hp, input_shape):
     
     # Build TCN stacks with exponentially increasing dilation rates
     # Dilation rates: [1, 2, 4, 8, 16, ...] capture different temporal scales
-    for stack in range(nb_stacks):
+    for _ in range(nb_stacks):
         for i in range(dilations_per_stack):
             dilation_rate = 2 ** i  # Exponential dilation: 1, 2, 4, 8, 16, 32, 64
             x = tcn_residual_block(
@@ -1616,7 +2272,8 @@ def build_tcn_model(hp, input_shape):
 
 def tune_tcn_model(stock, x_train, y_train, x_val, y_val, time_steps, num_features, 
                    max_trials=30, epochs=100, retries=3, delay=5,
-                   use_cached_hp=True, cache_max_age_days=30, cleanup_after_tuning=True):
+                   use_cached_hp=True, cache_max_age_days=30, cleanup_after_tuning=True,
+                   require_cached_hp=False):
     """
     Tune TCN model hyperparameters using Keras Tuner.
     
@@ -1649,8 +2306,21 @@ def tune_tcn_model(stock, x_train, y_train, x_val, y_val, time_steps, num_featur
     
     # Check for cached hyperparameters in database first
     if use_cached_hp:
-        from db_interactions import load_hyperparameters
-        cached = load_hyperparameters(stock, 'tcn', max_age_days=cache_max_age_days)
+        cached = None
+        try:
+            from db_interactions import load_hyperparameters
+
+            cached = load_hyperparameters(stock, 'tcn', max_age_days=cache_max_age_days)
+        except CACHED_HP_LOAD_EXCEPTIONS as e:
+            if require_cached_hp:
+                raise PredictionTrainingRequiredError(
+                    ticker=stock,
+                    required_model_types=['tcn'],
+                    missing_model_types=['tcn'],
+                    message=f"Cached TCN hyperparameters are unavailable for {stock}: {e}",
+                ) from e
+            print(f"[WARN] Failed to load cached TCN hyperparameters, will retune: {e}")
+
         if cached is not None:
             print(f"[CACHE] Loading cached TCN hyperparameters for {stock}")
             try:
@@ -1662,10 +2332,34 @@ def tune_tcn_model(stock, x_train, y_train, x_val, y_val, time_steps, num_featur
                 
                 best_model = build_tcn_model(hp, input_shape=(time_steps, num_features))
                 best_model.build(input_shape=(None, time_steps, num_features))
-                print(f"[CACHE] Successfully built TCN model from cached hyperparameters")
+                fit_cached_tcn_model(
+                    best_model,
+                    cached,
+                    x_train,
+                    y_train,
+                    x_val,
+                    y_val,
+                    epochs=epochs,
+                    verbose=0,
+                )
+                print("[CACHE] Successfully rebuilt and fit TCN model from cached hyperparameters")
                 return best_model
-            except Exception as e:
+            except CACHED_MODEL_RESTORE_EXCEPTIONS as e:
+                if require_cached_hp:
+                    raise_cache_invalidated_error(
+                        stock,
+                        'tcn',
+                        e,
+                        invalidator=invalidate_hyperparameter_cache,
+                    )
                 print(f"[WARN] Failed to build from cached HP, will retune: {e}")
+
+    if require_cached_hp:
+        raise PredictionTrainingRequiredError(
+            ticker=stock,
+            required_model_types=['tcn'],
+            missing_model_types=['tcn'],
+        )
     
     # Setup directories
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1787,8 +2481,20 @@ def tune_tcn_model(stock, x_train, y_train, x_val, y_val, time_steps, num_featur
         if param.startswith('tcn_'):
             print(f"   - {param}: {value}")
     
-    best_model = build_tcn_model(best_hp, input_shape=(time_steps, num_features))
-    best_model.build(input_shape=(None, time_steps, num_features))
+    best_model = _restore_or_refit_sequence_tuner_model(
+        tuner=tuner,
+        best_hp=best_hp,
+        build_model=build_tcn_model,
+        fit_model=fit_cached_tcn_model,
+        x_train=x_train,
+        y_train=y_train,
+        x_val=x_val,
+        y_val=y_val,
+        time_steps=time_steps,
+        num_features=num_features,
+        epochs=epochs,
+        model_label='TCN',
+    )
     
     print("\nTCN Model Summary:")
     best_model.summary()
@@ -1823,7 +2529,7 @@ def tune_tcn_model(stock, x_train, y_train, x_val, y_val, time_steps, num_featur
             val_mae=val_mae
         )
         print(f"[OK] TCN hyperparameters saved to database for {stock}")
-    except Exception as e:
+    except HYPERPARAMETER_SAVE_EXCEPTIONS as e:
         print(f"[WARN] Failed to save TCN hyperparameters to database: {e}")
     
     # Cleanup temp directory and optionally the final tuning directory
@@ -1894,7 +2600,7 @@ def load_best_tcn_model(finished_project_path, time_steps, num_features):
         
         best_trials = temp_tuner.oracle.get_best_trials(num_trials=1)
         if not best_trials:
-            print(f"[WARN] No successful TCN trials found")
+            print("[WARN] No successful TCN trials found")
             return None
         
         best_hp = best_trials[0].hyperparameters
@@ -1977,8 +2683,6 @@ def predict_with_uncertainty(model, x_input, n_iterations=50, model_type='tcn'):
         - 'all_predictions': Array of individual predictions
         - 'confidence': Confidence level based on std (High/Medium/Low)
     """
-    import tensorflow as tf
-    
     predictions = []
     
     for i in range(n_iterations):
@@ -1991,7 +2695,7 @@ def predict_with_uncertainty(model, x_input, n_iterations=50, model_type='tcn'):
         except Exception as e:
             # Fallback to regular predict if training mode fails
             if i == 0:
-                print(f"[WARN] MC Dropout failed, using regular predict: {e}")
+                print(f"[WARN] {model_type.upper()} MC Dropout failed, using regular predict: {e}")
             pred = model.predict(x_input, verbose=0)
             predictions.append(pred.flatten()[0])
     
@@ -2218,7 +2922,16 @@ def detect_overfitting(train_metrics, val_metrics, test_metrics, model_name, thr
     Returns:
     - is_overfitted (bool): True if overfitting detected
     - overfitting_score (float): Severity of overfitting (0 = none, >1 = severe)
+    - details (dict): Diagnostic breakdown of metrics and score components
     """
+    details = {
+        'model_name': model_name,
+        'threshold': threshold,
+        'use_multi_metric': use_multi_metric,
+        'train_metrics': train_metrics,
+        'val_metrics': val_metrics,
+        'test_metrics': test_metrics,
+    }
 
     if use_multi_metric:
         # ===== MULTI-METRIC OVERFITTING DETECTION =====
@@ -2246,13 +2959,19 @@ def detect_overfitting(train_metrics, val_metrics, test_metrics, model_name, thr
         # 5. Combined Overfitting Score (weighted average)
         # MSE and MAE are most important, R² secondary, consistency is a tiebreaker
         overfitting_score = (
-            0.35 * mse_score + 
+            0.40 * mse_score + 
             0.25 * r2_degradation_score + 
             0.30 * mae_score + 
-            0.10 * consistency_score
+            0.05 * consistency_score
         )
+        details.update({
+            'mse_score': mse_score,
+            'r2_degradation_score': r2_degradation_score,
+            'mae_score': mae_score,
+            'consistency_score': consistency_score,
+        })
         
-        is_overfitted = overfitting_score > threshold
+        is_overfitted = overfitting_score >= threshold
         
         print(f"\n{'='*60}")
         print(f"[DETECT] MULTI-METRIC OVERFITTING DETECTION: {model_name}")
@@ -2283,7 +3002,11 @@ def detect_overfitting(train_metrics, val_metrics, test_metrics, model_name, thr
         train_val_mse_ratio = (val_metrics['mse'] - train_metrics['mse']) / train_metrics['mse']
         val_test_mse_ratio = (test_metrics['mse'] - val_metrics['mse']) / val_metrics['mse']
         overfitting_score = max(train_val_mse_ratio, val_test_mse_ratio)
-        is_overfitted = overfitting_score > threshold
+        details.update({
+            'train_val_mse_ratio': train_val_mse_ratio,
+            'val_test_mse_ratio': val_test_mse_ratio,
+        })
+        is_overfitted = overfitting_score >= threshold
         
         print(f"\n{'='*60}")
         print(f"[DETECT] OVERFITTING DETECTION: {model_name}")
@@ -2304,7 +3027,7 @@ def detect_overfitting(train_metrics, val_metrics, test_metrics, model_name, thr
             print(f"[OK] No overfitting detected (score: {overfitting_score:.4f} <= threshold: {threshold:.4f})")
 
     print(f"{'='*60}\n")
-    return is_overfitted, overfitting_score
+    return is_overfitted, overfitting_score, details
 
 def check_data_health(x_train, x_val, x_test, y_train, y_val, y_test, model_name, stock_symbol=None):
     """
@@ -2426,7 +3149,7 @@ def are_hyperparameters_identical(hp1, hp2, tolerance=0.01):
         
         # Compare numeric values with tolerance
         if isinstance(val1, (int, float)) and isinstance(val2, (int, float)):
-            if abs(val1 - val2) > tolerance * max(abs(val1), abs(val2), 1):
+            if abs(val1 - val2) > tolerance * max(abs(val1), abs(val2), 1e-12):
                 return False
         # Compare non-numeric values exactly
         elif val1 != val2:
@@ -2434,7 +3157,7 @@ def are_hyperparameters_identical(hp1, hp2, tolerance=0.01):
     
     return True
 
-def train_and_validate_models(stock_symbol, x_train, x_val, x_test, y_train_scaled, y_val_scaled, y_test_scaled, y_train_unscaled, y_val_unscaled, y_test_unscaled, time_steps, scaler_y=None, max_retrains=10, overfitting_threshold=0.15, lstm_trials=25, lstm_executions=1, lstm_epochs=50, rf_trials=50, xgb_trials=30, rf_retrain_increment=25, xgb_retrain_increment=10, lstm_retrain_trials_increment=10, lstm_retrain_executions_increment=2, use_multi_metric_detection=True, use_tcn=True, tcn_trials=30, tcn_epochs=100, tcn_retrain_increment=10):
+def train_and_validate_models(stock_symbol, x_train, x_val, x_test, y_train_scaled, y_val_scaled, y_test_scaled, y_train_unscaled, y_val_unscaled, y_test_unscaled, time_steps, scaler_y=None, max_retrains=10, overfitting_threshold=0.15, lstm_trials=25, lstm_executions=1, lstm_epochs=50, rf_trials=50, xgb_trials=30, rf_retrain_increment=25, xgb_retrain_increment=10, lstm_retrain_trials_increment=10, lstm_retrain_executions_increment=2, use_multi_metric_detection=True, use_tcn=True, use_sequence_model=True, tcn_trials=30, tcn_epochs=100, tcn_retrain_increment=10, cache_max_age_days=30, cache_only=False):
     """
     Train and validate models with automatic retraining if overfitting is detected.
     Includes LSTM/TCN, Random Forest, XGBoost, and ensemble predictions.
@@ -2462,6 +3185,8 @@ def train_and_validate_models(stock_symbol, x_train, x_val, x_test, y_train_scal
     - tcn_trials (int): Max trials for TCN tuning
     - tcn_epochs (int): Training epochs for TCN
     - tcn_retrain_increment (int): Trials to add when retraining TCN
+    - cache_max_age_days (int): Maximum age for reusable cached hyperparameters
+    - cache_only (bool): If True, require valid cached hyperparameters and never retune
     - lstm_retrain_executions_increment (int): Executions to add when retraining LSTM
     - use_multi_metric_detection (bool): Whether to use multi-metric overfitting detection
     
@@ -2471,7 +3196,7 @@ def train_and_validate_models(stock_symbol, x_train, x_val, x_test, y_train_scal
     - lstm_datasets: Prepared LSTM/TCN datasets for later use
     """
 
-    training_history = {
+    training_history: dict[str, Any] = {
         'lstm': [],
         'tcn': [],
         'random_forest': [],
@@ -2480,8 +3205,12 @@ def train_and_validate_models(stock_symbol, x_train, x_val, x_test, y_train_scal
         'final_decision': None,
         'diagnostics': {},
         'early_stopping_triggered': {},
-        'sequence_model_type': 'tcn' if use_tcn else 'lstm'
+        'cache_only': cache_only,
+        'sequence_model_type': ('tcn' if use_tcn else 'lstm') if use_sequence_model else 'none'
     }
+
+    if cache_only:
+        max_retrains = 1
     
     # Run diagnostic checks before training
     print("\n" + "="*60)
@@ -2514,24 +3243,30 @@ def train_and_validate_models(stock_symbol, x_train, x_val, x_test, y_train_scal
     y_test_unscaled_series = pd.Series(y_test_unscaled)      # UNSCALED for Random Forest
 
     # Prepare sequence datasets ONCE (used by both TCN and LSTM)
-    seq_label = "TCN" if use_tcn else "LSTM"
-    print("\n" + "="*60)
-    print(f"[DATA] PREPARING {seq_label} SEQUENCE DATASETS")
-    print("="*60)
+    lstm_datasets = None
+    if use_sequence_model:
+        seq_label = "TCN" if use_tcn else "LSTM"
+        print("\n" + "="*60)
+        print(f"[DATA] PREPARING {seq_label} SEQUENCE DATASETS")
+        print("="*60)
 
-    lstm_datasets = prepare_lstm_datasets(
-        x_train, y_train_scaled,
-        x_val, y_val_scaled,
-        x_test, y_test_scaled,
-        time_steps
-    )
+        lstm_datasets = prepare_lstm_datasets(
+            x_train, y_train_scaled,
+            x_val, y_val_scaled,
+            x_test, y_test_scaled,
+            time_steps
+        )
 
-    print(f"[OK] {seq_label} sequence datasets prepared:")
-    print(f"   - Training samples: {lstm_datasets['metadata']['train_samples']}")
-    print(f"   - Validation samples: {lstm_datasets['metadata']['val_samples']}")
-    print(f"   - Test samples: {lstm_datasets['metadata']['test_samples']}")
-    print(f"   - Time steps: {lstm_datasets['metadata']['time_steps']}")
-    print(f"   - Features: {lstm_datasets['metadata']['num_features']}")
+        print(f"[OK] {seq_label} sequence datasets prepared:")
+        print(f"   - Training samples: {lstm_datasets['metadata']['train_samples']}")
+        print(f"   - Validation samples: {lstm_datasets['metadata']['val_samples']}")
+        print(f"   - Test samples: {lstm_datasets['metadata']['test_samples']}")
+        print(f"   - Time steps: {lstm_datasets['metadata']['time_steps']}")
+        print(f"   - Features: {lstm_datasets['metadata']['num_features']}")
+    else:
+        print("\n" + "="*60)
+        print("[INFO] SEQUENCE MODEL DISABLED — Training RF + XGB + Ridge + SVR only")
+        print("="*60)
 
     lstm_model = None
     tcn_model = None
@@ -2544,7 +3279,7 @@ def train_and_validate_models(stock_symbol, x_train, x_val, x_test, y_train_scal
     sequence_model = None  # Will hold either LSTM or TCN model
 
     # ===== SEQUENCE MODEL TRAINING (TCN or LSTM) =====
-    if use_tcn:
+    if use_sequence_model and use_tcn:
         # ===== TCN TRAINING LOOP =====
         print("\n" + "="*60)
         print("[TCN] STARTING TCN MODEL TRAINING")
@@ -2570,7 +3305,9 @@ def train_and_validate_models(stock_symbol, x_train, x_val, x_test, y_train_scal
                 lstm_datasets['metadata']['num_features'],
                 max_trials=tcn_current_trials,
                 epochs=tcn_epochs,
-                use_cached_hp=(tcn_attempt == 0)
+                use_cached_hp=(tcn_attempt == 0),
+                cache_max_age_days=cache_max_age_days,
+                require_cached_hp=cache_only,
             )
 
             # Evaluate TCN
@@ -2590,7 +3327,7 @@ def train_and_validate_models(stock_symbol, x_train, x_val, x_test, y_train_scal
             })
 
             # Detect overfitting
-            tcn_overfitted, tcn_overfitting_score = detect_overfitting(
+            tcn_overfitted, tcn_overfitting_score, _ = detect_overfitting(
                 train_metrics, val_metrics, test_metrics, "TCN", overfitting_threshold, use_multi_metric_detection
             )
 
@@ -2609,7 +3346,7 @@ def train_and_validate_models(stock_symbol, x_train, x_val, x_test, y_train_scal
                         from db_interactions import invalidate_hyperparameters
                         invalidate_hyperparameters(ticker=stock_symbol, model_type='tcn')
                         print("[CACHE] Invalidated bad TCN cached hyperparameters")
-                    except Exception:
+                    except ImportError:
                         pass
                 print("[WARN] Retraining TCN with adjusted hyperparameters...")
                 print(f"   Increasing trials: {tcn_current_trials} -> {tcn_current_trials + tcn_retrain_increment}")
@@ -2618,10 +3355,9 @@ def train_and_validate_models(stock_symbol, x_train, x_val, x_test, y_train_scal
                 print("[WARN] TCN reached maximum retrain attempts. Accepting current model.")
 
         sequence_model = tcn_model
-        sequence_model_history = training_history['tcn']
         sequence_model_overfitted = tcn_overfitted
         sequence_model_name = "TCN"
-    else:
+    elif use_sequence_model and not use_tcn:
         # ===== LSTM TRAINING LOOP =====
         print("\n" + "="*60)
         print("[LSTM] STARTING LSTM MODEL TRAINING")
@@ -2644,7 +3380,9 @@ def train_and_validate_models(stock_symbol, x_train, x_val, x_test, y_train_scal
                 max_trials=lstm_trials,
                 executions_per_trial=lstm_executions,
                 epochs=lstm_epochs,
-                use_cached_hp=(lstm_attempt == 0)
+                use_cached_hp=(lstm_attempt == 0),
+                cache_max_age_days=cache_max_age_days,
+                require_cached_hp=cache_only,
             )
 
             # Evaluate LSTM
@@ -2664,7 +3402,7 @@ def train_and_validate_models(stock_symbol, x_train, x_val, x_test, y_train_scal
             })
 
             # Detect overfitting
-            lstm_overfitted, lstm_overfitting_score = detect_overfitting(
+            lstm_overfitted, lstm_overfitting_score, _ = detect_overfitting(
                 train_metrics, val_metrics, test_metrics, "LSTM", overfitting_threshold, use_multi_metric_detection
             )
 
@@ -2683,7 +3421,7 @@ def train_and_validate_models(stock_symbol, x_train, x_val, x_test, y_train_scal
                         from db_interactions import invalidate_hyperparameters
                         invalidate_hyperparameters(ticker=stock_symbol, model_type='lstm')
                         print("[CACHE] Invalidated bad LSTM cached hyperparameters")
-                    except Exception:
+                    except ImportError:
                         pass
                 print("[WARN] Retraining LSTM with adjusted hyperparameters...")
                 print(f"   Increasing trials: {lstm_trials} -> {lstm_trials + lstm_retrain_trials_increment}")
@@ -2694,9 +3432,13 @@ def train_and_validate_models(stock_symbol, x_train, x_val, x_test, y_train_scal
                 print("[WARN] LSTM reached maximum retrain attempts. Accepting current model.")
 
         sequence_model = lstm_model
-        sequence_model_history = training_history['lstm']
         sequence_model_overfitted = lstm_overfitted
         sequence_model_name = "LSTM"
+    else:
+        # Sequence model disabled — 4-model ensemble only
+        sequence_model = None
+        sequence_model_overfitted = False
+        sequence_model_name = "none"
 
     # ===== RANDOM FOREST TRAINING LOOP =====
     print("\n" + "="*60)
@@ -2727,7 +3469,9 @@ def train_and_validate_models(stock_symbol, x_train, x_val, x_test, y_train_scal
             y_val_unscaled_series,
             max_trials=rf_trials,
             constrain_for_overfitting=rf_search_space_constrained,
-            use_cached_hp=(rf_attempt == 0)
+            use_cached_hp=(rf_attempt == 0),
+            cache_max_age_days=cache_max_age_days,
+            require_cached_hp=cache_only,
         )
         
         # Extract hyperparameters for comparison
@@ -2749,7 +3493,7 @@ def train_and_validate_models(stock_symbol, x_train, x_val, x_test, y_train_scal
         })
 
         # Detect overfitting
-        rf_overfitted, rf_overfitting_score = detect_overfitting(
+        rf_overfitted, rf_overfitting_score, _ = detect_overfitting(
             train_metrics, val_metrics, test_metrics, "Random Forest", overfitting_threshold, use_multi_metric_detection
         )
         
@@ -2792,7 +3536,7 @@ def train_and_validate_models(stock_symbol, x_train, x_val, x_test, y_train_scal
                     from db_interactions import invalidate_hyperparameters
                     invalidate_hyperparameters(ticker=stock_symbol, model_type='rf')
                     print("[CACHE] Invalidated bad RF cached hyperparameters")
-                except Exception:
+                except ImportError:
                     pass
             print("[WARN] Retraining Random Forest with adjusted hyperparameters...")
             if not rf_search_space_constrained:
@@ -2833,7 +3577,9 @@ def train_and_validate_models(stock_symbol, x_train, x_val, x_test, y_train_scal
             y_val_unscaled_series,
             max_trials=xgb_trials,
             constrain_for_overfitting=xgb_search_space_constrained,
-            use_cached_hp=(xgb_attempt == 0)
+            use_cached_hp=(xgb_attempt == 0),
+            cache_max_age_days=cache_max_age_days,
+            require_cached_hp=cache_only,
         )
         
         # Extract hyperparameters for comparison
@@ -2855,7 +3601,7 @@ def train_and_validate_models(stock_symbol, x_train, x_val, x_test, y_train_scal
         })
 
         # Detect overfitting
-        xgb_overfitted, xgb_overfitting_score = detect_overfitting(
+        xgb_overfitted, xgb_overfitting_score, _ = detect_overfitting(
             train_metrics, val_metrics, test_metrics, "XGBoost", overfitting_threshold, use_multi_metric_detection
         )
         
@@ -2898,7 +3644,7 @@ def train_and_validate_models(stock_symbol, x_train, x_val, x_test, y_train_scal
                     from db_interactions import invalidate_hyperparameters
                     invalidate_hyperparameters(ticker=stock_symbol, model_type='xgb')
                     print("[CACHE] Invalidated bad XGBoost cached hyperparameters")
-                except Exception:
+                except ImportError:
                     pass
             print("[WARN] Retraining XGBoost with adjusted hyperparameters...")
             if not xgb_search_space_constrained:
@@ -2909,32 +3655,62 @@ def train_and_validate_models(stock_symbol, x_train, x_val, x_test, y_train_scal
         else:
             print("[WARN] XGBoost reached maximum retrain attempts. Accepting current model.")
 
+    # ===== RIDGE REGRESSION TRAINING =====
+    print("\n" + "="*60)
+    print(f"[RIDGE] TRAINING RIDGE REGRESSION for {stock_symbol}")
+    print("="*60)
+    ridge_model = tune_ridge_model(
+        stock_symbol, x_train_df, y_train_unscaled_series,
+        x_val_df, y_val_unscaled_series,
+        max_trials=50,
+        constrain_for_overfitting=False,
+        use_cached_hp=True, cache_max_age_days=cache_max_age_days,
+        cleanup_after_tuning=True,
+        require_cached_hp=cache_only,
+    )
+    ridge_train_metrics, ridge_val_metrics, ridge_test_metrics = evaluate_ridge_model(
+        ridge_model, x_train_df.values, y_train_unscaled_series.values,
+        x_val_df.values, y_val_unscaled_series.values,
+        x_test_df.values, y_test_unscaled_series.values
+    )
+    training_history['ridge'] = [{
+        'train_metrics': ridge_train_metrics,
+        'val_metrics': ridge_val_metrics,
+        'test_metrics': ridge_test_metrics
+    }]
+    print(f"[RIDGE] Val MSE: {ridge_val_metrics['mse']:.6f}, R2: {ridge_val_metrics['r2']:.4f}")
+
+    # ===== SVR TRAINING =====
+    print("\n" + "="*60)
+    print(f"[SVR] TRAINING SVR for {stock_symbol}")
+    print("="*60)
+    svr_model = tune_svr_model(
+        stock_symbol, x_train_df, y_train_unscaled_series,
+        x_val_df, y_val_unscaled_series,
+        max_trials=40,
+        constrain_for_overfitting=False,
+        use_cached_hp=True, cache_max_age_days=cache_max_age_days,
+        cleanup_after_tuning=True,
+        require_cached_hp=cache_only,
+    )
+    svr_train_metrics, svr_val_metrics, svr_test_metrics = evaluate_svr_model(
+        svr_model, x_train_df.values, y_train_unscaled_series.values,
+        x_val_df.values, y_val_unscaled_series.values,
+        x_test_df.values, y_test_unscaled_series.values
+    )
+    training_history['svr'] = [{
+        'train_metrics': svr_train_metrics,
+        'val_metrics': svr_val_metrics,
+        'test_metrics': svr_test_metrics
+    }]
+    print(f"[SVR] Val MSE: {svr_val_metrics['mse']:.6f}, R2: {svr_val_metrics['r2']:.4f}")
+
     # ===== ENSEMBLE EVALUATION =====
     print("\n" + "="*60)
     print("[ENSEMBLE] EVALUATING ENSEMBLE PREDICTIONS")
     print("="*60)
 
-    # Get predictions from sequence model (TCN or LSTM) - these are in SCALED space
-    seq_train_pred_scaled = sequence_model.predict(lstm_datasets['train']['x'], verbose=0).flatten()
-    seq_val_pred_scaled = sequence_model.predict(lstm_datasets['val']['x'], verbose=0).flatten()
-    seq_test_pred_scaled = sequence_model.predict(lstm_datasets['test']['x'], verbose=0).flatten()
-
-    # Inverse-transform sequence model predictions to UNSCALED space
-    # so all models' predictions are on the same scale (original 1D returns)
-    if scaler_y is not None:
-        seq_train_pred = scaler_y.inverse_transform(seq_train_pred_scaled.reshape(-1, 1)).flatten()
-        seq_val_pred = scaler_y.inverse_transform(seq_val_pred_scaled.reshape(-1, 1)).flatten()
-        seq_test_pred = scaler_y.inverse_transform(seq_test_pred_scaled.reshape(-1, 1)).flatten()
-    else:
-        # Fallback: if scaler_y not provided, use scaled predictions (legacy behavior)
-        print("[WARN] scaler_y not provided to train_and_validate_models — ensemble weights may be inaccurate")
-        seq_train_pred = seq_train_pred_scaled
-        seq_val_pred = seq_val_pred_scaled
-        seq_test_pred = seq_test_pred_scaled
-
-    # RF and XGBoost predictions (full length, need to align with sequence model)
-    # These are already in UNSCALED space (trained on unscaled y)
-    # Convert to numpy to avoid feature name warnings
+    # RF and XGBoost predictions (full length, already in UNSCALED space)
     rf_train_pred_full = rf_model.predict(x_train_df.values)
     rf_val_pred_full = rf_model.predict(x_val_df.values)
     rf_test_pred_full = rf_model.predict(x_test_df.values)
@@ -2943,42 +3719,131 @@ def train_and_validate_models(stock_symbol, x_train, x_val, x_test, y_train_scal
     xgb_val_pred_full = xgb_model.predict(x_val_df)
     xgb_test_pred_full = xgb_model.predict(x_test_df)
 
-    # Align RF/XGBoost predictions with sequence model (trim first time_steps-1 samples)
-    rf_train_pred = rf_train_pred_full[time_steps-1:]
-    rf_val_pred = rf_val_pred_full[time_steps-1:]
-    rf_test_pred = rf_test_pred_full[time_steps-1:]
+    # Ridge and SVR predictions (full length, already in UNSCALED space)
+    ridge_train_pred_full = ridge_model.predict(x_train_df.values)
+    ridge_val_pred_full = ridge_model.predict(x_val_df.values)
+    ridge_test_pred_full = ridge_model.predict(x_test_df.values)
 
-    xgb_train_pred = xgb_train_pred_full[time_steps-1:]
-    xgb_val_pred = xgb_val_pred_full[time_steps-1:]
-    xgb_test_pred = xgb_test_pred_full[time_steps-1:]
+    svr_train_pred_full = svr_model.predict(x_train_df.values)
+    svr_val_pred_full = svr_model.predict(x_val_df.values)
+    svr_test_pred_full = svr_model.predict(x_test_df.values)
 
-    # Align ground truth values with sequence model sequences (all in UNSCALED space)
-    y_train_aligned = y_train_unscaled_series.iloc[time_steps-1:].values
-    y_val_aligned = y_val_unscaled_series.iloc[time_steps-1:].values
-    y_test_aligned = y_test_unscaled_series.iloc[time_steps-1:].values
+    if use_sequence_model:
+        # Get predictions from sequence model (TCN or LSTM) - these are in SCALED space
+        seq_train_pred_scaled = sequence_model.predict(lstm_datasets['train']['x'], verbose=0).flatten()
+        seq_val_pred_scaled = sequence_model.predict(lstm_datasets['val']['x'], verbose=0).flatten()
+        seq_test_pred_scaled = sequence_model.predict(lstm_datasets['test']['x'], verbose=0).flatten()
 
-    # Calculate ensemble weights using UNSCALED validation MSE for all models
-    # This ensures fair comparison: all MSEs are in the same scale (original 1D returns)
-    seq_model_key = 'tcn' if use_tcn else 'lstm'
-    seq_val_mse_unscaled = mean_squared_error(y_val_aligned, seq_val_pred)
-    rf_val_mse_unscaled = mean_squared_error(y_val_aligned, rf_val_pred)
-    xgb_val_mse_unscaled = mean_squared_error(y_val_aligned, xgb_val_pred)
+        # Inverse-transform sequence model predictions to UNSCALED space
+        if scaler_y is not None:
+            seq_train_pred = scaler_y.inverse_transform(seq_train_pred_scaled.reshape(-1, 1)).flatten()
+            seq_val_pred = scaler_y.inverse_transform(seq_val_pred_scaled.reshape(-1, 1)).flatten()
+            seq_test_pred = scaler_y.inverse_transform(seq_test_pred_scaled.reshape(-1, 1)).flatten()
+        else:
+            print("[WARN] scaler_y not provided — ensemble weights may be inaccurate")
+            seq_train_pred = seq_train_pred_scaled
+            seq_val_pred = seq_val_pred_scaled
+            seq_test_pred = seq_test_pred_scaled
 
-    print(f"\n[DATA] Validation MSE (all in unscaled return space):")
-    print(f"   - {sequence_model_name}: {seq_val_mse_unscaled:.8f}")
-    print(f"   - Random Forest:        {rf_val_mse_unscaled:.8f}")
-    print(f"   - XGBoost:              {xgb_val_mse_unscaled:.8f}")
+        train_alignment_start = _alignment_start_from_sequence_predictions(
+            y_train_unscaled_series.values,
+            seq_train_pred,
+            'train',
+        )
+        val_alignment_start = _alignment_start_from_sequence_predictions(
+            y_val_unscaled_series.values,
+            seq_val_pred,
+            'validation',
+        )
+        test_alignment_start = _alignment_start_from_sequence_predictions(
+            y_test_unscaled_series.values,
+            seq_test_pred,
+            'test',
+        )
 
-    # Inverse MSE weights (lower MSE = higher weight) — all on same scale now
-    inv_mse_sum = (1/seq_val_mse_unscaled) + (1/rf_val_mse_unscaled) + (1/xgb_val_mse_unscaled)
-    seq_weight = (1/seq_val_mse_unscaled) / inv_mse_sum
-    rf_weight = (1/rf_val_mse_unscaled) / inv_mse_sum
-    xgb_weight = (1/xgb_val_mse_unscaled) / inv_mse_sum
+        rf_train_pred = rf_train_pred_full[train_alignment_start:]
+        rf_val_pred = rf_val_pred_full[val_alignment_start:]
+        rf_test_pred = rf_test_pred_full[test_alignment_start:]
+        xgb_train_pred = xgb_train_pred_full[train_alignment_start:]
+        xgb_val_pred = xgb_val_pred_full[val_alignment_start:]
+        xgb_test_pred = xgb_test_pred_full[test_alignment_start:]
+        ridge_train_pred = ridge_train_pred_full[train_alignment_start:]
+        ridge_val_pred = ridge_val_pred_full[val_alignment_start:]
+        ridge_test_pred = ridge_test_pred_full[test_alignment_start:]
+        svr_train_pred = svr_train_pred_full[train_alignment_start:]
+        svr_val_pred = svr_val_pred_full[val_alignment_start:]
+        svr_test_pred = svr_test_pred_full[test_alignment_start:]
+
+        y_train_aligned = y_train_unscaled_series.iloc[train_alignment_start:].values
+        y_val_aligned = y_val_unscaled_series.iloc[val_alignment_start:].values
+        y_test_aligned = y_test_unscaled_series.iloc[test_alignment_start:].values
+
+        # Calculate ensemble weights using UNSCALED validation MSE for all 5 models
+        seq_model_key = 'tcn' if use_tcn else 'lstm'
+        seq_val_mse = mean_squared_error(y_val_aligned, seq_val_pred)
+        rf_val_mse = mean_squared_error(y_val_aligned, rf_val_pred)
+        xgb_val_mse = mean_squared_error(y_val_aligned, xgb_val_pred)
+        ridge_val_mse = mean_squared_error(y_val_aligned, ridge_val_pred)
+        svr_val_mse = mean_squared_error(y_val_aligned, svr_val_pred)
+
+        print("\n[DATA] Validation MSE (all in unscaled return space):")
+        print(f"   - {sequence_model_name}: {seq_val_mse:.8f}")
+        print(f"   - Random Forest:        {rf_val_mse:.8f}")
+        print(f"   - XGBoost:              {xgb_val_mse:.8f}")
+        print(f"   - Ridge:                {ridge_val_mse:.8f}")
+        print(f"   - SVR:                  {svr_val_mse:.8f}")
+
+        inv_mse_sum = ((1/seq_val_mse) + (1/rf_val_mse) + (1/xgb_val_mse) +
+                       (1/ridge_val_mse) + (1/svr_val_mse))
+        weights = {
+            'seq': (1/seq_val_mse) / inv_mse_sum,
+            'rf': (1/rf_val_mse) / inv_mse_sum,
+            'xgb': (1/xgb_val_mse) / inv_mse_sum,
+            'ridge': (1/ridge_val_mse) / inv_mse_sum,
+            'svr': (1/svr_val_mse) / inv_mse_sum
+        }
+    else:
+        # No sequence model — use full predictions (no alignment trimming needed)
+        rf_train_pred = rf_train_pred_full
+        rf_val_pred = rf_val_pred_full
+        rf_test_pred = rf_test_pred_full
+        xgb_train_pred = xgb_train_pred_full
+        xgb_val_pred = xgb_val_pred_full
+        xgb_test_pred = xgb_test_pred_full
+        ridge_train_pred = ridge_train_pred_full
+        ridge_val_pred = ridge_val_pred_full
+        ridge_test_pred = ridge_test_pred_full
+        svr_train_pred = svr_train_pred_full
+        svr_val_pred = svr_val_pred_full
+        svr_test_pred = svr_test_pred_full
+
+        y_train_aligned = y_train_unscaled_series.values
+        y_val_aligned = y_val_unscaled_series.values
+        y_test_aligned = y_test_unscaled_series.values
+
+        seq_model_key = 'none'
+        rf_val_mse = mean_squared_error(y_val_aligned, rf_val_pred)
+        xgb_val_mse = mean_squared_error(y_val_aligned, xgb_val_pred)
+        ridge_val_mse = mean_squared_error(y_val_aligned, ridge_val_pred)
+        svr_val_mse = mean_squared_error(y_val_aligned, svr_val_pred)
+
+        print("\n[DATA] Validation MSE (all in unscaled return space):")
+        print(f"   - Random Forest: {rf_val_mse:.8f}")
+        print(f"   - XGBoost:       {xgb_val_mse:.8f}")
+        print(f"   - Ridge:         {ridge_val_mse:.8f}")
+        print(f"   - SVR:           {svr_val_mse:.8f}")
+
+        inv_mse_sum = (1/rf_val_mse) + (1/xgb_val_mse) + (1/ridge_val_mse) + (1/svr_val_mse)
+        weights = {
+            'seq': 0.0,
+            'rf': (1/rf_val_mse) / inv_mse_sum,
+            'xgb': (1/xgb_val_mse) / inv_mse_sum,
+            'ridge': (1/ridge_val_mse) / inv_mse_sum,
+            'svr': (1/svr_val_mse) / inv_mse_sum
+        }
 
     # CRITICAL: Zero out negligible weights to prevent extreme-output models from contaminating ensemble.
-    # A weight of 1e-8 * a TCN output of -3,000,000 still produces -0.03 contamination.
-    MIN_ENSEMBLE_WEIGHT = 0.005  # Models contributing <0.5% are excluded
-    weights = {'seq': seq_weight, 'rf': rf_weight, 'xgb': xgb_weight}
+    MIN_ENSEMBLE_WEIGHT = 0.005
     zeroed_models = []
     for name, w in weights.items():
         if w < MIN_ENSEMBLE_WEIGHT:
@@ -2993,22 +3858,25 @@ def train_and_validate_models(stock_symbol, x_train, x_val, x_test, y_train_scal
     seq_weight = weights['seq']
     rf_weight = weights['rf']
     xgb_weight = weights['xgb']
+    ridge_weight = weights['ridge']
+    svr_weight = weights['svr']
 
-    print(f"\n[DATA] Ensemble Weights (based on validation performance):")
-    print(f"   - {sequence_model_name}:         {seq_weight:.6f}")
+    print("\n[DATA] Ensemble Weights (based on validation performance):")
+    if use_sequence_model:
+        print(f"   - {sequence_model_name}:         {seq_weight:.6f}")
     print(f"   - Random Forest: {rf_weight:.6f}")
     print(f"   - XGBoost:      {xgb_weight:.6f}")
+    print(f"   - Ridge:        {ridge_weight:.6f}")
+    print(f"   - SVR:          {svr_weight:.6f}")
 
     # Create ensemble predictions (all predictions now in UNSCALED space)
-    ensemble_train_pred = (seq_weight * seq_train_pred + 
-                          rf_weight * rf_train_pred + 
-                          xgb_weight * xgb_train_pred)
-    ensemble_val_pred = (seq_weight * seq_val_pred + 
-                        rf_weight * rf_val_pred + 
-                        xgb_weight * xgb_val_pred)
-    ensemble_test_pred = (seq_weight * seq_test_pred + 
-                         rf_weight * rf_test_pred + 
-                         xgb_weight * xgb_test_pred)
+    ensemble_train_pred = rf_weight * rf_train_pred + xgb_weight * xgb_train_pred + ridge_weight * ridge_train_pred + svr_weight * svr_train_pred
+    ensemble_val_pred = rf_weight * rf_val_pred + xgb_weight * xgb_val_pred + ridge_weight * ridge_val_pred + svr_weight * svr_val_pred
+    ensemble_test_pred = rf_weight * rf_test_pred + xgb_weight * xgb_test_pred + ridge_weight * ridge_test_pred + svr_weight * svr_test_pred
+    if use_sequence_model:
+        ensemble_train_pred += seq_weight * seq_train_pred
+        ensemble_val_pred += seq_weight * seq_val_pred
+        ensemble_test_pred += seq_weight * seq_test_pred
 
     # Evaluate ensemble (using aligned ground truth — all in UNSCALED space)
     ensemble_train_metrics = {
@@ -3028,15 +3896,17 @@ def train_and_validate_models(stock_symbol, x_train, x_val, x_test, y_train_scal
     }
 
     # Store ensemble results
-    training_history['ensemble'] = {
-        'weights': {seq_model_key: seq_weight, 'rf': rf_weight, 'xgb': xgb_weight},
+    ensemble_history: dict[str, Any] = {
+        'weights': {seq_model_key: seq_weight, 'rf': rf_weight, 'xgb': xgb_weight,
+                    'ridge': ridge_weight, 'svr': svr_weight},
         'train_metrics': ensemble_train_metrics,
         'val_metrics': ensemble_val_metrics,
         'test_metrics': ensemble_test_metrics
     }
+    training_history['ensemble'] = ensemble_history
 
     # Detect ensemble overfitting
-    ensemble_overfitted, ensemble_overfitting_score = detect_overfitting(
+    ensemble_overfitted, _ensemble_overfitting_score, _ = detect_overfitting(
         ensemble_train_metrics, ensemble_val_metrics, ensemble_test_metrics, 
         "Ensemble", overfitting_threshold
     )
@@ -3045,33 +3915,43 @@ def train_and_validate_models(stock_symbol, x_train, x_val, x_test, y_train_scal
     print("\n" + "="*60)
     print("[SUMMARY] TRAINING SUMMARY")
     print("="*60)
-    print(f"{sequence_model_name} Training Attempts:          {len(training_history[seq_model_key])}")
+    if use_sequence_model:
+        print(f"{sequence_model_name} Training Attempts:          {len(training_history[seq_model_key])}")
     print(f"Random Forest Training Attempts: {len(training_history['random_forest'])}")
     print(f"XGBoost Training Attempts:       {len(training_history['xgboost'])}")
+    print(f"Ridge Training Attempts:         {len(training_history['ridge'])}")
+    print(f"SVR Training Attempts:           {len(training_history['svr'])}")
     print("\n[DATA] FINAL TEST SET PERFORMANCE:")
-    print(f"   {sequence_model_name}:         R2={training_history[seq_model_key][-1]['test_metrics']['r2']:.4f}, MSE={training_history[seq_model_key][-1]['test_metrics']['mse']:.6f}")
+    if use_sequence_model:
+        print(f"   {sequence_model_name}:         R2={training_history[seq_model_key][-1]['test_metrics']['r2']:.4f}, MSE={training_history[seq_model_key][-1]['test_metrics']['mse']:.6f}")
     print(f"   Random Forest: R2={training_history['random_forest'][-1]['test_metrics']['r2']:.4f}, MSE={training_history['random_forest'][-1]['test_metrics']['mse']:.6f}")
     print(f"   XGBoost:      R2={training_history['xgboost'][-1]['test_metrics']['r2']:.4f}, MSE={training_history['xgboost'][-1]['test_metrics']['mse']:.6f}")
+    print(f"   Ridge:        R2={training_history['ridge'][-1]['test_metrics']['r2']:.4f}, MSE={training_history['ridge'][-1]['test_metrics']['mse']:.6f}")
+    print(f"   SVR:          R2={training_history['svr'][-1]['test_metrics']['r2']:.4f}, MSE={training_history['svr'][-1]['test_metrics']['mse']:.6f}")
     print(f"   [BEST] ENSEMBLE:   R2={ensemble_test_metrics['r2']:.4f}, MSE={ensemble_test_metrics['mse']:.6f}")
     print("="*60 + "\n")
 
-    training_history['final_decision'] = {
-        f'{seq_model_key}_final': not sequence_model_overfitted,
+    final_decision: dict[str, bool] = {
         'rf_final': not rf_overfitted,
         'xgb_final': not xgb_overfitted,
         'ensemble_final': not ensemble_overfitted
     }
+    if use_sequence_model:
+        final_decision[f'{seq_model_key}_final'] = not sequence_model_overfitted
+    training_history['final_decision'] = final_decision
 
     # Return models dict for ensemble use
-    # Include both 'sequence_model' (generic) and specific key for backward compatibility
-    models = {
-        'sequence_model': sequence_model,  # Generic key for the trained sequence model
-        'sequence_model_type': seq_model_key,  # 'tcn' or 'lstm'
-        'lstm': lstm_model if not use_tcn else None,  # Legacy key for backward compatibility
-        'tcn': tcn_model if use_tcn else None,  # TCN model if used
+    ensemble_weights = ensemble_history['weights']
+    models: dict[str, Any] = {
+        'sequence_model': sequence_model,
+        'sequence_model_type': seq_model_key,  # 'tcn', 'lstm', or 'none'
+        'lstm': lstm_model if (use_sequence_model and not use_tcn) else None,
+        'tcn': tcn_model if (use_sequence_model and use_tcn) else None,
         'rf': rf_model,
         'xgb': xgb_model,
-        'ensemble_weights': training_history['ensemble']['weights']
+        'ridge': ridge_model,
+        'svr': svr_model,
+        'ensemble_weights': ensemble_weights,
     }
 
     return models, training_history, lstm_datasets
@@ -3120,34 +4000,50 @@ def predict_future_price_changes(ticker, scaler_x, scaler_y, model, selected_fea
         
         rf_model = model['rf']
         xgb_model = model.get('xgb', None)  # XGBoost model (optional for backward compatibility)
+        ridge_model = model.get('ridge', None)  # Ridge model (optional)
+        svr_model = model.get('svr', None)  # SVR model (optional)
         
         # Get ensemble weights from model dict or parameter
         if ensemble_weights is None:
             ensemble_weights = model.get('ensemble_weights', None)
         
-        # Normalize ensemble weights and include all 3 models
+        # Normalize ensemble weights and include all 5 models
         if ensemble_weights is not None:
             # Get the sequence model weight (tcn or lstm)
             seq_key = 'tcn' if sequence_model_type == 'tcn' else 'lstm'
-            seq_weight = ensemble_weights.get(seq_key, 0.33)
-            rf_weight = ensemble_weights.get('rf', 0.33)
-            xgb_weight = ensemble_weights.get('xgb', 0.34)
+            seq_weight = ensemble_weights.get(seq_key, 0.20)
+            rf_weight = ensemble_weights.get('rf', 0.20)
+            xgb_weight = ensemble_weights.get('xgb', 0.20)
+            ridge_weight = ensemble_weights.get('ridge', 0.20)
+            svr_weight = ensemble_weights.get('svr', 0.20)
             
             # Normalize to sum to 1.0
-            weight_sum = seq_weight + rf_weight + xgb_weight
+            weight_sum = seq_weight + rf_weight + xgb_weight + ridge_weight + svr_weight
             seq_weight /= weight_sum
             rf_weight /= weight_sum
             xgb_weight /= weight_sum
+            ridge_weight /= weight_sum
+            svr_weight /= weight_sum
         else:
             # Default: equal weights
-            seq_weight = 1/3
-            rf_weight = 1/3
-            xgb_weight = 1/3
+            seq_weight = 1/5
+            rf_weight = 1/5
+            xgb_weight = 1/5
+            ridge_weight = 1/5
+            svr_weight = 1/5
+        
+        # Zero out weights for models that aren't available
+        if sequence_model is None:
+            seq_weight = 0.0
+        if ridge_model is None:
+            ridge_weight = 0.0
+        if svr_model is None:
+            svr_weight = 0.0
         
         # CRITICAL: Zero out negligible weights to prevent extreme-output models from contaminating ensemble.
-        # A weight of 1e-8 * a TCN output of -3,000,000 still produces -0.03 contamination.
         MIN_ENSEMBLE_WEIGHT = 0.005
-        weights_dict = {'seq': seq_weight, 'rf': rf_weight, 'xgb': xgb_weight}
+        weights_dict = {'seq': seq_weight, 'rf': rf_weight, 'xgb': xgb_weight,
+                        'ridge': ridge_weight, 'svr': svr_weight}
         zeroed_in_pred = []
         for name, w in weights_dict.items():
             if w < MIN_ENSEMBLE_WEIGHT:
@@ -3162,9 +4058,14 @@ def predict_future_price_changes(ticker, scaler_x, scaler_y, model, selected_fea
         seq_weight = weights_dict['seq']
         rf_weight = weights_dict['rf']
         xgb_weight = weights_dict['xgb']
+        ridge_weight = weights_dict['ridge']
+        svr_weight = weights_dict['svr']
         
-        print(f"\n[MODEL] Using {sequence_model_type.upper()} as sequence model for predictions")
-        print(f"[ENSEMBLE] Weights: {sequence_model_type.upper()}={seq_weight:.6f}, RF={rf_weight:.6f}, XGB={xgb_weight:.6f}")
+        if sequence_model is not None:
+            print(f"\n[MODEL] Using {sequence_model_type.upper()} as sequence model for predictions")
+        else:
+            print("\n[MODEL] Sequence model DISABLED — using 4-model ensemble (RF+XGB+Ridge+SVR)")
+        print(f"[ENSEMBLE] Weights: {sequence_model_type.upper()}={seq_weight:.6f}, RF={rf_weight:.6f}, XGB={xgb_weight:.6f}, Ridge={ridge_weight:.6f}, SVR={svr_weight:.6f}")
         if use_mc_dropout:
             print(f"[MC DROPOUT] Enabled with {mc_iterations} iterations per prediction")
 
@@ -3205,244 +4106,231 @@ def predict_future_price_changes(ticker, scaler_x, scaler_y, model, selected_fea
         features_list.insert(2, "1D")
 
         stock_mod_df = stock_df.copy()
+        historical_price_predictions = []
+        pred_cfg = get_pred_config()
 
         # --- Process historical prediction dataset if provided ---
         if historical_prediction_dataset_df is not None and len(historical_prediction_dataset_df) > 0:
             pred_count = len(historical_prediction_dataset_df)
-            pred_dates = stock_df["date"].iloc[-pred_count:].copy().to_frame()
+            pred_dates = stock_df["date"].iloc[-pred_count:].reset_index(drop=True)
+            seed_index = max(len(stock_df) - pred_count - 1, 0)
+            prev_historical_predicted_price = float(stock_df["close_Price"].iloc[seed_index])
 
             for run in range(len(historical_prediction_dataset_df)):
                 # For historical predictions, use the SAME pre-scaled test data for all models
                 # This ensures consistent scaling between LSTM, RF, and XGB
                 
-                # Prepare LSTM input (requires time_steps of history from scaled data)
-                # We need to get the sequence ending at the current prediction point
-                start_idx = max(0, run - time_steps + 1)
-                end_idx = run + 1
-                
-                # Extract time_steps worth of scaled historical features
-                if end_idx - start_idx < time_steps:
-                    # Not enough history, pad with first available data
-                    padding_needed = time_steps - (end_idx - start_idx)
-                    x_lstm_scaled = historical_prediction_dataset_df.iloc[0:end_idx][selected_features_list]
-                    # Pad with first row repeated
-                    first_row = x_lstm_scaled.iloc[0:1]
-                    padding = pd.concat([first_row] * padding_needed, ignore_index=True)
-                    x_lstm_scaled = pd.concat([padding, x_lstm_scaled], ignore_index=True)
-                else:
-                    x_lstm_scaled = historical_prediction_dataset_df.iloc[start_idx:end_idx][selected_features_list]
-                
+                # Prepare sequence model input (requires time_steps of history from scaled data)
+                if sequence_model is not None:
+                    start_idx = max(0, run - time_steps + 1)
+                    end_idx = run + 1
+                    
+                    if end_idx - start_idx < time_steps:
+                        padding_needed = time_steps - (end_idx - start_idx)
+                        x_lstm_scaled = historical_prediction_dataset_df.iloc[0:end_idx][selected_features_list]
+                        first_row = x_lstm_scaled.iloc[0:1]
+                        padding = pd.concat([first_row] * padding_needed, ignore_index=True)
+                        x_lstm_scaled = pd.concat([padding, x_lstm_scaled], ignore_index=True)
+                    else:
+                        x_lstm_scaled = historical_prediction_dataset_df.iloc[start_idx:end_idx][selected_features_list]
+                    
+                    x_lstm_array = x_lstm_scaled.values if hasattr(x_lstm_scaled, 'values') else np.array(x_lstm_scaled)
+                    
+                    if run < 6:
+                        print(f"\n[DEBUG] Historical Prediction {run+1}:")
+                        print("   Using PRE-SCALED test data (no re-scaling needed)")
+                        print(f"   Input shape: {x_lstm_array.shape}")
+                        print(f"   Input mean: {np.mean(x_lstm_array):.4f}, std: {np.std(x_lstm_array):.4f}")
+                        print(f"   Input min: {np.min(x_lstm_array):.4f}, max: {np.max(x_lstm_array):.4f}")
+                        print(f"   Sample features (last row): {x_lstm_array[-1, :5]}")
+                    
+                    x_lstm_array_np = np.asarray(x_lstm_array)
+                    scaled_x_input_seq = x_lstm_array_np.reshape(
+                        (1, time_steps, x_lstm_array_np.shape[1])
+                    )
+
                 # Prepare RF/XGB input (only current day features from test dataset)
                 scaled_x_input_rf_df = historical_prediction_dataset_df.iloc[run:run+1][selected_features_list]
-                    
-                # Convert to NumPy array for LSTM
-                x_lstm_array = x_lstm_scaled.values if hasattr(x_lstm_scaled, 'values') else np.array(x_lstm_scaled)
-                
-                # DEBUG: Print input statistics for first few predictions
-                if run < 6:
-                    print(f"\n[DEBUG] Historical Prediction {run+1}:")
-                    print("   Using PRE-SCALED test data (no re-scaling needed)")
-                    print(f"   Input shape: {x_lstm_array.shape}")
-                    print(f"   Input mean: {np.mean(x_lstm_array):.4f}, std: {np.std(x_lstm_array):.4f}")
-                    print(f"   Input min: {np.min(x_lstm_array):.4f}, max: {np.max(x_lstm_array):.4f}")
-                    print(f"   Sample features (last row): {x_lstm_array[-1, :5]}")
-                
-                # Reshape for sequence model (no scaling needed - already scaled!)
-                scaled_x_input_seq = x_lstm_array.reshape(1, time_steps, x_lstm_array.shape[1])
 
-                # # Check for NaN in RF input
-                # if scaled_x_input_rf_df.isnull().any().any():
-                #     print(f"[WARN] NaN detected in RF input at historical step {run}")
-                #     scaled_x_input_rf_df = scaled_x_input_rf_df.ffill().bfill().fillna(0)
-
-                # --- Predict with all three models ---
+                # --- Predict with all available models ---
 
                 # Sequence model (TCN/LSTM) prediction (scaled) -> inverse transform to original scale
-                forecast_seq_scaled = sequence_model.predict(scaled_x_input_seq, verbose=0)[0][0]
-                forecast_seq = scaler_y.inverse_transform([[forecast_seq_scaled]])[0][0]
-                
-                # DEBUG: Show sequence model prediction process
-                if run < 6:
-                    print(f"   {sequence_model_type.upper()} scaled output: {forecast_seq_scaled:.6f}")
-                    print(f"   {sequence_model_type.upper()} unscaled output: {forecast_seq:.6f} ({forecast_seq*100:.3f}%)")
-                    print(f"   scaler_y min: {scaler_y.data_min_}, max: {scaler_y.data_max_}")
+                if sequence_model is not None:
+                    forecast_seq_scaled = sequence_model.predict(scaled_x_input_seq, verbose=0)[0][0]
+                    forecast_seq = scaler_y.inverse_transform([[forecast_seq_scaled]])[0][0]
+                    
+                    # DEBUG: Show sequence model prediction process
+                    if run < 6:
+                        print(f"   {sequence_model_type.upper()} scaled output: {forecast_seq_scaled:.6f}")
+                        print(f"   {sequence_model_type.upper()} unscaled output: {forecast_seq:.6f} ({forecast_seq*100:.3f}%)")
+                        print(f"   scaler_y min: {scaler_y.data_min_}, max: {scaler_y.data_max_}")
+                else:
+                    forecast_seq = 0.0
 
                 # Random Forest prediction (already unscaled)
                 # Convert DataFrame to numpy to avoid feature name warning
                 forecast_rf = rf_model.predict(scaled_x_input_rf_df.values)[0]
                 
+                # Ridge prediction (already unscaled)
+                if ridge_model is not None:
+                    forecast_ridge = ridge_model.predict(scaled_x_input_rf_df.values)[0]
+                else:
+                    forecast_ridge = 0.0
+                
+                # SVR prediction (already unscaled)
+                if svr_model is not None:
+                    forecast_svr = svr_model.predict(scaled_x_input_rf_df.values)[0]
+                else:
+                    forecast_svr = 0.0
+                
                 # XGBoost prediction (already unscaled)
                 if xgb_model is not None:
                     forecast_xgb = xgb_model.predict(scaled_x_input_rf_df.values)[0]
-                    
-                    # ENSEMBLE: RF + XGB only (sequence model can be optionally included)
-                    # Default: RF + XGB average (sequence model disabled due to historical mode collapse)
-                    forecast_price_change = (forecast_rf + forecast_xgb) / 2
-                    
-                    # Get actual value for comparison
-                    current_date = pred_dates["date"].iloc[run]
-                    actual_price_change = stock_df.loc[stock_df["date"] == current_date, "1D"].values[0] if "1D" in stock_df.columns else None
-                    
-                    print(f"\n[PRED] Historical Prediction Day {run+1} ({current_date.strftime('%Y-%m-%d')}):")
-                    print(f"   {sequence_model_type.upper()}:      {forecast_seq:+.6f} ({forecast_seq*100:+.3f}%)")
-                    print(f"   RF:        {forecast_rf:+.6f} ({forecast_rf*100:+.3f}%)")
-                    print(f"   XGB:       {forecast_xgb:+.6f} ({forecast_xgb*100:+.3f}%)")
-                    print(f"   Ensemble:  {forecast_price_change:+.6f} ({forecast_price_change*100:+.3f}%)")
-                    if actual_price_change is not None:
-                        print(f"   Actual:    {actual_price_change:+.6f} ({actual_price_change*100:+.3f}%)")
-                        print(f"   Errors:    {sequence_model_type.upper()}={abs(forecast_seq-actual_price_change)*100:.3f}%, RF={abs(forecast_rf-actual_price_change)*100:.3f}%, XGB={abs(forecast_xgb-actual_price_change)*100:.3f}%, Ensemble={abs(forecast_price_change-actual_price_change)*100:.3f}%")
                 else:
-                    # Only RF available (sequence model disabled, XGB unavailable)
-                    forecast_price_change = forecast_rf
+                    forecast_xgb = None
+
+                # Historical diagnostics should use the same bounded flat-model contract as future mode.
+                hist_models = {'rf': forecast_rf}
+                if forecast_xgb is not None:
+                    hist_models['xgb'] = forecast_xgb
+                if ridge_model is not None:
+                    hist_models['ridge'] = forecast_ridge
+                if svr_model is not None:
+                    hist_models['svr'] = forecast_svr
+
+                historical_blend = combine_flat_model_predictions(
+                    hist_models,
+                    weights={'rf': rf_weight, 'xgb': xgb_weight, 'ridge': ridge_weight, 'svr': svr_weight},
+                    max_daily_return=pred_cfg.max_daily_return,
+                )
+                hist_models = historical_blend['clipped_predictions']
+                forecast_rf = hist_models['rf']
+                if forecast_xgb is not None:
+                    forecast_xgb = hist_models['xgb']
+                if ridge_model is not None:
+                    forecast_ridge = hist_models['ridge']
+                if svr_model is not None:
+                    forecast_svr = hist_models['svr']
+                hist_weights = historical_blend['weights']
+                forecast_price_change = historical_blend['ensemble_prediction']
                     
-                    current_date = pred_dates["date"].iloc[run]
-                    actual_price_change = stock_df.loc[stock_df["date"] == current_date, "1D"].values[0] if "1D" in stock_df.columns else None
-                    
-                    print(f"\n[PRED] Historical Prediction Day {run+1} ({current_date.strftime('%Y-%m-%d')}):")
+                # Get actual value for comparison
+                current_date = pred_dates.iloc[run]
+                actual_price_change = stock_df.loc[stock_df["date"] == current_date, "1D"].values[0] if "1D" in stock_df.columns else None
+                
+                model_str = ", ".join(f"{k.upper()}={v:+.6f}" for k, v in hist_models.items())
+                weight_str = ", ".join(f"{k.upper()}={v:.3f}" for k, v in hist_weights.items())
+                clipped_models = historical_blend['clipped_models']
+                clipped_str = ", ".join(
+                    f"{name.upper()} {raw:+.6f}->{clipped:+.6f}"
+                    for name, (raw, clipped) in clipped_models.items()
+                )
+
+                print(f"\n[PRED] Historical Prediction Day {run+1} ({current_date.strftime('%Y-%m-%d')}):")
+                if sequence_model is not None:
                     print(f"   {sequence_model_type.upper()}:      {forecast_seq:+.6f} ({forecast_seq*100:+.3f}%)")
-                    print(f"   RF:        {forecast_rf:+.6f} ({forecast_rf*100:+.3f}%)")
-                    print(f"   Ensemble:  {forecast_price_change:+.6f} ({forecast_price_change*100:+.3f}%)")
-                    if actual_price_change is not None:
-                        print(f"   Actual:    {actual_price_change:+.6f} ({actual_price_change*100:+.3f}%)")
-                        print(f"   Errors:    {sequence_model_type.upper()}={abs(forecast_seq-actual_price_change)*100:.3f}%, RF={abs(forecast_rf-actual_price_change)*100:.3f}%, Ensemble={abs(forecast_price_change-actual_price_change)*100:.3f}%")
+                print(f"   RF:        {forecast_rf:+.6f} ({forecast_rf*100:+.3f}%)")
+                if forecast_xgb is not None:
+                    print(f"   XGB:       {forecast_xgb:+.6f} ({forecast_xgb*100:+.3f}%)")
+                if ridge_model is not None:
+                    print(f"   Ridge:     {forecast_ridge:+.6f} ({forecast_ridge*100:+.3f}%)")
+                if svr_model is not None:
+                    print(f"   SVR:       {forecast_svr:+.6f} ({forecast_svr*100:+.3f}%)")
+                print(f"   Ensemble:  {forecast_price_change:+.6f} ({forecast_price_change*100:+.3f}%)")
+                print(f"   Weights:   {weight_str}")
+                if clipped_str:
+                    print(f"   Clipped:   {clipped_str}")
+                if actual_price_change is not None:
+                    print(f"   Actual:    {actual_price_change:+.6f} ({actual_price_change*100:+.3f}%)")
+                    err_parts = [f"RF={abs(forecast_rf-actual_price_change)*100:.3f}%"]
+                    if forecast_xgb is not None:
+                        err_parts.append(f"XGB={abs(forecast_xgb-actual_price_change)*100:.3f}%")
+                    if sequence_model is not None:
+                        err_parts.insert(0, f"{sequence_model_type.upper()}={abs(forecast_seq-actual_price_change)*100:.3f}%")
+                    if ridge_model is not None:
+                        err_parts.append(f"Ridge={abs(forecast_ridge-actual_price_change)*100:.3f}%")
+                    if svr_model is not None:
+                        err_parts.append(f"SVR={abs(forecast_svr-actual_price_change)*100:.3f}%")
+                    err_parts.append(f"Ensemble={abs(forecast_price_change-actual_price_change)*100:.3f}%")
+                    print(f"   Errors:    {', '.join(err_parts)}")
+
+                if model_str and run < 6:
+                    print(f"   Models:    {model_str}")
 
                 # Update stock_mod_df with predictions
                 stock_mod_df.loc[stock_mod_df["date"] == current_date, "1D"] = forecast_price_change
 
-                # Calculate new price based on price change
-                prev_price = stock_mod_df["close_Price"].iloc[-(pred_count+1)]
-                stock_mod_df.loc[stock_mod_df["date"] == current_date, "close_Price"] = prev_price * (1 + forecast_price_change)
-
-                pred_count -= 1
+                # Track historical predicted prices separately so future forecasts still
+                # start from the actual latest close instead of a compounded backtest path.
+                prev_historical_predicted_price = prev_historical_predicted_price * (1 + forecast_price_change)
+                historical_price_predictions.append(
+                    {
+                        "date": current_date,
+                        "predicted_close_Price": prev_historical_predicted_price,
+                    }
+                )
 
         # --- Future predictions loop ---
         
+        history_cache = build_prediction_history_cache(
+            ticker,
+            stock_mod_df,
+            selected_features_list,
+            history_fetcher=yf.download,
+        )
+        max_daily_return = pred_cfg.max_daily_return
+
         # Calculate historical statistics for prediction stabilization (fixes #1-2)
         historical_returns = stock_df["1D"].dropna()
         historical_mean = historical_returns.mean()
         historical_std = historical_returns.std()
-        historical_volatility = historical_std  # For adding uncertainty
-        
-        print(f"\n[STABILIZATION] Historical return statistics:")
+        print("\n[STABILIZATION] Historical return statistics:")
         print(f"   Mean: {historical_mean*100:.4f}%")
         print(f"   Std:  {historical_std*100:.4f}%")
-        print(f"   Using for noise injection and mean reversion constraints.")
-        
-        def add_prediction_uncertainty(base_prediction, historical_vol, confidence=0.60, day_num=0):
-            """
-            Add controlled randomness based on historical volatility to prevent mode collapse.
-            Confidence decreases over time to account for increasing uncertainty.
-            
-            Fix #1: Prediction Noise/Uncertainty
-            
-            Parameters tuned to achieve std dev > 1% in predictions:
-            - Base confidence: 0.60 (was 0.85) - more noise injection
-            - Decay rate: 0.003 per day (was 0.002) - faster uncertainty growth
-            - Minimum confidence: 0.35 (was 0.5) - allow more noise for long horizons
-            """
-            # Decrease confidence as we predict further into the future
-            adjusted_confidence = max(0.35, confidence - (day_num * 0.003))
-            
-            # Scale noise by historical volatility - increased base noise
-            # At day 0: noise_scale = hist_vol * 0.40 (40% of historical volatility)
-            # At day 90: noise_scale = hist_vol * 0.65 (65% of historical volatility)
-            noise_scale = historical_vol * (1 - adjusted_confidence)
-            noise = np.random.normal(0, noise_scale)
-            
-            return base_prediction + noise
-        
-        def apply_mean_reversion(prediction, hist_mean, hist_std, strength=0.10):
-            """
-            Pull extreme predictions back towards historical mean.
-            Prevents runaway predictions in one direction.
-            
-            Fix #2: Mean Reversion Constraint
-            
-            Parameters tuned to allow more variance while preventing extremes:
-            - Strength: 0.10 (was 0.15) - lighter touch to preserve variance
-            - Threshold: 2.5 std (was 2.0) - only correct truly extreme predictions
-            """
-            z_score = (prediction - hist_mean) / hist_std if hist_std > 0 else 0
-            
-            # Beyond 2.5 standard deviations, apply reversion (raised from 2.0)
-            if abs(z_score) > 2.5:
-                # Reduce prediction magnitude proportionally to how extreme it is
-                reversion_factor = 1 - (strength * (abs(z_score) - 2.5))
-                reversion_factor = max(0.4, reversion_factor)  # Don't reduce by more than 60%
-                prediction = hist_mean + (prediction - hist_mean) * reversion_factor
-            
-            # Hard cap at 4 standard deviations
-            max_prediction = hist_mean + 4 * hist_std
-            min_prediction = hist_mean - 4 * hist_std
-            prediction = np.clip(prediction, min_prediction, max_prediction)
-            
-            return prediction
-        
-        def apply_directional_balance(prediction, recent_predictions, max_same_direction=5):
-            """
-            Prevent too many consecutive predictions in the same direction.
-            Adds a correction when predictions are biased in one direction.
-            
-            Fix #2b: Directional Bias Correction
-            
-            Parameters tuned for better directional balance:
-            - max_same_direction: 5 (was 8) - trigger earlier
-            - correction_strength: 0.50 (was 0.30) - higher flip probability
-            - Graduated response based on streak length
-            """
-            if len(recent_predictions) < max_same_direction:
-                return prediction
-            
-            # Check recent prediction directions
-            recent_directions = [1 if p > 0 else -1 for p in recent_predictions[-max_same_direction:]]
-            
-            # If all recent predictions are in the same direction
-            if all(d == recent_directions[0] for d in recent_directions):
-                # Count the full streak length (may be longer than max_same_direction)
-                streak_length = max_same_direction
-                for i in range(len(recent_predictions) - max_same_direction - 1, -1, -1):
-                    if (recent_predictions[i] > 0) == (recent_directions[0] > 0):
-                        streak_length += 1
-                    else:
-                        break
-                
-                # Graduated correction: longer streaks = higher flip probability
-                # 5 days: 50%, 10 days: 65%, 15 days: 80%
-                base_correction = 0.50
-                streak_bonus = min(0.30, (streak_length - max_same_direction) * 0.03)
-                correction_strength = base_correction + streak_bonus
-                
-                if np.random.random() < correction_strength:
-                    # Flip the sign with dampening based on streak length
-                    dampening = max(0.3, 0.7 - (streak_length * 0.02))
-                    prediction = -prediction * dampening
-            
-            return prediction
+        print("   Using for noise injection and mean reversion constraints.")
         
         # Track recent predictions for directional balance
         recent_prediction_values = []
         
         # Track uncertainty data for each future prediction day
         uncertainty_data = []
+        # Track per-model predictions for each future day
+        per_model_predictions = []
         
         # --- DIAGNOSTIC: Check scaler range vs current data ---
-        print(f"\n[DIAG] Scaler X feature range check (training min/max vs current values):")
+        print("\n[DIAG] Scaler X selected-feature range check (training min/max vs current values):")
         exclude_cols_diag = ["date", "name", "date_published", "ticker", "currency", "open_Price", "high_Price", "low_Price", "close_Price", "trade_Volume", "1D", "prediction", "financial_date_used"]
         all_diag_features = [col for col in stock_mod_df.columns if col not in exclude_cols_diag]
         current_row = stock_mod_df.iloc[-1:][all_diag_features].apply(pd.to_numeric, errors='coerce')
         scaled_current = scaler_x.transform(current_row)
-        out_of_range_features = []
-        for col in scaled_current.columns:
-            val = scaled_current[col].iloc[0]
-            if val < -0.1 or val > 1.1:
-                raw_val = current_row[col].iloc[0]
-                out_of_range_features.append((col, float(val), float(raw_val)))
-        if out_of_range_features:
-            print(f"   [WARN] {len(out_of_range_features)} features OUTSIDE scaler [0,1] range:")
-            for feat_name, scaled_val, raw_val in sorted(out_of_range_features, key=lambda x: abs(x[1]), reverse=True)[:15]:
+        drift_summary = summarize_scaled_feature_drift(
+            scaled_current,
+            feature_names=all_diag_features,
+            selected_features=selected_features_list,
+        )
+        mild_out_of_range_features = [
+            (feature_name, scaled_value, float(current_row[feature_name].iloc[0]))
+            for feature_name, scaled_value in drift_summary['mild_out_of_range']
+        ]
+        severe_out_of_range_features = [
+            (feature_name, scaled_value, float(current_row[feature_name].iloc[0]))
+            for feature_name, scaled_value in drift_summary['severe_out_of_range']
+        ]
+        if severe_out_of_range_features:
+            print(
+                f"   [WARN] {len(severe_out_of_range_features)} selected features exceed clip band [-1,2]:"
+            )
+            for feat_name, scaled_val, raw_val in sorted(severe_out_of_range_features, key=lambda x: abs(x[1]), reverse=True)[:15]:
+                print(f"      {feat_name}: scaled={scaled_val:.3f}  raw={raw_val:.2f}")
+        elif mild_out_of_range_features:
+            print(
+                f"   [INFO] {len(mild_out_of_range_features)} selected features are outside training [0,1] range "
+                "but still within the runtime clip band [-1,2]."
+            )
+            for feat_name, scaled_val, raw_val in sorted(mild_out_of_range_features, key=lambda x: abs(x[1]), reverse=True)[:15]:
                 print(f"      {feat_name}: scaled={scaled_val:.3f}  raw={raw_val:.2f}")
         else:
-            print(f"   [OK] All {len(all_diag_features)} features within scaler range")
+            print(f"   [OK] All {drift_summary['feature_count']} selected features within scaler range")
         print()
 
         for run in range(prediction_days):
@@ -3458,10 +4346,16 @@ def predict_future_price_changes(ticker, scaler_x, scaler_y, model, selected_fea
 
             future_df["date"] = future_day.strftime("%Y-%m-%d")
 
-            # --- Carry forward fundamental features (they don't change daily) ---
+            # --- Carry forward fundamental features with decay ---
+            # As predictions move further from real data, fundamental features
+            # gradually decay toward the training-set mean (feature degradation).
             for fundamental_feature in fundamental_features:
                 if fundamental_feature in stock_mod_df.columns:
-                    future_df[fundamental_feature] = stock_df.iloc[-1][fundamental_feature]
+                    real_value = stock_df.iloc[-1][fundamental_feature]
+                    decay_rate = pred_cfg.feature_decay_rates.get(fundamental_feature, 0.02)
+                    decay_factor = max(0.0, 1.0 - decay_rate * (run + 1))
+                    # Blend toward 0 (scaled mean) as confidence drops
+                    future_df[fundamental_feature] = real_value * decay_factor
 
             # --- Recalculate dynamic features ---
             for feature in short_term_dynamic_list:
@@ -3469,22 +4363,8 @@ def predict_future_price_changes(ticker, scaler_x, scaler_y, model, selected_fea
                     continue
 
                 # print(f"[CALC] Recalculating feature: {feature}")
-                # Helper function to get historical data if needed
                 def get_historical_data(period):
-                    try:
-                        hist_df = pd.DataFrame(yf.download(ticker, period=period, progress=False, auto_adjust=False))
-                        if not hist_df.empty:
-                            # print("hist_df\n", hist_df)
-                            hist_df = hist_df["Close"].reset_index()
-                            hist_df = hist_df.loc[hist_df["Date"] < stock_mod_df.iloc[0]["date"]]
-                            # print("hist_df\n", hist_df)
-                            hist_df = hist_df.rename(columns={ticker: "close_Price", "Date": "date"})
-                            # print("hist_df\n", hist_df)
-                            hist_df = pd.concat([hist_df, stock_mod_df[["date", "close_Price"]]], axis=0)
-                        return hist_df
-                    except (ValueError, KeyError, ConnectionError, TimeoutError) as e:
-                        print(f"[WARN] Could not download historical data: {e}")
-                        return pd.DataFrame()
+                    return history_cache.get(period, pd.DataFrame())
 
                 try:
                     # Calculate returns for various periods
@@ -3869,10 +4749,7 @@ def predict_future_price_changes(ticker, scaler_x, scaler_y, model, selected_fea
             # Financial features can grow far beyond training range, producing scaled values
             # in the billions instead of [0,1]. Clamping to [-1, 2] preserves mild extrapolation
             # while preventing catastrophic neural network outputs.
-            if hasattr(scaled_x_seq_all_df, 'clip'):
-                scaled_x_seq_all_df = scaled_x_seq_all_df.clip(-1.0, 2.0)
-            else:
-                scaled_x_seq_all_df = np.clip(scaled_x_seq_all_df, -1.0, 2.0)
+            scaled_x_seq_all_df = clip_scaled_features(scaled_x_seq_all_df)
             
             # Now select only the features needed for sequence model
             scaled_x_seq_df = scaled_x_seq_all_df[selected_features_list]
@@ -3896,6 +4773,7 @@ def predict_future_price_changes(ticker, scaler_x, scaler_y, model, selected_fea
 
             # Scale ALL features first, then select the model's features
             scaled_x_input_rf_all = scaler_x.transform(x_input_rf_all_features)
+            scaled_x_input_rf_all = clip_scaled_features(scaled_x_input_rf_all)
             x_input_rf_df = scaled_x_input_rf_all[selected_features_list]
 
             # DIAGNOSTIC: Show scaled feature statistics for the first few predictions
@@ -3906,27 +4784,35 @@ def predict_future_price_changes(ticker, scaler_x, scaler_y, model, selected_fea
                       f"mean={np.mean(rf_vals):.3f}, min={np.min(rf_vals):.3f}, "
                       f"max={np.max(rf_vals):.3f}, out-of-range={oor_count}/{len(rf_vals)}")
 
-            # --- Predict and Ensemble with all three models ---
+            # --- Predict and Ensemble with all available models ---
 
             # Sequence model (TCN/LSTM) prediction with Monte Carlo Dropout for uncertainty
-            if use_mc_dropout:
-                # Use MC Dropout for uncertainty estimation
-                mc_results = multi_run_prediction(
-                    sequence_model, scaled_x_input_seq, scaler_y, 
-                    n_runs=mc_iterations, model_type=sequence_model_type
-                )
-                forecast_seq = mc_results['mean']
-                forecast_seq_std = mc_results['std']
-                forecast_seq_ci_low = mc_results['percentile_5']
-                forecast_seq_ci_high = mc_results['percentile_95']
-                forecast_seq_confidence = mc_results['confidence']
+            if sequence_model is not None:
+                if use_mc_dropout:
+                    # Use MC Dropout for uncertainty estimation
+                    mc_results = multi_run_prediction(
+                        sequence_model, scaled_x_input_seq, scaler_y, 
+                        n_runs=mc_iterations, model_type=sequence_model_type
+                    )
+                    forecast_seq = mc_results['mean']
+                    forecast_seq_std = mc_results['std']
+                    forecast_seq_ci_low = mc_results['percentile_5']
+                    forecast_seq_ci_high = mc_results['percentile_95']
+                    forecast_seq_confidence = mc_results['confidence']
+                else:
+                    # Standard single prediction (faster, no uncertainty)
+                    forecast_seq_scaled = sequence_model.predict(scaled_x_input_seq, verbose=0)[0][0]
+                    forecast_seq = scaler_y.inverse_transform([[forecast_seq_scaled]])[0][0]
+                    forecast_seq_std = 0.0
+                    forecast_seq_ci_low = forecast_seq
+                    forecast_seq_ci_high = forecast_seq
+                    forecast_seq_confidence = 'N/A'
             else:
-                # Standard single prediction (faster, no uncertainty)
-                forecast_seq_scaled = sequence_model.predict(scaled_x_input_seq, verbose=0)[0][0]
-                forecast_seq = scaler_y.inverse_transform([[forecast_seq_scaled]])[0][0]
+                # Sequence model disabled
+                forecast_seq = 0.0
                 forecast_seq_std = 0.0
-                forecast_seq_ci_low = forecast_seq
-                forecast_seq_ci_high = forecast_seq
+                forecast_seq_ci_low = 0.0
+                forecast_seq_ci_high = 0.0
                 forecast_seq_confidence = 'N/A'
 
             # Random Forest prediction (already unscaled)
@@ -3936,17 +4822,33 @@ def predict_future_price_changes(ticker, scaler_x, scaler_y, model, selected_fea
             # XGBoost prediction (already unscaled)
             if xgb_model is not None:
                 forecast_xgb = xgb_model.predict(x_input_rf_df.values)[0]
+            else:
+                forecast_xgb = 0.0
 
+            # Ridge prediction (already unscaled)
+            if ridge_model is not None:
+                forecast_ridge = ridge_model.predict(x_input_rf_df.values)[0]
+            else:
+                forecast_ridge = 0.0
+
+            # SVR prediction (already unscaled)
+            if svr_model is not None:
+                forecast_svr = svr_model.predict(x_input_rf_df.values)[0]
+            else:
+                forecast_svr = 0.0
+
+            if xgb_model is not None:
                 # CRITICAL: Clip individual model predictions to a sane range before ensemble.
-                # A daily return beyond ±20% is extremely rare; beyond ±50% is nonsensical.
-                # This prevents broken models (e.g., TCN outputting millions) from contaminating ensemble.
-                MAX_DAILY_RETURN = 0.20  # ±20%
                 forecast_seq_raw = forecast_seq
                 forecast_rf_raw = forecast_rf
                 forecast_xgb_raw = forecast_xgb
-                forecast_seq = np.clip(forecast_seq, -MAX_DAILY_RETURN, MAX_DAILY_RETURN)
-                forecast_rf = np.clip(forecast_rf, -MAX_DAILY_RETURN, MAX_DAILY_RETURN)
-                forecast_xgb = np.clip(forecast_xgb, -MAX_DAILY_RETURN, MAX_DAILY_RETURN)
+                forecast_ridge_raw = forecast_ridge if ridge_model is not None else None
+                forecast_svr_raw = forecast_svr if svr_model is not None else None
+                forecast_seq = np.clip(forecast_seq, -max_daily_return, max_daily_return)
+                forecast_rf = np.clip(forecast_rf, -max_daily_return, max_daily_return)
+                forecast_xgb = np.clip(forecast_xgb, -max_daily_return, max_daily_return)
+                forecast_ridge = np.clip(forecast_ridge, -max_daily_return, max_daily_return)
+                forecast_svr = np.clip(forecast_svr, -max_daily_return, max_daily_return)
                 
                 if run < 3:
                     clipped = []
@@ -3956,70 +4858,129 @@ def predict_future_price_changes(ticker, scaler_x, scaler_y, model, selected_fea
                         clipped.append(f"RF: {forecast_rf_raw:+.4f} -> {forecast_rf:+.4f}")
                     if forecast_xgb != forecast_xgb_raw:
                         clipped.append(f"XGB: {forecast_xgb_raw:+.4f} -> {forecast_xgb:+.4f}")
+                    if ridge_model is not None and forecast_ridge_raw is not None and forecast_ridge != forecast_ridge_raw:
+                        clipped.append(f"Ridge: {forecast_ridge_raw:+.4f} -> {forecast_ridge:+.4f}")
+                    if svr_model is not None and forecast_svr_raw is not None and forecast_svr != forecast_svr_raw:
+                        clipped.append(f"SVR: {forecast_svr_raw:+.4f} -> {forecast_svr:+.4f}")
                     if clipped:
                         print(f"[CLIP] Day {run+1} predictions clipped: {'; '.join(clipped)}")
 
-                # ENSEMBLE: Validation MSE-weighted combination of all 3 models
+                # ENSEMBLE: Validation MSE-weighted combination of all 5 models
                 raw_ensemble = (
                     seq_weight * forecast_seq +
                     rf_weight * forecast_rf +
-                    xgb_weight * forecast_xgb
+                    xgb_weight * forecast_xgb +
+                    ridge_weight * forecast_ridge +
+                    svr_weight * forecast_svr
                 )
                 ensemble_std = np.sqrt(
                     seq_weight**2 * forecast_seq_std**2 +
                     rf_weight**2 * (historical_std * 0.5)**2 +
-                    xgb_weight**2 * (historical_std * 0.5)**2
+                    xgb_weight**2 * (historical_std * 0.5)**2 +
+                    ridge_weight**2 * (historical_std * 0.5)**2 +
+                    svr_weight**2 * (historical_std * 0.5)**2
                 )
                 
                 # Apply mean reversion guard rail for extreme predictions only
-                forecast_price_change = apply_mean_reversion(raw_ensemble, historical_mean, 
-                                                              historical_std, strength=0.10)
+                forecast_price_change = stabilize_prediction(
+                    raw_ensemble,
+                    recent_prediction_values,
+                    historical_mean,
+                    historical_std,
+                    pred_cfg,
+                )
+                if run < 5 and abs(forecast_price_change - raw_ensemble) > 1e-9:
+                    print(
+                        f"[STABILIZE] Day {run+1}: ensemble adjusted from "
+                        f"{raw_ensemble:+.6f} to {forecast_price_change:+.6f}"
+                    )
 
                 future_date = future_df["date"].iloc[0]
                 print(f"\n[FORECAST] Future Prediction Day {run+1} ({future_date}):")
-                if use_mc_dropout:
-                    print(f"   {sequence_model_type.upper()}:      {forecast_seq:+.6f} ({forecast_seq*100:+.3f}%) ± {forecast_seq_std*100:.3f}% [{forecast_seq_confidence}]")
-                    print(f"       90% CI: [{forecast_seq_ci_low*100:+.3f}%, {forecast_seq_ci_high*100:+.3f}%]")
-                else:
-                    print(f"   {sequence_model_type.upper()}:      {forecast_seq:+.6f} ({forecast_seq*100:+.3f}%)")
+                if sequence_model is not None:
+                    if use_mc_dropout:
+                        print(f"   {sequence_model_type.upper()}:      {forecast_seq:+.6f} ({forecast_seq*100:+.3f}%) ± {forecast_seq_std*100:.3f}% [{forecast_seq_confidence}]")
+                        print(f"       90% CI: [{forecast_seq_ci_low*100:+.3f}%, {forecast_seq_ci_high*100:+.3f}%]")
+                    else:
+                        print(f"   {sequence_model_type.upper()}:      {forecast_seq:+.6f} ({forecast_seq*100:+.3f}%)")
                 print(f"   RF:        {forecast_rf:+.6f} ({forecast_rf*100:+.3f}%)")
                 print(f"   XGB:       {forecast_xgb:+.6f} ({forecast_xgb*100:+.3f}%)")
-                print(f"   Ensemble:  {forecast_price_change:+.6f} ({forecast_price_change*100:+.3f}%) [w: {sequence_model_type.upper()}={seq_weight:.2f}, RF={rf_weight:.2f}, XGB={xgb_weight:.2f}]")
+                if ridge_model is not None:
+                    print(f"   Ridge:     {forecast_ridge:+.6f} ({forecast_ridge*100:+.3f}%)")
+                if svr_model is not None:
+                    print(f"   SVR:       {forecast_svr:+.6f} ({forecast_svr*100:+.3f}%)")
+                print(f"   Ensemble:  {forecast_price_change:+.6f} ({forecast_price_change*100:+.3f}%) [w: {sequence_model_type.upper()}={seq_weight:.2f}, RF={rf_weight:.2f}, XGB={xgb_weight:.2f}, Ridge={ridge_weight:.2f}, SVR={svr_weight:.2f}]")
 
                 # Show model agreement/disagreement
-                predictions = [forecast_seq, forecast_rf, forecast_xgb]
+                predictions = [forecast_rf, forecast_xgb]
+                if sequence_model is not None:
+                    predictions.append(forecast_seq)
+                if ridge_model is not None:
+                    predictions.append(forecast_ridge)
+                if svr_model is not None:
+                    predictions.append(forecast_svr)
                 std_dev = np.std(predictions)
                 print(f"   Agreement: std={std_dev:.6f} ({'High' if std_dev < 0.01 else 'Medium' if std_dev < 0.02 else 'Low'} consensus)")
             else:
-                # Only RF and sequence model available (XGB unavailable)
-                # Clip predictions to sane range (same as 3-model path)
-                forecast_seq = np.clip(forecast_seq, -MAX_DAILY_RETURN, MAX_DAILY_RETURN)
-                forecast_rf = np.clip(forecast_rf, -MAX_DAILY_RETURN, MAX_DAILY_RETURN)
-                # Renormalize weights for 2 models
-                two_model_total = seq_weight + rf_weight
-                seq_w_2 = seq_weight / two_model_total
-                rf_w_2 = rf_weight / two_model_total
-                raw_ensemble = seq_w_2 * forecast_seq + rf_w_2 * forecast_rf
+                # XGB unavailable — use whatever models we have
+                forecast_seq = np.clip(forecast_seq, -max_daily_return, max_daily_return)
+                forecast_rf = np.clip(forecast_rf, -max_daily_return, max_daily_return)
+                if ridge_model is not None:
+                    forecast_ridge = np.clip(forecast_ridge, -max_daily_return, max_daily_return)
+                if svr_model is not None:
+                    forecast_svr = np.clip(forecast_svr, -max_daily_return, max_daily_return)
+
+                # Collect available models and their weights
+                fallback_models = {'seq': (seq_weight, forecast_seq), 'rf': (rf_weight, forecast_rf)}
+                if ridge_model is not None:
+                    fallback_models['ridge'] = (ridge_weight, forecast_ridge)
+                if svr_model is not None:
+                    fallback_models['svr'] = (svr_weight, forecast_svr)
+
+                # Renormalize weights
+                fb_total = sum(w for w, _ in fallback_models.values())
+                fb_weights = {k: w / fb_total for k, (w, _) in fallback_models.items()}
+
+                raw_ensemble = sum(fb_weights[k] * pred for k, (_, pred) in fallback_models.items())
                 ensemble_std = np.sqrt(
-                    seq_w_2**2 * forecast_seq_std**2 +
-                    rf_w_2**2 * (historical_std * 0.5)**2
+                    fb_weights['seq']**2 * forecast_seq_std**2 +
+                    sum(fb_weights[k]**2 * (historical_std * 0.5)**2 for k in fb_weights if k != 'seq')
                 )
                 
                 # Apply mean reversion guard rail for extreme predictions only
-                forecast_price_change = apply_mean_reversion(raw_ensemble, historical_mean, 
-                                                              historical_std, strength=0.10)
+                forecast_price_change = stabilize_prediction(
+                    raw_ensemble,
+                    recent_prediction_values,
+                    historical_mean,
+                    historical_std,
+                    pred_cfg,
+                )
+                if run < 5 and abs(forecast_price_change - raw_ensemble) > 1e-9:
+                    print(
+                        f"[STABILIZE] Day {run+1}: ensemble adjusted from "
+                        f"{raw_ensemble:+.6f} to {forecast_price_change:+.6f}"
+                    )
 
                 future_date = future_df["date"].iloc[0]
-                print(f"\n[FORECAST] Future Prediction Day {run+1} ({future_date}): [2-model: {sequence_model_type.upper()}={seq_w_2:.2f}, RF={rf_w_2:.2f}]")
+                weight_str = ", ".join(f"{k.upper()}={fb_weights[k]:.2f}" for k in fb_weights)
+                print(f"\n[FORECAST] Future Prediction Day {run+1} ({future_date}): [no-XGB fallback: {weight_str}]")
                 if use_mc_dropout:
                     print(f"   {sequence_model_type.upper()}:      {forecast_seq:+.6f} ({forecast_seq*100:+.3f}%) ± {forecast_seq_std*100:.3f}% [{forecast_seq_confidence}]")
                     print(f"       90% CI: [{forecast_seq_ci_low*100:+.3f}%, {forecast_seq_ci_high*100:+.3f}%]")
                 else:
                     print(f"   {sequence_model_type.upper()}:      {forecast_seq:+.6f} ({forecast_seq*100:+.3f}%)")
                 print(f"   RF:        {forecast_rf:+.6f} ({forecast_rf*100:+.3f}%)")
-                print(f"   Ensemble:  {forecast_price_change:+.6f} ({forecast_price_change*100:+.3f}%) [w: {sequence_model_type.upper()}={seq_w_2:.2f}, RF={rf_w_2:.2f}]")
+                if ridge_model is not None:
+                    print(f"   Ridge:     {forecast_ridge:+.6f} ({forecast_ridge*100:+.3f}%)")
+                if svr_model is not None:
+                    print(f"   SVR:       {forecast_svr:+.6f} ({forecast_svr*100:+.3f}%)")
+                print(f"   Ensemble:  {forecast_price_change:+.6f} ({forecast_price_change*100:+.3f}%) [w: {weight_str}]")
 
                 predictions = [forecast_seq, forecast_rf]
+                if ridge_model is not None:
+                    predictions.append(forecast_ridge)
+                if svr_model is not None:
+                    predictions.append(forecast_svr)
                 std_dev = np.std(predictions)
                 print(f"   Agreement: std={std_dev:.6f} ({'High' if std_dev < 0.01 else 'Medium' if std_dev < 0.02 else 'Low'} consensus)")
 
@@ -4032,6 +4993,7 @@ def predict_future_price_changes(ticker, scaler_x, scaler_y, model, selected_fea
             prev_price = stock_mod_df.loc[len(stock_mod_df)-2, "close_Price"]
             new_price = prev_price * (1 + forecast_price_change)
             stock_mod_df.loc[len(stock_mod_df)-1, "close_Price"] = new_price
+            recent_prediction_values.append(forecast_price_change)
 
             # Store uncertainty data for this prediction day
             uncertainty_data.append({
@@ -4043,6 +5005,19 @@ def predict_future_price_changes(ticker, scaler_x, scaler_y, model, selected_fea
                 'upper_68': new_price * (1 + np.percentile([forecast_seq, forecast_rf] + ([forecast_xgb] if xgb_model is not None else []), 84) - forecast_price_change) if use_mc_dropout else None,
                 'upper_95': new_price * (1 + forecast_seq_ci_high) if forecast_seq_ci_high != forecast_seq else None,
             })
+
+            # Store per-model predicted prices for analysis
+            per_model_entry = {
+                'date': stock_mod_df.loc[len(stock_mod_df)-1, "date"],
+                'price_rf': prev_price * (1 + forecast_rf),
+                'price_xgb': prev_price * (1 + forecast_xgb) if xgb_model is not None else None,
+                'price_ridge': prev_price * (1 + forecast_ridge) if ridge_model is not None else None,
+                'price_svr': prev_price * (1 + forecast_svr) if svr_model is not None else None,
+                'price_ensemble': new_price,
+            }
+            if sequence_model is not None:
+                per_model_entry['price_seq'] = prev_price * (1 + forecast_seq)
+            per_model_predictions.append(per_model_entry)
             # print("Columns in stock_mod_df:", stock_mod_df.columns.tolist())
             # print("stock_mod_df after prediction:\n", stock_mod_df[["date", "close_Price"]].tail(3))
 
@@ -4051,7 +5026,17 @@ def predict_future_price_changes(ticker, scaler_x, scaler_y, model, selected_fea
         for column in columns_to_convert:
             stock_mod_df[column] = pd.to_numeric(stock_mod_df[column], errors='coerce').fillna(0)
 
-        stock_mod_df = stock_mod_df[features_list]
+        stock_mod_df = stock_mod_df[features_list].copy()
+        stock_mod_df['predicted_close_Price'] = stock_mod_df['close_Price']
+
+        if historical_price_predictions:
+            historical_price_df = pd.DataFrame(historical_price_predictions)
+            historical_price_df['date'] = historical_price_df['date'].astype(str)
+            stock_mod_df['date'] = stock_mod_df['date'].astype(str)
+            for _, hrow in historical_price_df.iterrows():
+                mask = stock_mod_df['date'] == hrow['date']
+                if mask.any():
+                    stock_mod_df.loc[mask, 'predicted_close_Price'] = hrow['predicted_close_Price']
         
         # Merge uncertainty data into the returned DataFrame
         if uncertainty_data:
@@ -4060,8 +5045,7 @@ def predict_future_price_changes(ticker, scaler_x, scaler_y, model, selected_fea
             stock_mod_df['date'] = stock_mod_df['date'].astype(str)
             
             # Add uncertainty columns (only for future prediction rows)
-            for col in ['prediction_std', 'lower_95', 'lower_68', 'upper_68', 'upper_95']:
-                stock_mod_df[col] = None
+            stock_mod_df[['prediction_std', 'lower_95', 'lower_68', 'upper_68', 'upper_95']] = None
             
             # Match by date and fill in uncertainty values
             for _, urow in uncertainty_df.iterrows():
@@ -4075,6 +5059,18 @@ def predict_future_price_changes(ticker, scaler_x, scaler_y, model, selected_fea
             
             # Also add a 'std' column alias for export_stock_prediction_extended compatibility
             stock_mod_df['std'] = stock_mod_df['prediction_std']
+        
+        # Merge per-model predictions into the returned DataFrame
+        if per_model_predictions:
+            pm_df = pd.DataFrame(per_model_predictions)
+            pm_df['date'] = pm_df['date'].astype(str)
+            model_price_cols = [c for c in pm_df.columns if c.startswith('price_') and c != 'price_ensemble']
+            stock_mod_df[model_price_cols] = None
+            for _, prow in pm_df.iterrows():
+                mask = stock_mod_df['date'] == prow['date']
+                if mask.any():
+                    for col in model_price_cols:
+                        stock_mod_df.loc[mask, col] = prow[col]
         
         return stock_mod_df
 
@@ -4101,8 +5097,10 @@ def analyze_prediction_performance(stock_df, forecast_df, historical_prediction_
     print("="*80)
     
     if historical_prediction_count > 0:
-        # Get historical prediction period
-        hist_forecast = forecast_df.iloc[-historical_prediction_count:]
+        # Get only the historical forecast period, excluding appended future rows.
+        forecast_dates = pd.to_datetime(forecast_df["date"], errors='coerce')
+        last_actual_date = pd.to_datetime(stock_df["date"], errors='coerce').max()
+        hist_forecast = forecast_df.loc[forecast_dates <= last_actual_date].iloc[-historical_prediction_count:]
         hist_actual = stock_df.iloc[-historical_prediction_count:]
         
         # Compare predicted vs actual price changes
@@ -4129,9 +5127,10 @@ def analyze_prediction_performance(stock_df, forecast_df, historical_prediction_
             print(f"   Direction Accuracy:     {direction_accuracy:.2f}%")
             
             # Compare actual vs predicted prices
-            if "close_Price" in hist_forecast.columns and "close_Price" in hist_actual.columns:
+            predicted_price_col = "predicted_close_Price" if "predicted_close_Price" in hist_forecast.columns else "close_Price"
+            if predicted_price_col in hist_forecast.columns and "close_Price" in hist_actual.columns:
                 # Ensure we get 1D arrays by using .squeeze() to remove extra dimensions
-                predicted_prices = hist_forecast["close_Price"].values
+                predicted_prices = hist_forecast[predicted_price_col].values
                 actual_prices = hist_actual["close_Price"].values
                 
                 # Handle case where values might be 2D (e.g., shape (50,2) instead of (50,))
@@ -4148,13 +5147,13 @@ def analyze_prediction_performance(stock_df, forecast_df, historical_prediction_
                 price_errors = predicted_prices - actual_prices
                 price_pct_errors = (price_errors / actual_prices) * 100
                 
-                print(f"\n[PRICE] Price Prediction Accuracy:")
+                print("\n[PRICE] Price Prediction Accuracy:")
                 print(f"   Mean Price Error:       {np.mean(np.abs(price_errors)):.2f} ({np.mean(np.abs(price_pct_errors)):.2f}%)")
                 print(f"   Median Price Error:     {np.median(np.abs(price_errors)):.2f} ({np.median(np.abs(price_pct_errors)):.2f}%)")
                 print(f"   Max Price Error:        {np.max(np.abs(price_errors)):.2f} ({np.max(np.abs(price_pct_errors)):.2f}%)")
                 
                 # Show day-by-day comparison
-                print(f"\n[TABLE] Day-by-Day Comparison (Historical):")
+                print("\n[TABLE] Day-by-Day Comparison (Historical):")
                 print(f"{'Date':<12} {'Actual Price':>12} {'Pred Price':>12} {'Error':>10} {'Actual %':>10} {'Pred %':>10}")
                 print("-" * 78)
                 # Use min_len to ensure we don't exceed array bounds
@@ -4195,8 +5194,10 @@ def calculate_predicted_profit(forecast_df, prediction_days):
             print(f"The prediction expects a loss of: {round(predicted_return, 2)}%, over the next {prediction_days} days.")
         else:
             print(f"The prediction expects no return over the next {prediction_days} days.")
+        return float(predicted_return)
     except ValueError:
         print(f"The model could not predict an expected return over the next {prediction_days} days.")
+        return None
 
 def plot_graph(stock_data_df, forecast_data_df):
     """
@@ -4244,7 +5245,7 @@ def plot_graph(stock_data_df, forecast_data_df):
     # Change " " in stock_data_df.iloc[0]["Name"] to "_" to avoid error when saving the graph
     stock_data_df = stock_data_df.replace({"ticker": [" ", "/"]}, {"ticker": "_"}, regex=True)
     stock_name = stock_data_df.iloc[0]["ticker"]
-    graph_name = str(f"stock_prediction_of_{stock_name}.png")
+    graph_name = f"stock_prediction_of_{stock_name}.png"
     my_path = os.path.abspath(__file__)
     path = os.path.dirname(my_path)
     # Save the graph
@@ -4253,7 +5254,7 @@ def plot_graph(stock_data_df, forecast_data_df):
         plt.clf()
         plt.close("all")
 
-    except FileNotFoundError as e:
+    except FileNotFoundError:
         plt.close("all")
 
 # Run the main function
@@ -4261,23 +5262,7 @@ def main():
     """Main function to run the stock price prediction pipeline."""
     import db_interactions
 
-    gpus = tf.config.list_physical_devices('GPU')
-    if gpus:
-        try:
-            for gpu in gpus:
-                # Note: set_memory_growth and set_virtual_device_configuration are
-                # mutually exclusive. Only use virtual device config to cap memory.
-                tf.config.experimental.set_virtual_device_configuration(
-                    gpu,
-                    [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=7168)]
-                )
-            print(f"[GPU] Configured {len(gpus)} GPU(s) with 7GB memory limit.")
-        except RuntimeError as e:
-            print(f"[GPU] Configuration failed ({e}), falling back to CPU.")
-            try:
-                tf.config.set_visible_devices([], 'GPU')
-            except Exception:
-                pass
+    configure_tensorflow_gpu(memory_limit_mb=7168)
 
     start_time = time.time()
 
@@ -4285,7 +5270,7 @@ def main():
     stock_symbols_list = db_interactions.import_ticker_list()
     stock_symbol = stock_symbols_list[0]
     stock_symbol = "A"
-    print(stock_symbol)
+    print(f"Selected stock symbol: {stock_symbol}")
 
     # Import stock data
     stock_data_df = db_interactions.import_stock_dataset(stock_symbol)
@@ -4337,7 +5322,7 @@ def main():
     feature_amount = max_features
 
     x_training_dataset, x_val_dataset, x_test_dataset, x_prediction_dataset, \
-        selected_features_model, selected_features_list = \
+        _, selected_features_list = \
         dimension_reduction.feature_selection_rf(
             feature_amount,
             x_training_data,
@@ -4369,7 +5354,7 @@ def main():
     y_val_scaled_for_lstm = pd.Series(y_val_scaled)
 
     # MAIN TRAINING WITH AUTOMATIC RETRAINING AND OVERFITTING DETECTION
-    models, training_history, lstm_datasets = train_and_validate_models(
+    models, training_history, _ = train_and_validate_models(
         stock_symbol=stock_symbol,
         x_train=x_training_dataset_df.values,
         x_val=x_val_dataset_df.values,
@@ -4402,10 +5387,7 @@ def main():
     )
     
     # Extract models using new generic interface
-    sequence_model = models['sequence_model']
     sequence_model_type = models['sequence_model_type']  # 'tcn' or 'lstm'
-    rf_model = models['rf']
-    xgb_model = models['xgb']
 
     # Print training history summary
     print("\n" + "="*60)
@@ -4417,7 +5399,7 @@ def main():
         print(f"  Test MSE: {seq_history['test_metrics']['mse']:.6f}")
         print(f"  Test R2:  {seq_history['test_metrics']['r2']:.4f}")
 
-    for i, rf_history in enumerate(training_history['random_forest']):
+    for i, _ in enumerate(training_history['random_forest']):
         print(f"\nRandom Forest Attempt {i+1}:")
 
     # Predict the future stock price changes with Monte Carlo Dropout uncertainty
@@ -4484,7 +5466,7 @@ def main():
     # Run a Monte Carlo simulation
     year_amount = 10
     sim_amount = 1000
-    monte_carlo_day_df, monte_carlo_year_df = monte_carlo_sim.monte_carlo_analysis(
+    _, _ = monte_carlo_sim.monte_carlo_analysis(
         0, stock_data_df, forecast_df, year_amount, sim_amount
     )
     forecast_df = forecast_df.rename(columns={"close_Price": stock_symbol + "_price"})

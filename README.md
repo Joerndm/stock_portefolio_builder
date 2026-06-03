@@ -123,6 +123,66 @@ results = train_and_validate_models(
 )
 ```
 
+### Generating Predictions
+
+```python
+from price_predictor import run_predictions
+
+summary = run_predictions(max_prediction_age_days=1, investment_years=7)
+```
+
+`price_predictor.py` is cache-first: it rebuilds models only from valid cached hyperparameters.
+If any required cache entry is missing, stale, or invalid, the ticker returns an explicit status such
+as `training_required` or `cache_invalidated` and prediction stops for that ticker instead of tuning
+models inside the prediction phase. Run `model_trainer.py` first to refresh missing caches.
+
+If cached flat-model rows (`rf`, `xgb`, `ridge`, `svr`) need to be reconciled after a preprocessing
+contract change, use the supported admin command instead of an ad hoc script:
+
+```bash
+python model_trainer.py --refresh-cache-contract APP ASML.AS
+```
+
+To refresh only a subset of flat-model caches and then verify each ticker can still predict from
+cache-only state, run:
+
+```bash
+python model_trainer.py --refresh-cache-contract APP ASML.AS --refresh-model-types ridge svr --validate-prediction
+```
+
+### Auditing And Repair Planning
+
+Run the stock-data validation first:
+
+```bash
+python validate_stock_data.py
+```
+
+Then build repair cohorts from the generated validation report:
+
+```bash
+python repair_cohort_planner.py --report data_validation_report.json
+```
+
+This writes `repair_cohorts.json` and `repair_cohort_summary.txt`, which separate safe ticker-scoped
+repair cohorts such as stale prices, missing quarterly data, and ratio lag from spike findings that
+should be manually reviewed before any destructive cleanup.
+
+Build the executable repair queue in dry-run mode with:
+
+```bash
+python repair_ticker_cohorts.py --plan repair_cohorts.json
+```
+
+After reviewing the queue, execute only the safe cohorts with:
+
+```bash
+python repair_ticker_cohorts.py --plan repair_cohorts.json --execute
+```
+
+This writes `repair_execution_report.json` and `repair_execution_summary.txt` so each repair run leaves
+an auditable record of which ticker-scoped actions were planned or executed.
+
 ## Project Structure
 
 | File | Description |

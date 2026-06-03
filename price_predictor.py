@@ -24,10 +24,10 @@ Usage:
 
 import os
 import sys
-import io
 import json
 import time
 import datetime
+import logging
 import traceback
 from typing import List, Optional, Dict
 
@@ -35,21 +35,24 @@ from typing import List, Optional, Dict
 os.environ['TF_PTXAS_UNAVAILABLE'] = '1'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
 
-import numpy as np
 import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import tensorflow as tf
 
-import fetch_secrets
-import db_connectors
 import db_interactions
-import split_dataset
-import dimension_reduction
 import ml_builder
 import monte_carlo_sim
+from gpu_runtime_utils import configure_tensorflow_gpu
 from blacklist_manager import get_blacklist_manager
+from model_pipeline_preprocessing import prepare_modeling_data
+from pipeline_config import get_gpu_config, get_data_config, get_ml_config, get_pred_config
+from prediction_cache_contract import PredictionCacheContractError, require_prediction_cache
+
+logger = logging.getLogger(__name__)
+
+
+DB_EXPORT_RECOVERY_EXCEPTIONS = (KeyError, ValueError)
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +121,7 @@ def _save_run_summary(summary: dict, ticker_details: dict, log_dir: str):
         "total_processed": summary.get("total_processed", 0),
         "successful": summary.get("successful", 0),
         "failed": summary.get("failed", 0),
+        "status_counts": summary.get("status_counts", {}),
         "execution_time_seconds": round(summary.get("execution_time", 0), 2),
         "tickers": {},
     }
@@ -127,6 +131,11 @@ def _save_run_summary(summary: dict, ticker_details: dict, log_dir: str):
             "success": res["success"],
             "execution_time_seconds": round(res.get("execution_time", 0), 2),
             "error_message": res.get("error_message"),
+            "cache_status": res.get("cache_status"),
+            "required_model_types": res.get("required_model_types"),
+            "available_model_types": res.get("available_model_types"),
+            "missing_model_types": res.get("missing_model_types"),
+            "failing_model_type": res.get("failing_model_type"),
         }
         if res.get("forecast_df") is not None:
             fdf = res["forecast_df"]
@@ -146,25 +155,8 @@ def _save_run_summary(summary: dict, ticker_details: dict, log_dir: str):
 
 def configure_gpu():
     """Configure TensorFlow GPU settings for optimal performance."""
-    gpus = tf.config.list_physical_devices('GPU')
-    if not gpus:
-        print("[GPU] No GPU detected, using CPU.")
-        return False
-    try:
-        for gpu in gpus:
-            tf.config.experimental.set_virtual_device_configuration(
-                gpu,
-                [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=7168)]
-            )
-        print(f"[GPU] Configured {len(gpus)} GPU(s) with 7GB memory limit.")
-        return True
-    except RuntimeError as e:
-        print(f"[GPU] Configuration failed ({e}), falling back to CPU.")
-        try:
-            tf.config.set_visible_devices([], 'GPU')
-        except Exception:
-            pass
-        return False
+    gpu_cfg = get_gpu_config()
+    return configure_tensorflow_gpu(gpu_cfg.memory_limit_mb, logger=logger)
 
 
 def save_prediction_graph(stock_data_df: pd.DataFrame, forecast_df: pd.DataFrame):
@@ -195,7 +187,7 @@ def save_prediction_graph(stock_data_df: pd.DataFrame, forecast_df: pd.DataFrame
 def predict_single_stock(
     stock_symbol: str,
     investment_years: int = 7,
-    time_steps: int = 30
+    time_steps: int = None
 ) -> Dict:
     """
     Generate predictions for a single stock using its cached model hyperparameters.
@@ -206,154 +198,92 @@ def predict_single_stock(
     Args:
         stock_symbol: Stock ticker symbol
         investment_years: Investment horizon for Monte Carlo simulation
-        time_steps: Number of time steps for sequence models
+        time_steps: Number of time steps for sequence models (None = use config)
         
     Returns:
         dict with 'success', 'forecast_df', 'mc_day_df', 'mc_year_df',
               'error_message', 'execution_time'
     """
+    data_cfg = get_data_config()
+    ml_cfg = get_ml_config()
+    pred_cfg = get_pred_config()
+    if time_steps is None:
+        time_steps = data_cfg.time_steps
     start_time = time.time()
 
     try:
+        cache_state = require_prediction_cache(
+            stock_symbol,
+            required_model_types=ml_cfg.required_model_types,
+            max_age_days=pred_cfg.max_model_age_days,
+        )
+
         # Import stock data
         stock_data_df = db_interactions.import_stock_dataset(stock_symbol)
-        stock_data_df["date"] = pd.to_datetime(stock_data_df["date"])
-
-        # --- Targeted cleaning (matches model_trainer.py) ---
-        # 1. Drop columns that are entirely NaN
-        stock_data_df = stock_data_df.dropna(axis=1, how="all")
-        # 2. Only drop rows where critical columns have NaN
-        always_required = ['date', 'ticker', 'close_Price', 'open_Price',
-                           'high_Price', 'low_Price']
-        critical_cols = [c for c in always_required if c in stock_data_df.columns]
-        stock_data_df = stock_data_df.dropna(subset=critical_cols)
-        # 3. Forward-fill then back-fill remaining NaN in feature columns
-        feature_cols = [c for c in stock_data_df.columns
-                        if c not in ('date', 'ticker')]
-        stock_data_df[feature_cols] = stock_data_df[feature_cols].ffill().bfill()
-        # 4. Drop any rows still containing NaN after fill
-        stock_data_df = stock_data_df.dropna(axis=0, how="any")
-        # 5. Drop columns that became all-NaN after row removal
-        stock_data_df = stock_data_df.dropna(axis=1, how="any")
-
-        if len(stock_data_df) < 100:
-            raise ValueError(f"Insufficient data: only {len(stock_data_df)} rows available")
-
-        # Split the dataset
-        validation_size = 0.20
-        test_size = 0.10
-        scaler_x, scaler_y, x_train_scaled, x_val_scaled, x_test_scaled, \
-            y_train_scaled, y_val_scaled, y_test_scaled, x_predictions = \
-            split_dataset.dataset_train_test_split(
-                stock_data_df, test_size, validation_size=validation_size
-            )
-
-        # Inverse-transform y values for RF/XGB
-        y_train_unscaled = scaler_y.inverse_transform(
-            y_train_scaled.reshape(-1, 1)
-        ).flatten()
-        y_val_unscaled = scaler_y.inverse_transform(
-            y_val_scaled.reshape(-1, 1)
-        ).flatten()
-        y_test_unscaled = scaler_y.inverse_transform(
-            y_test_scaled.reshape(-1, 1)
-        ).flatten()
-
-        # Feature selection
-        x_training_data = pd.DataFrame(x_train_scaled)
-        x_val_data = pd.DataFrame(x_val_scaled)
-        x_test_data = pd.DataFrame(x_test_scaled)
-        y_training_data_df = pd.Series(y_train_unscaled)
-        y_val_data_df = pd.Series(y_val_unscaled)
-        y_test_data_df = pd.Series(y_test_unscaled)
-        prediction_data = x_predictions
-
-        max_features = len(x_training_data.columns)
-        feature_amount = max_features
-
-        x_training_dataset, x_val_dataset, x_test_dataset, x_prediction_dataset, \
-            selected_features_model, selected_features_list = \
-            dimension_reduction.feature_selection_rf(
-                feature_amount,
-                x_training_data,
-                x_val_data,
-                x_test_data,
-                y_training_data_df,
-                y_val_data_df,
-                y_test_data_df,
-                prediction_data,
-                stock_data_df
-            )
-
-        # Prepare DataFrames for ML
-        x_training_dataset_df = pd.DataFrame(
-            x_training_dataset, columns=selected_features_list
+        prepared_data = prepare_modeling_data(
+            stock_data_df,
+            time_steps=time_steps,
+            validation_size=data_cfg.validation_size,
+            test_size=data_cfg.test_size,
+            min_rows_floor=data_cfg.min_rows_floor,
         )
-        y_training_data_df = y_training_data_df.reset_index(drop=True)
-        x_val_dataset_df = pd.DataFrame(x_val_dataset, columns=selected_features_list)
-        y_val_data_df = y_val_data_df.reset_index(drop=True)
-        x_test_dataset_df = pd.DataFrame(x_test_dataset, columns=selected_features_list)
-        y_test_data_df = y_test_data_df.reset_index(drop=True)
-        x_prediction_dataset_df = pd.DataFrame(
-            x_prediction_dataset, columns=selected_features_list
-        )
-
-        y_train_scaled_for_lstm = pd.Series(y_train_scaled)
-        y_test_scaled_for_lstm = pd.Series(y_test_scaled)
-        y_val_scaled_for_lstm = pd.Series(y_val_scaled)
+        stock_data_df = prepared_data.stock_data_df
 
         # Rebuild models from cached hyperparameters
         # train_and_validate_models will use cached HPs when available (no tuning overhead)
-        models, training_history, lstm_datasets = ml_builder.train_and_validate_models(
+        models, _, _ = ml_builder.train_and_validate_models(
             stock_symbol=stock_symbol,
-            x_train=x_training_dataset_df.values,
-            x_val=x_val_dataset_df.values,
-            x_test=x_test_dataset_df.values,
-            y_train_scaled=y_train_scaled_for_lstm.values,
-            y_val_scaled=y_val_scaled_for_lstm.values,
-            y_test_scaled=y_test_scaled_for_lstm.values,
-            y_train_unscaled=y_train_unscaled,
-            y_val_unscaled=y_val_unscaled,
-            y_test_unscaled=y_test_unscaled,
+            x_train=prepared_data.x_training_dataset_df.values,
+            x_val=prepared_data.x_val_dataset_df.values,
+            x_test=prepared_data.x_test_dataset_df.values,
+            y_train_scaled=prepared_data.y_train_scaled,
+            y_val_scaled=prepared_data.y_val_scaled,
+            y_test_scaled=prepared_data.y_test_scaled,
+            y_train_unscaled=prepared_data.y_train_unscaled,
+            y_val_unscaled=prepared_data.y_val_unscaled,
+            y_test_unscaled=prepared_data.y_test_unscaled,
             time_steps=time_steps,
-            scaler_y=scaler_y,
-            max_retrains=150,
-            overfitting_threshold=0.15,
-            lstm_trials=50,
-            lstm_executions=10,
-            lstm_epochs=500,
-            lstm_retrain_trials_increment=10,
-            lstm_retrain_executions_increment=2,
-            rf_trials=100,
-            rf_retrain_increment=25,
-            xgb_trials=60,
-            xgb_retrain_increment=10,
-            use_multi_metric_detection=True,
-            use_tcn=True,
-            tcn_trials=30,
-            tcn_epochs=100,
-            tcn_retrain_increment=10
+            scaler_y=prepared_data.scaler_y,
+            max_retrains=ml_cfg.max_retrains,
+            overfitting_threshold=ml_cfg.overfitting_threshold,
+            lstm_trials=ml_cfg.lstm_trials,
+            lstm_executions=ml_cfg.lstm_executions,
+            lstm_epochs=ml_cfg.lstm_epochs,
+            lstm_retrain_trials_increment=ml_cfg.lstm_retrain_trials_increment,
+            lstm_retrain_executions_increment=ml_cfg.lstm_retrain_executions_increment,
+            rf_trials=ml_cfg.rf_trials,
+            rf_retrain_increment=ml_cfg.rf_retrain_increment,
+            xgb_trials=ml_cfg.xgb_trials,
+            xgb_retrain_increment=ml_cfg.xgb_retrain_increment,
+            use_multi_metric_detection=ml_cfg.use_multi_metric_detection,
+            use_tcn=ml_cfg.use_tcn,
+            use_sequence_model=ml_cfg.use_sequence_model,
+            tcn_trials=ml_cfg.tcn_trials,
+            tcn_epochs=ml_cfg.tcn_epochs,
+            tcn_retrain_increment=ml_cfg.tcn_retrain_increment,
+            cache_max_age_days=pred_cfg.max_model_age_days,
+            cache_only=True,
         )
 
         # Generate predictions
-        amount_of_days = time_steps * 3
+        amount_of_days = time_steps * pred_cfg.prediction_days_multiplier
         forecast_df = ml_builder.predict_future_price_changes(
             ticker=stock_symbol,
-            scaler_x=scaler_x,
-            scaler_y=scaler_y,
+            scaler_x=prepared_data.scaler_x,
+            scaler_y=prepared_data.scaler_y,
             model=models,
-            selected_features_list=selected_features_list,
+            selected_features_list=prepared_data.selected_features_list,
             stock_df=stock_data_df,
             prediction_days=amount_of_days,
             time_steps=time_steps,
-            historical_prediction_dataset_df=x_prediction_dataset_df,
-            use_mc_dropout=True,
-            mc_iterations=30
+            historical_prediction_dataset_df=prepared_data.x_prediction_dataset_df,
+            use_mc_dropout=pred_cfg.use_mc_dropout,
+            mc_iterations=pred_cfg.mc_iterations,
         )
 
         # Analyze prediction performance
-        historical_pred_count = len(x_prediction_dataset_df) \
-            if x_prediction_dataset_df is not None else 0
+        historical_pred_count = len(prepared_data.x_prediction_dataset_df) \
+            if prepared_data.x_prediction_dataset_df is not None else 0
         ml_builder.analyze_prediction_performance(stock_data_df, forecast_df, historical_pred_count)
 
         # Save prediction graph
@@ -366,9 +296,8 @@ def predict_single_stock(
         ml_builder.plot_graph(stock_data_df, forecast_df)
 
         # Run Monte Carlo simulation
-        sim_amount = 1000
         monte_carlo_day_df, monte_carlo_year_df = monte_carlo_sim.monte_carlo_analysis(
-            0, stock_data_df, forecast_df, investment_years, sim_amount
+            0, stock_data_df, forecast_df, investment_years, pred_cfg.sim_amount
         )
 
         # Get current price for database export
@@ -384,11 +313,35 @@ def predict_single_stock(
                 forecast_df=forecast_df,
                 current_price=current_price,
                 model_type="ensemble",
-                mc_dropout_used=True,
-                mc_iterations=30
+                mc_dropout_used=pred_cfg.use_mc_dropout,
+                mc_iterations=pred_cfg.mc_iterations,
             )
+            # Export per-model predictions if available
+            model_price_cols = {
+                'rf': 'price_rf', 'xgb': 'price_xgb',
+                'ridge': 'price_ridge', 'svr': 'price_svr',
+                'seq': 'price_seq'
+            }
+            for model_name, col_name in model_price_cols.items():
+                if col_name in forecast_df.columns and forecast_df[col_name].notna().any():
+                    model_forecast = forecast_df.copy()
+                    model_forecast['close_Price'] = model_forecast[col_name].combine_first(
+                        model_forecast['close_Price']
+                    )
+                    try:
+                        db_interactions.export_stock_prediction_extended(
+                            ticker=stock_symbol,
+                            prediction_date=prediction_date,
+                            forecast_df=model_forecast,
+                            current_price=current_price,
+                            model_type=model_name,
+                            mc_dropout_used=False,
+                            mc_iterations=0
+                        )
+                    except DB_EXPORT_RECOVERY_EXCEPTIONS:
+                        pass  # Non-critical, skip silently
             print(f"[DB] Exported predictions for {stock_symbol}")
-        except Exception as db_error:
+        except DB_EXPORT_RECOVERY_EXCEPTIONS as db_error:
             print(f"[WARNING] Could not export predictions to DB: {db_error}")
 
         try:
@@ -396,11 +349,11 @@ def predict_single_stock(
                 ticker=stock_symbol,
                 simulation_date=prediction_date,
                 monte_carlo_year_df=monte_carlo_year_df,
-                num_simulations=sim_amount,
+                num_simulations=pred_cfg.sim_amount,
                 starting_price=current_price
             )
             print(f"[DB] Exported Monte Carlo results for {stock_symbol}")
-        except Exception as db_error:
+        except DB_EXPORT_RECOVERY_EXCEPTIONS as db_error:
             print(f"[WARNING] Could not export Monte Carlo to DB: {db_error}")
 
         execution_time = time.time() - start_time
@@ -411,7 +364,21 @@ def predict_single_stock(
             'mc_day_df': monte_carlo_day_df,
             'mc_year_df': monte_carlo_year_df,
             'error_message': None,
-            'execution_time': execution_time
+            'execution_time': execution_time,
+            **cache_state.to_result(),
+        }
+
+    except PredictionCacheContractError as e:
+        execution_time = time.time() - start_time
+        print(f"[CACHE] {e}")
+        return {
+            'success': False,
+            'forecast_df': None,
+            'mc_day_df': None,
+            'mc_year_df': None,
+            'error_message': str(e),
+            'execution_time': execution_time,
+            **e.to_result(),
         }
 
     except Exception as e:
@@ -425,7 +392,8 @@ def predict_single_stock(
             'mc_day_df': None,
             'mc_year_df': None,
             'error_message': error_msg,
-            'execution_time': execution_time
+            'execution_time': execution_time,
+            'cache_status': 'error',
         }
 
 
@@ -433,7 +401,7 @@ def run_predictions(
     max_prediction_age_days: int = 1,
     investment_years: int = 7,
     excluded_tickers: Optional[List[str]] = None,
-    time_steps: int = 30,
+    time_steps: int = None,
     max_stocks: Optional[int] = None
 ):
     """
@@ -447,24 +415,29 @@ def run_predictions(
         max_prediction_age_days: Predictions older than this are regenerated (default: 1)
         investment_years: Investment horizon for Monte Carlo simulations
         excluded_tickers: Tickers to skip
-        time_steps: Time steps for sequence models
+        time_steps: Time steps for sequence models (None = use config)
         max_stocks: Maximum number of stocks to predict in this run (None = all)
         
     Returns:
         dict with prediction summary
     """
+    data_cfg = get_data_config()
+    if time_steps is None:
+        time_steps = data_cfg.time_steps
+
     overall_start = time.time()
 
-    print("\n" + "=" * 70)
-    print("PRICE PREDICTOR — Phase 2")
-    print("=" * 70)
-    print(f"Max prediction age: {max_prediction_age_days} day(s)")
-    print(f"Investment horizon: {investment_years} years")
-    print("=" * 70 + "\n")
+    logger.info("")
+    logger.info("=" * 70)
+    logger.info("PRICE PREDICTOR — Phase 2")
+    logger.info("=" * 70)
+    logger.info("Max prediction age: %d day(s)", max_prediction_age_days)
+    logger.info("Investment horizon: %d years", investment_years)
+    logger.info("=" * 70)
 
     # Configure GPU
     has_gpu = configure_gpu()
-    print(f"[GPU] {'GPU acceleration enabled' if has_gpu else 'Running on CPU'}\n")
+    logger.info("[GPU] %s", 'GPU acceleration enabled' if has_gpu else 'Running on CPU')
 
     # Load blacklist
     blacklisted = get_blacklist_manager().get_blacklist()
@@ -478,9 +451,9 @@ def run_predictions(
     needs_prediction = [t for t in prediction_needs['needs_prediction'] if t not in all_excluded]
     recently_predicted = prediction_needs['recently_predicted']
 
-    print(f"[STATUS] Tickers needing prediction:  {len(needs_prediction)}")
-    print(f"[STATUS] Recently predicted:           {len(recently_predicted)}")
-    print(f"[STATUS] Excluded:                     {len(all_excluded)}\n")
+    logger.info("[STATUS] Tickers needing prediction:  %d", len(needs_prediction))
+    logger.info("[STATUS] Recently predicted:           %d", len(recently_predicted))
+    logger.info("[STATUS] Excluded:                     %d", len(all_excluded))
 
     # Limit work queue
     work_queue = needs_prediction
@@ -488,26 +461,29 @@ def run_predictions(
         work_queue = work_queue[:max_stocks]
 
     if not work_queue:
-        print("[INFO] All predictions are up to date. Nothing to predict.")
+        logger.info("[INFO] All predictions are up to date. Nothing to predict.")
         return {
             'total_processed': 0,
             'successful': 0,
             'failed': 0,
-            'execution_time': time.time() - overall_start
+            'execution_time': time.time() - overall_start,
+            'status_counts': {},
         }
 
     total = len(work_queue)
-    print(f"[INFO] Predicting {total} tickers\n")
+    logger.info("[INFO] Predicting %d tickers", total)
 
     # Process each ticker
     results = {}
     successful = 0
     failed = 0
+    status_counts: Dict[str, int] = {}
 
     for i, ticker in enumerate(work_queue):
-        print(f"\n{'=' * 60}")
-        print(f"[{i+1}/{total}] Predicting {ticker}")
-        print(f"{'=' * 60}")
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info("[%d/%d] Predicting %s", i + 1, total, ticker)
+        logger.info("=" * 60)
 
         result = predict_single_stock(
             stock_symbol=ticker,
@@ -515,38 +491,46 @@ def run_predictions(
             time_steps=time_steps
         )
         results[ticker] = result
+        status = result.get('cache_status') or ('cache_hit' if result.get('success') else 'error')
+        status_counts[status] = status_counts.get(status, 0) + 1
 
         if result['success']:
             successful += 1
-            print(f"[OK] {ticker} predicted in {result['execution_time']:.1f}s")
+            logger.info("[OK] %s predicted in %.1fs", ticker, result['execution_time'])
         else:
             failed += 1
-            print(f"[FAIL] {ticker}: {result['error_message']}")
+            logger.error("[FAIL] %s: %s", ticker, result['error_message'])
 
     # Summary
     overall_time = time.time() - overall_start
-    print("\n" + "=" * 70)
-    print("PREDICTION SUMMARY")
-    print("=" * 70)
-    print(f"Total processed:   {total}")
-    print(f"Successful:        {successful}")
-    print(f"Failed:            {failed}")
-    print(f"Total time:        {overall_time:.1f}s")
+    logger.info("")
+    logger.info("=" * 70)
+    logger.info("PREDICTION SUMMARY")
+    logger.info("=" * 70)
+    logger.info("Total processed:   %d", total)
+    logger.info("Successful:        %d", successful)
+    logger.info("Failed:            %d", failed)
+    logger.info("Total time:        %.1fs", overall_time)
     if total > 0:
-        print(f"Avg time/stock:    {overall_time / total:.1f}s")
+        logger.info("Avg time/stock:    %.1fs", overall_time / total)
+    if status_counts:
+        logger.info("Cache statuses:")
+        for status, count in sorted(status_counts.items()):
+            logger.info("  - %s: %d", status, count)
 
     if failed > 0:
-        print("\nFailed tickers:")
+        logger.warning("Failed tickers:")
         for ticker, result in results.items():
             if not result['success']:
-                print(f"  - {ticker}: {result['error_message']}")
+                logger.warning("  - %s: %s", ticker, result['error_message'])
 
-    print("=" * 70)
+    logger.info("=" * 70)
 
     # Save structured JSON summary for post-run analysis
     _save_run_summary(
         {"total_processed": total, "successful": successful,
-         "failed": failed, "execution_time": overall_time},
+         "failed": failed, "execution_time": overall_time,
+         "status_counts": status_counts},
         results,
         PREDICTION_LOG_DIR,
     )
@@ -556,6 +540,7 @@ def run_predictions(
         'successful': successful,
         'failed': failed,
         'execution_time': overall_time,
+        'status_counts': status_counts,
         'results': results
     }
 
@@ -563,29 +548,35 @@ def run_predictions(
 if __name__ == "__main__":
     import argparse
 
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+
     parser = argparse.ArgumentParser(description="Generate stock price predictions")
-    parser.add_argument("--max-age", type=int, default=1,
-                        help="Max prediction age in days before re-predicting (default: 1)")
+    parser.add_argument("--max-age", type=int, default=30,
+                        help="Max prediction age in days before re-predicting (default: 30)")
     parser.add_argument("--years", type=int, default=7,
                         help="Investment horizon for Monte Carlo (default: 7)")
     parser.add_argument("--max-stocks", type=int, default=None,
                         help="Maximum number of stocks to predict in this run")
-    parser.add_argument("--time-steps", type=int, default=30,
-                        help="Time steps for sequence models (default: 30)")
+    parser.add_argument("--time-steps", type=int, default=None,
+                        help="Time steps for sequence models (default: from config)")
 
     args = parser.parse_args()
 
     # Capture all console output to a timestamped log file
-    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_path = os.path.join(PREDICTION_LOG_DIR, f"prediction_run_{ts}.log")
-    print(f"[LOG] Full output will be saved to: {log_path}")
+    run_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_log_path = os.path.join(PREDICTION_LOG_DIR, f"prediction_run_{run_timestamp}.log")
+    logger.info("[LOG] Full output will be saved to: %s", run_log_path)
 
-    with TeeLogger(log_path):
-        summary = run_predictions(
+    with TeeLogger(run_log_path):
+        run_summary = run_predictions(
             max_prediction_age_days=args.max_age,
             investment_years=args.years,
             time_steps=args.time_steps,
             max_stocks=args.max_stocks
         )
 
-    print(f"[LOG] Raw log saved → {log_path}")
+    logger.info("[LOG] Raw log saved → %s", run_log_path)

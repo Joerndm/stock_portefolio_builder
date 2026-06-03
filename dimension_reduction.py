@@ -166,9 +166,15 @@ def feature_selection_rf(dimensions, x_training_data, x_val_data, x_test_data, y
     
     # Get feature importances
     importances = rf_selector.feature_importances_
-    
-    # Select top K features based on importance
-    top_indices = np.argsort(importances)[-dimensions:][::-1]
+
+    # Select up to K features, but avoid padding the result with zero-importance
+    # columns when the importance curve goes flat.
+    ranked_indices = np.argsort(importances)[::-1]
+    positive_ranked_indices = [idx for idx in ranked_indices if importances[idx] > 0]
+    if positive_ranked_indices:
+        top_indices = np.asarray(positive_ranked_indices[:dimensions], dtype=int)
+    else:
+        top_indices = np.asarray(ranked_indices[:1], dtype=int)
     
     # Transform all datasets using selected features
     reduced_training_dataset = x_training_data.iloc[:, top_indices].values
@@ -186,6 +192,12 @@ def feature_selection_rf(dimensions, x_training_data, x_val_data, x_test_data, y
     print(f"Shape of validation dataset after feature selection: {reduced_val_dataset.shape}")
     print(f"Shape of test dataset after feature selection: {reduced_test_dataset.shape}")
     print(f"Shape of prediction dataset after feature selection: {reduced_prediction_dataset.shape}")
+
+    if len(top_indices) < dimensions:
+        print(
+            f"[INFO] Requested {dimensions} features, but only {len(top_indices)} had positive importance. "
+            "Dropped zero-importance tail features."
+        )
     
     # Get feature names
     # Must match the columns dropped by split_dataset.py (metadata + raw OHLCV + target)

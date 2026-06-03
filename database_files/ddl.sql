@@ -453,7 +453,7 @@ CREATE TABLE IF NOT EXISTS `stock_prediction_extended` (
   `mc_iterations` INT COMMENT 'Number of MC Dropout iterations if used',
   
   PRIMARY KEY (`prediction_id`),
-  UNIQUE KEY `uk_prediction` (`prediction_date`, `ticker`, `prediction_horizon_days`),
+  UNIQUE KEY `uk_prediction` (`prediction_date`, `ticker`, `prediction_horizon_days`, `model_type`),
   FOREIGN KEY (`ticker`) REFERENCES `stock_info_data`(`ticker`),
   INDEX `idx_ticker` (`ticker`),
   INDEX `idx_prediction_date` (`prediction_date`),

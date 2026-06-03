@@ -33,6 +33,7 @@ from enhanced_financial_fetcher import (
     QuarterlyFinancialFetcher,
     fetch_quarterly_financial_data
 )
+from financial_data_utils import calculate_available_annual_ratios
 
 
 class TTMFinancialCalculator:
@@ -774,36 +775,12 @@ def calculate_ratios_ttm_with_fallback(
             print(f"⚠️ TTM data exists for {symbol} but key metrics (eps, bvps, fcf) are all NULL — falling back to annual")
     
     # Fall back to existing calculation logic for annual data
-    result = combined_stock_data_df.copy()
-    
-    try:
-        # Use existing annual-based calculation
-        result["P/S"] = result["close_Price"] / (result["revenue"] / result["average_shares"])
-        result["P/E"] = result["close_Price"] / result["eps"]
-        result["P/B"] = result["close_Price"] / result["book_Value_Per_Share"]
-        result["P/FCF"] = result["close_Price"] / result["free_Cash_Flow_Per_Share"]
-        
-        # Replace inf/-inf from zero-division (e.g. eps=0) with NaN
-        result[["P/S", "P/E", "P/B", "P/FCF"]] = result[["P/S", "P/E", "P/B", "P/FCF"]].replace([np.inf, -np.inf], np.nan)
-        
-        # Shift to avoid look-ahead bias
-        result[["P/S", "P/E", "P/B", "P/FCF"]] = result[["P/S", "P/E", "P/B", "P/FCF"]].shift(1)
-        
-        # Add source tracking
-        result['ratio_data_source'] = 'annual'
-        result['quarters_available'] = fin_data['quarters_available']
-        
-        print(f"📅 Ratios calculated using annual data for {symbol}")
-        
-    except KeyError as e:
-        print(f"Missing column for ratio calculation: {e}")
-        result["P/S"] = np.nan
-        result["P/E"] = np.nan
-        result["P/B"] = np.nan
-        result["P/FCF"] = np.nan
-        result['ratio_data_source'] = 'failed'
-        result['quarters_available'] = 0
-        
+    result = calculate_available_annual_ratios(combined_stock_data_df)
+    result['ratio_data_source'] = 'annual'
+    result['quarters_available'] = fin_data['quarters_available']
+
+    print(f"📅 Ratios calculated using annual data for {symbol}")
+
     return result
 
 

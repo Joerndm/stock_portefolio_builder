@@ -41,8 +41,8 @@ def monte_carlo_analysis(seed_number, stock_data_df, forecast_df, years, sim_amo
     
     Args:
         seed_number (int): Random seed for reproducibility of simulation results.
-        stock_data_df (pd.DataFrame): Historical stock data containing at least closing prices
-            in the 5th column (index 4) and a 'ticker' column.
+        stock_data_df (pd.DataFrame): Historical stock data containing a 'ticker' column
+            and either a 'close_Price' column or a closing price in the 5th column.
         forecast_df (pd.DataFrame): Forecast data containing a 'close_Price' column used to
             calculate return statistics.
         years (int): Number of years to forecast into the future.
@@ -96,7 +96,10 @@ def monte_carlo_analysis(seed_number, stock_data_df, forecast_df, years, sim_amo
     shock = sigma * np.sqrt(dt)
     for run in range(sim_amount):
         price = np.zeros(days)
-        price[0] = stock_data_df.iloc[-1][stock_data_df.columns[4]]
+        if "close_Price" in stock_data_df.columns:
+            price[0] = stock_data_df.iloc[-1]["close_Price"]
+        else:
+            price[0] = stock_data_df.iloc[-1][stock_data_df.columns[4]]
         for day in range(1, days):
             price[day] = price[day - 1] * np.exp(drift + shock * np.random.normal())
 
@@ -138,13 +141,15 @@ def monte_carlo_analysis(seed_number, stock_data_df, forecast_df, years, sim_amo
     graph_name = str(f"Monte_Carlo_Sim_of_{stock_name}.png")
     my_path = os.path.abspath(__file__)
     path = os.path.dirname(my_path)
+    graph_dir = os.path.join(path, "generated_graphs")
+    os.makedirs(graph_dir, exist_ok=True)
     # Save the graph
     try:
-        plt.savefig(os.path.join(path, "generated_graphs", graph_name), bbox_inches="tight", pad_inches=0.5, transparent=False, format="png")
+        plt.savefig(os.path.join(graph_dir, graph_name), bbox_inches="tight", pad_inches=0.5, transparent=False, format="png")
         plt.clf()
         plt.close("all")
-    except FileNotFoundError:
-        raise FileNotFoundError("The graph could not be saved. Please check the file name or path.")
+    except FileNotFoundError as exc:
+        raise FileNotFoundError("The graph could not be saved. Please check the file name or path.") from exc
 
     return price_df, monte_carlo_df
 

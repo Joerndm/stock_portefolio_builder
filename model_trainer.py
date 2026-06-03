@@ -25,8 +25,8 @@ GPU Configuration:
 """
 
 import os
-import sys
 import time
+import logging
 import traceback
 from typing import List, Optional, Dict
 
@@ -34,38 +34,22 @@ from typing import List, Optional, Dict
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 import pandas as pd
-import tensorflow as tf
 
-import fetch_secrets
-import db_connectors
 import db_interactions
-import split_dataset
-import dimension_reduction
 import ml_builder
+from cache_contract_admin import refresh_cache_contracts
+from gpu_runtime_utils import configure_tensorflow_gpu
 from blacklist_manager import get_blacklist_manager
+from model_pipeline_preprocessing import InsufficientDataError, prepare_modeling_data
+from pipeline_config import get_gpu_config, get_data_config, get_ml_config
+
+logger = logging.getLogger(__name__)
 
 
 def configure_gpu():
     """Configure TensorFlow GPU settings for optimal performance."""
-    gpus = tf.config.list_physical_devices('GPU')
-    if not gpus:
-        print("[GPU] No GPU detected, using CPU.")
-        return False
-    try:
-        for gpu in gpus:
-            tf.config.experimental.set_virtual_device_configuration(
-                gpu,
-                [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=7168)]
-            )
-        print(f"[GPU] Configured {len(gpus)} GPU(s) with 7GB memory limit.")
-        return True
-    except RuntimeError as e:
-        print(f"[GPU] Configuration failed ({e}), falling back to CPU.")
-        try:
-            tf.config.set_visible_devices([], 'GPU')
-        except Exception:
-            pass
-        return False
+    gpu_cfg = get_gpu_config()
+    return configure_tensorflow_gpu(gpu_cfg.memory_limit_mb, logger=logger)
 
 
 def get_stock_symbols(excluded_tickers: List[str] = None) -> List[str]:
@@ -124,8 +108,9 @@ def validate_data_availability(stock_symbol: str) -> Dict:
 
 def train_single_stock(
     stock_symbol: str,
-    time_steps: int = 30,
-    use_tcn: bool = True
+    time_steps: int = None,
+    use_tcn: bool = None,
+    use_sequence_model: bool = None
 ) -> Dict:
     """
     Train all ML models for a single stock ticker.
@@ -135,12 +120,21 @@ def train_single_stock(
     
     Args:
         stock_symbol: Stock ticker symbol
-        time_steps: Number of time steps for sequence models
-        use_tcn: Whether to use TCN (True) or LSTM (False) as sequence model
+        time_steps: Number of time steps for sequence models (None = use config)
+        use_tcn: Whether to use TCN (True) or LSTM (False) (None = use config)
+        use_sequence_model: Whether to train sequence models at all (None = use config)
         
     Returns:
         dict with 'success', 'error_message', 'execution_time', 'skipped' keys
     """
+    data_cfg = get_data_config()
+    ml_cfg = get_ml_config()
+    if time_steps is None:
+        time_steps = data_cfg.time_steps
+    if use_tcn is None:
+        use_tcn = ml_cfg.use_tcn
+    if use_sequence_model is None:
+        use_sequence_model = ml_cfg.use_sequence_model
     start_time = time.time()
 
     try:
@@ -157,135 +151,52 @@ def train_single_stock(
 
         # Import stock data
         stock_data_df = db_interactions.import_stock_dataset(stock_symbol)
-        stock_data_df["date"] = pd.to_datetime(stock_data_df["date"])
-        rows_before = len(stock_data_df)
-
-        # --- Targeted cleaning instead of blanket dropna ---
-        # 1. Drop columns that are entirely NaN (uninformative)
-        stock_data_df = stock_data_df.dropna(axis=1, how="all")
-        # 2. Identify columns critical for training (price, target, key features)
-        #    Only drop rows where these critical columns have NaN.
-        always_required = ['date', 'ticker', 'close_Price', 'open_Price',
-                           'high_Price', 'low_Price']
-        critical_cols = [c for c in always_required if c in stock_data_df.columns]
-        stock_data_df = stock_data_df.dropna(subset=critical_cols)
-        # 3. Forward-fill then back-fill remaining NaN in feature columns
-        #    (technical indicators / ratios may have leading NaN from lookback)
-        feature_cols = [c for c in stock_data_df.columns
-                        if c not in ('date', 'ticker')]
-        stock_data_df[feature_cols] = stock_data_df[feature_cols].ffill().bfill()
-        # 4. Drop any rows still containing NaN after fill
-        stock_data_df = stock_data_df.dropna(axis=0, how="any")
-        # 5. Drop columns that became all-NaN after row removal
-        stock_data_df = stock_data_df.dropna(axis=1, how="any")
-
-        rows_after = len(stock_data_df)
-        if rows_before != rows_after:
-            print(f"   [{stock_symbol}] Cleaning: {rows_before} → {rows_after} rows "
-                  f"({rows_before - rows_after} dropped)")
-
-        # Minimum rows: 1 full trading year (252 days) ensures enough data for
-        # train/val/test split with time_steps sequences.
-        min_rows = max(252, time_steps + 50)
-        if len(stock_data_df) < min_rows:
-            return {
-                'success': False,
-                'skipped': True,
-                'error_message': f"Insufficient data: {len(stock_data_df)} rows after cleaning (need >= {min_rows} for time_steps={time_steps})",
-                'execution_time': time.time() - start_time
-            }
-
-        # Split the dataset
-        validation_size = 0.20
-        test_size = 0.10
-        scaler_x, scaler_y, x_train_scaled, x_val_scaled, x_test_scaled, \
-            y_train_scaled, y_val_scaled, y_test_scaled, x_predictions = \
-            split_dataset.dataset_train_test_split(
-                stock_data_df, test_size, validation_size=validation_size
-            )
-
-        # Inverse-transform y values for Random Forest / XGBoost
-        y_train_unscaled = scaler_y.inverse_transform(
-            y_train_scaled.reshape(-1, 1)
-        ).flatten()
-        y_val_unscaled = scaler_y.inverse_transform(
-            y_val_scaled.reshape(-1, 1)
-        ).flatten()
-        y_test_unscaled = scaler_y.inverse_transform(
-            y_test_scaled.reshape(-1, 1)
-        ).flatten()
-
-        # Convert to DataFrames for feature selection
-        x_training_data = pd.DataFrame(x_train_scaled)
-        x_val_data = pd.DataFrame(x_val_scaled)
-        x_test_data = pd.DataFrame(x_test_scaled)
-        y_training_data_df = pd.Series(y_train_unscaled)
-        y_val_data_df = pd.Series(y_val_unscaled)
-        y_test_data_df = pd.Series(y_test_unscaled)
-        prediction_data = x_predictions
-
-        max_features = len(x_training_data.columns)
-        feature_amount = max_features
-
-        # Feature selection
-        x_training_dataset, x_val_dataset, x_test_dataset, x_prediction_dataset, \
-            selected_features_model, selected_features_list = \
-            dimension_reduction.feature_selection_rf(
-                feature_amount,
-                x_training_data,
-                x_val_data,
-                x_test_data,
-                y_training_data_df,
-                y_val_data_df,
-                y_test_data_df,
-                prediction_data,
-                stock_data_df
-            )
-
-        # Prepare DataFrames for ML
-        x_training_dataset_df = pd.DataFrame(
-            x_training_dataset, columns=selected_features_list
+        prepared_data = prepare_modeling_data(
+            stock_data_df,
+            time_steps=time_steps,
+            validation_size=data_cfg.validation_size,
+            test_size=data_cfg.test_size,
+            min_rows_floor=data_cfg.min_rows_floor,
         )
-        y_training_data_df = y_training_data_df.reset_index(drop=True)
-        x_val_dataset_df = pd.DataFrame(x_val_dataset, columns=selected_features_list)
-        y_val_data_df = y_val_data_df.reset_index(drop=True)
-        x_test_dataset_df = pd.DataFrame(x_test_dataset, columns=selected_features_list)
-        y_test_data_df = y_test_data_df.reset_index(drop=True)
 
-        y_train_scaled_for_lstm = pd.Series(y_train_scaled)
-        y_test_scaled_for_lstm = pd.Series(y_test_scaled)
-        y_val_scaled_for_lstm = pd.Series(y_val_scaled)
+        if prepared_data.dropped_rows > 0:
+            logger.info("   [%s] Cleaning: %d → %d rows (%d dropped)",
+                        stock_symbol,
+                        prepared_data.rows_before_cleaning,
+                        prepared_data.rows_after_cleaning,
+                        prepared_data.dropped_rows)
 
         # Train ML models (hyperparameters are saved to DB automatically)
-        models, training_history, lstm_datasets = ml_builder.train_and_validate_models(
+        _, _, _ = ml_builder.train_and_validate_models(
             stock_symbol=stock_symbol,
-            x_train=x_training_dataset_df.values,
-            x_val=x_val_dataset_df.values,
-            x_test=x_test_dataset_df.values,
-            y_train_scaled=y_train_scaled_for_lstm.values,
-            y_val_scaled=y_val_scaled_for_lstm.values,
-            y_test_scaled=y_test_scaled_for_lstm.values,
-            y_train_unscaled=y_train_unscaled,
-            y_val_unscaled=y_val_unscaled,
-            y_test_unscaled=y_test_unscaled,
+            x_train=prepared_data.x_training_dataset_df.values,
+            x_val=prepared_data.x_val_dataset_df.values,
+            x_test=prepared_data.x_test_dataset_df.values,
+            y_train_scaled=prepared_data.y_train_scaled,
+            y_val_scaled=prepared_data.y_val_scaled,
+            y_test_scaled=prepared_data.y_test_scaled,
+            y_train_unscaled=prepared_data.y_train_unscaled,
+            y_val_unscaled=prepared_data.y_val_unscaled,
+            y_test_unscaled=prepared_data.y_test_unscaled,
             time_steps=time_steps,
-            scaler_y=scaler_y,
-            max_retrains=150,
-            overfitting_threshold=0.15,
-            lstm_trials=50,
-            lstm_executions=10,
-            lstm_epochs=500,
-            lstm_retrain_trials_increment=10,
-            lstm_retrain_executions_increment=2,
-            rf_trials=100,
-            rf_retrain_increment=25,
-            xgb_trials=60,
-            xgb_retrain_increment=10,
-            use_multi_metric_detection=True,
+            scaler_y=prepared_data.scaler_y,
+            max_retrains=ml_cfg.max_retrains,
+            overfitting_threshold=ml_cfg.overfitting_threshold,
+            lstm_trials=ml_cfg.lstm_trials,
+            lstm_executions=ml_cfg.lstm_executions,
+            lstm_epochs=ml_cfg.lstm_epochs,
+            lstm_retrain_trials_increment=ml_cfg.lstm_retrain_trials_increment,
+            lstm_retrain_executions_increment=ml_cfg.lstm_retrain_executions_increment,
+            rf_trials=ml_cfg.rf_trials,
+            rf_retrain_increment=ml_cfg.rf_retrain_increment,
+            xgb_trials=ml_cfg.xgb_trials,
+            xgb_retrain_increment=ml_cfg.xgb_retrain_increment,
+            use_multi_metric_detection=ml_cfg.use_multi_metric_detection,
             use_tcn=use_tcn,
-            tcn_trials=30,
-            tcn_epochs=100,
-            tcn_retrain_increment=10
+            use_sequence_model=use_sequence_model,
+            tcn_trials=ml_cfg.tcn_trials,
+            tcn_epochs=ml_cfg.tcn_epochs,
+            tcn_retrain_increment=ml_cfg.tcn_retrain_increment
         )
 
         execution_time = time.time() - start_time
@@ -296,11 +207,19 @@ def train_single_stock(
             'execution_time': execution_time
         }
 
+    except InsufficientDataError as e:
+        return {
+            'success': False,
+            'skipped': True,
+            'error_message': str(e),
+            'execution_time': time.time() - start_time
+        }
+
     except Exception as e:
         execution_time = time.time() - start_time
         error_msg = f"{type(e).__name__}: {str(e)}"
-        print(f"[ERROR] Failed training {stock_symbol}: {error_msg}")
-        print(traceback.format_exc())
+        logger.error("[ERROR] Failed training %s: %s", stock_symbol, error_msg)
+        logger.debug(traceback.format_exc())
         return {
             'success': False,
             'skipped': False,
@@ -312,8 +231,9 @@ def train_single_stock(
 def run_model_training(
     max_model_age_days: int = 30,
     excluded_tickers: Optional[List[str]] = None,
-    time_steps: int = 30,
-    use_tcn: bool = True,
+    time_steps: int = None,
+    use_tcn: bool = None,
+    use_sequence_model: bool = None,
     max_stocks: Optional[int] = None
 ):
     """
@@ -327,25 +247,38 @@ def run_model_training(
     Args:
         max_model_age_days: Models older than this are retrained (default: 30)
         excluded_tickers: Tickers to skip entirely
-        time_steps: Time steps for sequence models
-        use_tcn: Use TCN (True) or LSTM (False)
+        time_steps: Time steps for sequence models (None = use config)
+        use_tcn: Use TCN (True) or LSTM (False) (None = use config)
         max_stocks: Maximum number of stocks to process in this run (None = all)
         
     Returns:
         dict with training summary
     """
+    ml_cfg = get_ml_config()
+    data_cfg = get_data_config()
+    if time_steps is None:
+        time_steps = data_cfg.time_steps
+    if use_tcn is None:
+        use_tcn = ml_cfg.use_tcn
+    if use_sequence_model is None:
+        use_sequence_model = ml_cfg.use_sequence_model
+
     overall_start = time.time()
 
-    print("\n" + "=" * 70)
-    print("MODEL TRAINER — Phase 1")
-    print("=" * 70)
-    print(f"Max model age: {max_model_age_days} days")
-    print(f"Sequence model: {'TCN' if use_tcn else 'LSTM'}")
-    print("=" * 70 + "\n")
+    logger.info("")
+    logger.info("=" * 70)
+    logger.info("MODEL TRAINER — Phase 1")
+    logger.info("=" * 70)
+    logger.info("Max model age: %d days", max_model_age_days)
+    if use_sequence_model:
+        logger.info("Sequence model: %s", 'TCN' if use_tcn else 'LSTM')
+    else:
+        logger.info("Sequence model: DISABLED (4-model ensemble: RF+XGB+Ridge+SVR)")
+    logger.info("=" * 70)
 
     # Configure GPU
     has_gpu = configure_gpu()
-    print(f"[GPU] {'GPU acceleration enabled' if has_gpu else 'Running on CPU'}\n")
+    logger.info("[GPU] %s", 'GPU acceleration enabled' if has_gpu else 'Running on CPU')
 
     # Load blacklisted tickers
     blacklisted = get_blacklist_manager().get_blacklist()
@@ -354,17 +287,17 @@ def run_model_training(
     # Query DB for model freshness
     training_needs = db_interactions.get_tickers_needing_training(
         max_age_days=max_model_age_days,
-        required_model_types=['rf', 'xgb', 'tcn' if use_tcn else 'lstm']
+        required_model_types=ml_cfg.required_model_types
     )
 
     untrained = [t for t in training_needs['untrained'] if t not in all_excluded]
     stale = [t for t in training_needs['stale'] if t not in all_excluded]
     fresh = training_needs['fresh']
 
-    print(f"[STATUS] Untrained tickers:  {len(untrained)}")
-    print(f"[STATUS] Stale tickers:      {len(stale)}")
-    print(f"[STATUS] Fresh tickers:      {len(fresh)}")
-    print(f"[STATUS] Excluded tickers:   {len(all_excluded)}\n")
+    logger.info("[STATUS] Untrained tickers:  %d", len(untrained))
+    logger.info("[STATUS] Stale tickers:      %d", len(stale))
+    logger.info("[STATUS] Fresh tickers:      %d", len(fresh))
+    logger.info("[STATUS] Excluded tickers:   %d", len(all_excluded))
 
     # Build work queue: untrained first, then stale
     work_queue = untrained + stale
@@ -372,7 +305,7 @@ def run_model_training(
         work_queue = work_queue[:max_stocks]
 
     if not work_queue:
-        print("[INFO] All models are up to date. Nothing to train.")
+        logger.info("[INFO] All models are up to date. Nothing to train.")
         return {
             'total_processed': 0,
             'successful': 0,
@@ -383,8 +316,8 @@ def run_model_training(
         }
 
     total = len(work_queue)
-    print(f"[INFO] Processing {total} tickers ({len(untrained)} untrained + "
-          f"{min(len(stale), total - len(untrained))} stale)\n")
+    logger.info("[INFO] Processing %d tickers (%d untrained + %d stale)",
+                total, len(untrained), min(len(stale), total - len(untrained)))
 
     # Process each ticker
     results = {}
@@ -394,53 +327,56 @@ def run_model_training(
 
     for i, ticker in enumerate(work_queue):
         category = "UNTRAINED" if ticker in untrained else "STALE"
-        print(f"\n{'=' * 60}")
-        print(f"[{i+1}/{total}] Training {ticker} [{category}]")
-        print(f"{'=' * 60}")
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info("[%d/%d] Training %s [%s]", i + 1, total, ticker, category)
+        logger.info("=" * 60)
 
         result = train_single_stock(
             stock_symbol=ticker,
             time_steps=time_steps,
-            use_tcn=use_tcn
+            use_tcn=use_tcn,
+            use_sequence_model=use_sequence_model
         )
         results[ticker] = result
 
         if result['success']:
             successful += 1
-            print(f"[OK] {ticker} trained in {result['execution_time']:.1f}s")
+            logger.info("[OK] %s trained in %.1fs", ticker, result['execution_time'])
         elif result.get('skipped', False):
             skipped += 1
-            print(f"[SKIP] {ticker}: {result['error_message']}")
+            logger.info("[SKIP] %s: %s", ticker, result['error_message'])
         else:
             failed += 1
-            print(f"[FAIL] {ticker}: {result['error_message']}")
+            logger.error("[FAIL] %s: %s", ticker, result['error_message'])
 
     # Summary
     overall_time = time.time() - overall_start
-    print("\n" + "=" * 70)
-    print("MODEL TRAINING SUMMARY")
-    print("=" * 70)
-    print(f"Total in queue:    {total}")
-    print(f"Successful:        {successful}")
-    print(f"Skipped (no data): {skipped}")
-    print(f"Failed:            {failed}")
-    print(f"Total time:        {overall_time:.1f}s")
+    logger.info("")
+    logger.info("=" * 70)
+    logger.info("MODEL TRAINING SUMMARY")
+    logger.info("=" * 70)
+    logger.info("Total in queue:    %d", total)
+    logger.info("Successful:        %d", successful)
+    logger.info("Skipped (no data): %d", skipped)
+    logger.info("Failed:            %d", failed)
+    logger.info("Total time:        %.1fs", overall_time)
     if successful > 0:
-        print(f"Avg time/trained:  {overall_time / successful:.1f}s")
+        logger.info("Avg time/trained:  %.1fs", overall_time / successful)
 
     if skipped > 0:
-        print("\nSkipped tickers (missing data in DB):")
+        logger.info("Skipped tickers (missing data in DB):")
         for ticker, result in results.items():
             if result.get('skipped', False):
-                print(f"  - {ticker}: {result['error_message']}")
+                logger.info("  - %s: %s", ticker, result['error_message'])
 
     if failed > 0:
-        print("\nFailed tickers:")
+        logger.warning("Failed tickers:")
         for ticker, result in results.items():
             if not result['success'] and not result.get('skipped', False):
-                print(f"  - {ticker}: {result['error_message']}")
+                logger.warning("  - %s: %s", ticker, result['error_message'])
 
-    print("=" * 70)
+    logger.info("=" * 70)
 
     return {
         'total_processed': total,
@@ -455,8 +391,14 @@ def run_model_training(
     }
 
 
-if __name__ == "__main__":
+def main(argv: Optional[List[str]] = None) -> Dict:
     import argparse
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
 
     parser = argparse.ArgumentParser(description="Train ML models for stock tickers")
     parser.add_argument("--max-age", type=int, default=30,
@@ -465,14 +407,44 @@ if __name__ == "__main__":
                         help="Maximum number of stocks to process in this run")
     parser.add_argument("--use-lstm", action="store_true",
                         help="Use LSTM instead of TCN as sequence model")
-    parser.add_argument("--time-steps", type=int, default=30,
-                        help="Time steps for sequence models (default: 30)")
+    parser.add_argument("--time-steps", type=int, default=None,
+                        help="Time steps for sequence models (default: from config)")
+    parser.add_argument(
+        "--refresh-cache-contract",
+        nargs="+",
+        metavar="TICKER",
+        help="Refresh cached RF/XGB/Ridge/SVR rows for the given tickers against the current feature contract",
+    )
+    parser.add_argument(
+        "--refresh-model-types",
+        nargs="+",
+        choices=['rf', 'xgb', 'ridge', 'svr'],
+        default=None,
+        help="Optional subset of flat model cache rows to refresh",
+    )
+    parser.add_argument(
+        "--validate-prediction",
+        action="store_true",
+        help="After refreshing cache contracts, run predict_single_stock for each ticker",
+    )
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    summary = run_model_training(
+    if args.refresh_cache_contract:
+        return refresh_cache_contracts(
+            tickers=args.refresh_cache_contract,
+            model_types=args.refresh_model_types,
+            time_steps=args.time_steps,
+            validate_prediction=args.validate_prediction,
+        )
+
+    return run_model_training(
         max_model_age_days=args.max_age,
         time_steps=args.time_steps,
-        use_tcn=not args.use_lstm,
+        use_tcn=not args.use_lstm if args.use_lstm else None,
         max_stocks=args.max_stocks
     )
+
+
+if __name__ == "__main__":
+    main()

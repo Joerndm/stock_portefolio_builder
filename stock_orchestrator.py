@@ -104,6 +104,8 @@ from ttm_financial_calculator import (
 import fetch_secrets
 import db_connectors
 import db_interactions
+from financial_data_utils import drop_all_null_columns
+from technical_patterns import add_all_technical_patterns
 
 # Cache file to track when Wikipedia was last fetched
 MONTHLY_FETCH_CACHE_FILE = os.path.join(
@@ -597,6 +599,7 @@ class StockDataOrchestrator:
             stock_price_data_df = calculate_standard_diviation_value(stock_price_data_df)
             stock_price_data_df = calculate_bollinger_bands(stock_price_data_df)
             stock_price_data_df = calculate_momentum(stock_price_data_df)
+            stock_price_data_df = add_all_technical_patterns(stock_price_data_df)
 
             # Drop rows with NaN in critical columns
             critical_cols = ['date', 'ticker', 'close_Price', 'open_Price', 'high_Price', 'low_Price']
@@ -752,6 +755,7 @@ class StockDataOrchestrator:
             combined_df = calculate_standard_diviation_value(combined_df)
             combined_df = calculate_bollinger_bands(combined_df)
             combined_df = calculate_momentum(combined_df)
+            combined_df = add_all_technical_patterns(combined_df)
             
             # Keep only new rows for export
             combined_df = combined_df.loc[
@@ -1173,7 +1177,7 @@ class StockDataOrchestrator:
                 print(f"   [SKIP] No financial data for ratio calculation")
                 return False, None
             
-            full_stock_financial_data_df = full_stock_financial_data_df.dropna(axis=1)
+            full_stock_financial_data_df = drop_all_null_columns(full_stock_financial_data_df)
             
             if full_stock_financial_data_df.empty:
                 print(f"   [SKIP] Financial data empty after dropna")
@@ -1195,6 +1199,9 @@ class StockDataOrchestrator:
                     raise
             
             if stock_price_data_df.empty:
+                if ratio_exists:
+                    print(f"   [OK] No new price data for ratio calculation from {recalculate_from}")
+                    return True, None
                 print(f"   [SKIP] No price data for ratio calculation from {recalculate_from}")
                 return False, None
             
@@ -1330,12 +1337,20 @@ class StockDataOrchestrator:
         if not is_index:
             # Financial Data
             success, _ = self.process_financial_data(ticker, prefer_ttm)
-            if success:
-                # Ratio Data
-                ratio_success, ratio_df = self.process_ratio_data(ticker, prefer_ttm)
-                
-                # Post-fetch validation: warn about incomplete data
-                self._validate_post_fetch(ticker, ratio_df)
+            if not success:
+                self._add_failed_ticker(ticker, "Financial data processing failed")
+                self.processing_stats['errors'] += 1
+                return False
+
+            # Ratio Data
+            ratio_success, ratio_df = self.process_ratio_data(ticker, prefer_ttm)
+            if not ratio_success:
+                self._add_failed_ticker(ticker, "Ratio data processing failed")
+                self.processing_stats['errors'] += 1
+                return False
+
+            # Post-fetch validation: warn about incomplete data
+            self._validate_post_fetch(ticker, ratio_df)
         else:
             print(f"   ↳ Skipping financial data for index {ticker}")
 

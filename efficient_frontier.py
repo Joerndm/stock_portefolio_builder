@@ -596,7 +596,7 @@ def _plot_efficient_frontier(
 # LEGACY FUNCTION — preserved for backward compatibility
 # =============================================================================
 
-def efficient_frontier_sim(price_df):
+def efficient_frontier_sim(price_df, sim_count: int = 750000, progress_step: int = 25000):
     """
     Legacy function: calculates the efficient frontier using MC random sampling only.
 
@@ -605,10 +605,17 @@ def efficient_frontier_sim(price_df):
 
     Args:
         price_df: A pandas DataFrame containing stock prices (columns = tickers).
+        sim_count: Number of Monte Carlo portfolios to simulate.
+        progress_step: Print progress every N simulations. Set to 0 to disable.
 
     Returns:
         DataFrame with portfolio number, weights, returns, and volatilities.
     """
+    if sim_count <= 0:
+        raise ValueError("sim_count must be positive")
+    if progress_step < 0:
+        raise ValueError("progress_step cannot be negative")
+
     print("price_df")
     print(price_df)
 
@@ -624,14 +631,14 @@ def efficient_frontier_sim(price_df):
     portfolio_volatilities = []
 
     print("Starting simulation...")
-    for sim in range(750000):
+    for sim in range(sim_count):
         portefolio_number.append(sim)
         weights = np.random.random(len(log_returns_mean.columns))
         weights /= np.sum(weights)
         portefolio_weight.append(weights)
         portfolio_returns.append(np.sum(weights * np.array(log_returns_mean)))
         portfolio_volatilities.append(np.sqrt(np.dot(weights.T, np.dot(log_returns_cov, weights))))
-        if sim % 25000 == 0:
+        if progress_step and sim % progress_step == 0:
             print(f"Simulations: {sim}")
 
     portefolio_number_df = pd.DataFrame(portefolio_number, columns=["Portefolio number"])
@@ -659,11 +666,13 @@ def efficient_frontier_sim(price_df):
 
     if len(price_df.columns) > 2:
         portefolio_df["Volatility"] = portefolio_df["Volatility"].round(3)
-        portefolio_df = portefolio_df.groupby("Volatility").max("Return")
-        columns = list(portefolio_df.columns)
-        columns.append("Volatility")
-        portefolio_df = portefolio_df.reset_index()
-        portefolio_df = portefolio_df[columns]
+        portefolio_df = (
+            portefolio_df
+            .sort_values(["Volatility", "Return"], ascending=[True, False])
+            .drop_duplicates(subset=["Volatility"], keep="first")
+            .sort_values("Volatility")
+            .reset_index(drop=True)
+        )
 
         loop = True
         while loop:

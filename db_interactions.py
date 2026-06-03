@@ -37,6 +37,68 @@ import pandas as pd
 
 import fetch_secrets
 import db_connectors
+from data_contracts import DataContractError, STOCK_PRICE_EXPORT_SCHEMA, validate_dataframe
+
+
+def _prepare_stock_price_export_batch(stock_price_data_df):
+    """Normalize and validate a single-ticker stock-price export batch."""
+    column_rename_map = {
+        'RSI_14': 'rsi_14',
+        'ATR_14': 'atr_14',
+        'ATRr_14': 'atr_14',
+        'ATRl_14': 'atr_14'
+    }
+    db_columns = [
+        'date', 'ticker', 'currency', 'trade_Volume',
+        'open_Price', 'high_Price', 'low_Price', 'close_Price',
+        '1D', '1M', '3M', '6M', '9M', '1Y', '2Y', '3Y', '4Y', '5Y',
+        'sma_5', 'sma_20', 'sma_40', 'sma_120', 'sma_200',
+        'ema_5', 'ema_20', 'ema_40', 'ema_120', 'ema_200',
+        'std_Div_5', 'std_Div_20', 'std_Div_40', 'std_Div_120', 'std_Div_200',
+        'bollinger_Band_5_2STD', 'bollinger_Band_20_2STD', 'bollinger_Band_40_2STD',
+        'bollinger_Band_120_2STD', 'bollinger_Band_200_2STD',
+        'momentum', 'rsi_14', 'atr_14', 'macd', 'macd_signal', 'macd_histogram',
+        'volume_sma_20', 'volume_ema_20', 'volume_ratio', 'vwap', 'obv',
+        'volatility_5d', 'volatility_20d', 'volatility_60d'
+    ]
+
+    stock_price_data_df = stock_price_data_df.copy()
+    stock_price_data_df = stock_price_data_df.rename(columns=column_rename_map)
+    stock_price_data_df = stock_price_data_df.loc[:, ~stock_price_data_df.columns.duplicated()]
+
+    for col in db_columns:
+        if col not in stock_price_data_df.columns:
+            stock_price_data_df[col] = None
+
+    stock_price_data_df = stock_price_data_df[db_columns]
+
+    unique_tickers = stock_price_data_df['ticker'].dropna().astype(str).unique()
+    if len(unique_tickers) != 1:
+        raise ValueError(
+            "The stock_price_data_df must contain exactly one unique ticker per export batch. "
+            f"Found {len(unique_tickers)} tickers: {sorted(unique_tickers.tolist())}"
+        )
+
+    duplicate_key_rows = stock_price_data_df[
+        stock_price_data_df.duplicated(subset=['date', 'ticker'], keep=False)
+    ][['date', 'ticker']].drop_duplicates()
+    if not duplicate_key_rows.empty:
+        sample_keys = duplicate_key_rows.head(5).to_dict(orient='records')
+        raise ValueError(
+            "The stock_price_data_df contains duplicate (date, ticker) rows. "
+            f"Sample keys: {sample_keys}"
+        )
+
+    try:
+        validate_dataframe(
+            stock_price_data_df,
+            STOCK_PRICE_EXPORT_SCHEMA,
+            context=f"ticker={unique_tickers[0]}",
+        )
+    except DataContractError as e:
+        raise ValueError(f"Invalid stock price export batch: {e}") from e
+
+    return stock_price_data_df
 
 def import_ticker_list():
     """
@@ -602,6 +664,9 @@ def export_stock_price_data(stock_price_data_df=""):
     - KeyError: If column cannot be dropped from stock_price_data_df.
     - KeyError: If the stock_price_data_df cannot be exported to stock_price_data in the database.
     """
+    if not isinstance(stock_price_data_df, pd.DataFrame):
+        raise ValueError("The stock_price_data_df must be a pandas DataFrame.")
+
     if stock_price_data_df.empty:
         raise ValueError("The stock_price_data_df cannot be empty.")
 
@@ -631,42 +696,7 @@ def export_stock_price_data(stock_price_data_df=""):
         raise KeyError(f"Could not establish connection to the database. Error: {e}") from e
 
     try:
-        # Step 1: Rename columns to match database schema (case-sensitive) BEFORE removing duplicates
-        # This ensures we keep the right version of each column
-        column_rename_map = {
-            'RSI_14': 'rsi_14',
-            'ATR_14': 'atr_14',
-            'ATRr_14': 'atr_14',  # Handle both variations
-            'ATRl_14': 'atr_14'   # Handle all ATR variations
-        }
-        stock_price_data_df = stock_price_data_df.rename(columns=column_rename_map)
-        
-        # Step 2: Remove duplicate columns (keep first occurrence) AFTER renaming
-        stock_price_data_df = stock_price_data_df.loc[:, ~stock_price_data_df.columns.duplicated()]
-        
-        # Step 3: Define all expected database columns (from ddl.sql)
-        db_columns = [
-            'date', 'ticker', 'currency', 'trade_Volume', 
-            'open_Price', 'high_Price', 'low_Price', 'close_Price',
-            '1D', '1M', '3M', '6M', '9M', '1Y', '2Y', '3Y', '4Y', '5Y',
-            'sma_5', 'sma_20', 'sma_40', 'sma_120', 'sma_200',
-            'ema_5', 'ema_20', 'ema_40', 'ema_120', 'ema_200',
-            'std_Div_5', 'std_Div_20', 'std_Div_40', 'std_Div_120', 'std_Div_200',
-            'bollinger_Band_5_2STD', 'bollinger_Band_20_2STD', 'bollinger_Band_40_2STD',
-            'bollinger_Band_120_2STD', 'bollinger_Band_200_2STD',
-            'momentum', 'rsi_14', 'atr_14', 'macd', 'macd_signal', 'macd_histogram',
-            'volume_sma_20', 'volume_ema_20', 'volume_ratio', 'vwap', 'obv',
-            'volatility_5d', 'volatility_20d', 'volatility_60d'
-        ]
-        
-        # Step 4: Add missing columns with None/NULL values
-        for col in db_columns:
-            if col not in stock_price_data_df.columns:
-                stock_price_data_df[col] = None
-        
-        # Step 5: Select only database columns in correct order
-        stock_price_data_df = stock_price_data_df[db_columns]
-        
+        stock_price_data_df = _prepare_stock_price_export_batch(stock_price_data_df)
     except Exception as e:
         raise KeyError(f"Could not prepare stock_price_data_df columns for database export. Error: {e}") from e
 
@@ -695,7 +725,7 @@ def export_stock_price_data(stock_price_data_df=""):
         
         # Now insert the new data
         stock_price_data_df.to_sql(name="stock_price_data", con=db_con, index=False, if_exists="append")
-        print(f"✓ Exported {len(stock_price_data_df)} price records for {ticker}")
+        print(f"[OK] Exported {len(stock_price_data_df)} price records for {ticker}")
 
     except Exception as e:
         raise KeyError(f"Could not export from stock_price_data_df to stock_price_data in the database. Error: {e}") from e
@@ -798,8 +828,17 @@ def export_stock_financial_data(stock_financial_data_df=""):
     - KeyError: If the stock_cash_flow_data_df cannot be created from stock_price_data_df.
     - KeyError: If the stock_financial_data_df cannot be exported to stock_income_stmt_data, stock_balancesheet_data and stock_cash_flow_data in the database.
     """
+    if not isinstance(stock_financial_data_df, pd.DataFrame):
+        raise ValueError("The stock_financial_data_df must be a pandas DataFrame.")
+
     if stock_financial_data_df.empty:
         raise ValueError("The stock_financial_data_df parameter cannot be empty.")
+
+    if 'date' not in stock_financial_data_df.columns:
+        raise ValueError("The stock_financial_data_df parameter must contain the column 'date'.")
+
+    if 'ticker' not in stock_financial_data_df.columns:
+        raise ValueError("The stock_financial_data_df parameter must contain the column 'ticker'.")
 
     if stock_financial_data_df["date"].isnull().values.any():
         raise ValueError("""The stock_financial_data_df parameter "date" cannot contain NaN values.""")
@@ -903,7 +942,7 @@ def export_stock_financial_data(stock_financial_data_df=""):
         stock_income_stmt_data_df.to_sql(name="stock_income_stmt_data", con=db_con, index=False, if_exists="append")
         stock_balancesheet_data_df.to_sql(name="stock_balancesheet_data", con=db_con, index=False, if_exists="append")
         stock_cash_flow_data_df.to_sql(name="stock_cash_flow_data", con=db_con, index=False, if_exists="append")
-        print(f"✓ Exported financial data for {ticker}")
+        print(f"[OK] Exported financial data for {ticker}")
 
     except Exception as e:
         raise KeyError(f"Could not export from stock_financial_data_df to stock_income_stmt_data, stock_balancesheet_data and stock_cash_flow_data in the database. Error: {e}") from e
@@ -1173,7 +1212,7 @@ def get_newest_financial_date(stock_ticker: str, include_quarterly: bool = True)
         if include_quarterly:
             quarterly_query = text("SELECT MAX(fiscal_quarter_end) as newest_date FROM stock_income_stmt_quarterly WHERE ticker = :ticker")
             try:
-                quarterly_result = pd.read_sql(sql=quarterly_query, con=db_con)
+                quarterly_result = pd.read_sql(sql=quarterly_query, con=db_con, params={"ticker": stock_ticker})
                 quarterly_date = quarterly_result['newest_date'].iloc[0]
                 
                 if quarterly_date is not None:
@@ -1817,6 +1856,9 @@ def import_stock_dataset(stock_ticker=""):
                    stock_cash_flow_data, stock_ratio_data).
     - KeyError: If the dataset cannot be imported from the database tables.
     """
+    if stock_ticker == "":
+        raise ValueError("stock_ticker cannot be empty")
+
     try:
         # Fetch the secrets from the secret_import function
         db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
@@ -1829,13 +1871,6 @@ def import_stock_dataset(stock_ticker=""):
 
     except Exception as e:
         raise KeyError(f"Could not establish connection to the database. Error: {e}") from e
-
-    try:
-        if stock_ticker == "":
-            print("Please input a stock ticker to fetch dataset.")
-
-    except Exception as e:
-        raise KeyError(f"Could not import from stock_ratio_data in the database to stock_ratio_data_df. Error: {e}") from e
 
     try:
         if stock_ticker != "":
@@ -2048,13 +2083,13 @@ def export_stock_prediction_extended(
         if records:
             prediction_df = pd.DataFrame(records)
             
-            # Delete existing predictions for same date/ticker to allow updates
+            # Delete existing predictions for same date/ticker/model_type to allow updates
             delete_query = text("""
                 DELETE FROM stock_prediction_extended 
-                WHERE prediction_date = :pred_date AND ticker = :ticker
+                WHERE prediction_date = :pred_date AND ticker = :ticker AND model_type = :model_type
             """)
             with db_con.begin() as conn:
-                conn.execute(delete_query, {'pred_date': prediction_date, 'ticker': ticker})
+                conn.execute(delete_query, {'pred_date': prediction_date, 'ticker': ticker, 'model_type': model_type})
             
             # Insert new predictions
             prediction_df.to_sql(
@@ -2831,8 +2866,8 @@ def save_hyperparameters(
     # Normalize model_type to lowercase to match DB enum
     model_type = model_type.lower()
     
-    if model_type not in ('rf', 'xgb', 'lstm', 'tcn'):
-        raise ValueError(f"Invalid model_type: {model_type}. Must be one of: rf, xgb, lstm, tcn")
+    if model_type not in ('rf', 'xgb', 'lstm', 'tcn', 'ridge', 'svr'):
+        raise ValueError(f"Invalid model_type: {model_type}. Must be one of: rf, xgb, lstm, tcn, ridge, svr")
     
     if not hyperparameters:
         raise ValueError("Hyperparameters dictionary cannot be empty")
@@ -2988,6 +3023,63 @@ def load_hyperparameters(
     except Exception as e:
         print(f"[WARNING] Could not load hyperparameters: {e}")
         return None
+
+
+def get_hyperparameter_cache_rows(ticker, model_types=None, valid_only=True):
+    """Return cached hyperparameter rows and metadata for a ticker."""
+    import json
+
+    if not ticker:
+        raise ValueError("Ticker is required")
+
+    normalized_model_types = None
+    if model_types is not None:
+        normalized_model_types = {str(model_type).lower() for model_type in model_types}
+
+    try:
+        db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+    except Exception as e:
+        print(f"[WARNING] Could not fetch secrets: {e}")
+        return []
+
+    try:
+        db_con = db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+    except Exception as e:
+        print(f"[WARNING] Could not connect to database: {e}")
+        return []
+
+    try:
+        query = """
+            SELECT ticker, model_type, hyperparameters, tuning_date, feature_hash,
+                   num_features, num_trials, best_score, tuning_time_seconds,
+                   val_mse, val_r2, val_mae, is_constrained, is_valid
+            FROM model_hyperparameters
+            WHERE ticker = %(ticker)s
+        """
+        if valid_only:
+            query += " AND is_valid = TRUE"
+
+        result = pd.read_sql(query, db_con, params={'ticker': ticker})
+        if result.empty:
+            return []
+
+        cache_rows = []
+        for row in result.to_dict('records'):
+            row['model_type'] = str(row['model_type']).lower()
+            if normalized_model_types is not None and row['model_type'] not in normalized_model_types:
+                continue
+
+            hyperparameters = row.get('hyperparameters')
+            if isinstance(hyperparameters, str):
+                row['hyperparameters'] = json.loads(hyperparameters)
+
+            cache_rows.append(row)
+
+        return cache_rows
+
+    except Exception as e:
+        print(f"[WARNING] Could not load hyperparameter cache rows: {e}")
+        return []
 
 
 def invalidate_hyperparameters(ticker=None, model_type=None):

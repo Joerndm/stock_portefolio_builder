@@ -58,6 +58,7 @@ def analyze_accuracy(predictions_df, actuals_df):
     """
     Compare predictions against actual prices.
     Returns a DataFrame with accuracy metrics per ticker per horizon.
+    Handles both ensemble and individual model predictions.
     """
     # Merge predictions with actual prices at target_date
     actuals_df['date'] = pd.to_datetime(actuals_df['date'])
@@ -90,8 +91,14 @@ def analyze_accuracy(predictions_df, actuals_df):
         (merged['actual_price'] <= merged['confidence_upper_95'])
     ).astype(int)
 
-    # Aggregate metrics per horizon
-    horizon_metrics = merged.groupby('prediction_horizon_days').agg(
+    # Filter to ensemble-only for backward-compatible horizon/ticker metrics
+    ensemble_merged = merged[merged['model_type'] == 'ensemble']
+    if len(ensemble_merged) == 0:
+        # Fallback: treat all as ensemble if no model_type distinction
+        ensemble_merged = merged
+
+    # Aggregate metrics per horizon (ensemble only)
+    horizon_metrics = ensemble_merged.groupby('prediction_horizon_days').agg(
         n_predictions=('ticker', 'count'),
         n_tickers=('ticker', 'nunique'),
         mean_error_pct=('price_error_pct', 'mean'),
@@ -105,8 +112,8 @@ def analyze_accuracy(predictions_df, actuals_df):
         std_actual_return=('actual_return', 'std'),
     ).round(4)
 
-    # Per-ticker metrics
-    ticker_metrics = merged.groupby(['ticker', 'prediction_horizon_days']).agg(
+    # Per-ticker metrics (ensemble only)
+    ticker_metrics = ensemble_merged.groupby(['ticker', 'prediction_horizon_days']).agg(
         n_predictions=('prediction_date', 'count'),
         mean_error_pct=('price_error_pct', 'mean'),
         mae_pct=('abs_error_pct', 'mean'),
@@ -119,36 +126,175 @@ def analyze_accuracy(predictions_df, actuals_df):
     return merged, horizon_metrics, ticker_metrics
 
 
+def analyze_model_comparison(merged_df):
+    """
+    Compare individual model performance against each other and the ensemble.
+    Returns a DataFrame with per-model metrics by horizon.
+    """
+    if merged_df is None or len(merged_df) == 0:
+        return None
+
+    model_types = merged_df['model_type'].unique()
+    if len(model_types) <= 1:
+        return None
+
+    # Per-model metrics by horizon
+    model_metrics = merged_df.groupby(['model_type', 'prediction_horizon_days']).agg(
+        n_predictions=('ticker', 'count'),
+        n_tickers=('ticker', 'nunique'),
+        mean_error_pct=('price_error_pct', 'mean'),
+        mae_pct=('abs_error_pct', 'mean'),
+        rmse_pct=('abs_error_pct', lambda x: np.sqrt((x ** 2).mean())),
+        direction_accuracy=('direction_correct', 'mean'),
+        mean_predicted_return=('predicted_return', 'mean'),
+        mean_actual_return=('actual_return', 'mean'),
+    ).round(4)
+
+    return model_metrics
+
+
+def analyze_ensemble_combinations(merged_df):
+    """
+    Compute hypothetical ensemble combinations from individual model predictions.
+    Compares RF+XGB, RF+XGB+Ridge, RF+XGB+Ridge+SVR, and all models (incl. seq).
+    Returns a list of (combo_name, horizon, mae_pct, direction_accuracy, mean_error_pct).
+    """
+    if merged_df is None or len(merged_df) == 0:
+        return None
+
+    model_types = set(merged_df['model_type'].unique())
+    individual_models = model_types - {'ensemble'}
+    if len(individual_models) < 2:
+        return None
+
+    # Pivot: for each (prediction_date, ticker, horizon), get each model's predicted_price
+    pivot_cols = ['prediction_date', 'ticker', 'prediction_horizon_days']
+    pivoted = merged_df.pivot_table(
+        index=pivot_cols,
+        columns='model_type',
+        values=['predicted_price', 'actual_price', 'current_price'],
+        aggfunc='first'
+    )
+
+    if pivoted.empty:
+        return None
+
+    # Flatten column names
+    prices = {}
+    for mt in model_types:
+        col = ('predicted_price', mt)
+        if col in pivoted.columns:
+            prices[mt] = pivoted[col]
+
+    anchor = 'ensemble' if 'ensemble' in model_types else sorted(model_types)[0]
+    actual = pivoted[('actual_price', anchor)]
+    current = pivoted[('current_price', anchor)]
+    horizon = pivoted.index.get_level_values('prediction_horizon_days')
+
+    # Define ensemble combinations to test
+    combo_defs = [
+        ('RF only', ['rf']),
+        ('XGB only', ['xgb']),
+        ('Ridge only', ['ridge']),
+        ('SVR only', ['svr']),
+        ('RF+XGB', ['rf', 'xgb']),
+        ('RF+XGB+Ridge', ['rf', 'xgb', 'ridge']),
+        ('RF+XGB+SVR', ['rf', 'xgb', 'svr']),
+        ('RF+XGB+Ridge+SVR', ['rf', 'xgb', 'ridge', 'svr']),
+        ('All (incl. seq)', list(individual_models)),
+    ]
+    # Only add seq-including combos if seq model exists
+    if 'seq' in individual_models:
+        combo_defs.insert(-1, ('Seq+RF+XGB', ['seq', 'rf', 'xgb']))
+        combo_defs.insert(-1, ('Seq+RF+XGB+Ridge+SVR', ['seq', 'rf', 'xgb', 'ridge', 'svr']))
+
+    results = []
+    for combo_name, models in combo_defs:
+        # Check all required models have data
+        available = [m for m in models if m in prices]
+        if len(available) < len(models):
+            continue
+
+        # Equal-weight ensemble of these models
+        combo_price = sum(prices[m] for m in available) / len(available)
+        valid = combo_price.notna() & actual.notna() & (actual > 0)
+
+        if valid.sum() == 0:
+            continue
+
+        combo_p = combo_price[valid]
+        actual_p = actual[valid]
+        current_p = current[valid]
+        h = horizon[valid]
+
+        error_pct = (combo_p - actual_p) / actual_p * 100
+        abs_error_pct = error_pct.abs()
+        pred_return = (combo_p - current_p) / current_p
+        actual_return = (actual_p - current_p) / current_p
+        direction_correct = ((pred_return > 0) == (actual_return > 0)).astype(int)
+
+        # Per-horizon results
+        temp_df = pd.DataFrame({
+            'horizon': h,
+            'abs_error_pct': abs_error_pct,
+            'error_pct': error_pct,
+            'direction_correct': direction_correct,
+        })
+        for hz, group in temp_df.groupby('horizon'):
+            results.append({
+                'ensemble_combo': combo_name,
+                'horizon_days': hz,
+                'n_predictions': len(group),
+                'mae_pct': round(group['abs_error_pct'].mean(), 4),
+                'mean_error_pct': round(group['error_pct'].mean(), 4),
+                'direction_accuracy': round(group['direction_correct'].mean(), 4),
+            })
+
+    if not results:
+        return None
+
+    return pd.DataFrame(results)
+
+
 def identify_biases(merged_df):
-    """Identify systematic prediction biases."""
+    """Identify systematic prediction biases (ensemble predictions only)."""
     biases = []
 
     if merged_df is None or len(merged_df) == 0:
         return biases
 
+    # Use only ensemble predictions — CI columns and bias stats are only
+    # meaningful for the ensemble row, not individual model rows.
+    if 'model_type' in merged_df.columns:
+        df = merged_df[merged_df['model_type'] == 'ensemble']
+        if len(df) == 0:
+            df = merged_df  # fallback: no ensemble rows, use all
+    else:
+        df = merged_df
+
     # 1. Overall direction bias
-    mean_error = merged_df['price_error_pct'].mean()
+    mean_error = df['price_error_pct'].mean()
     if mean_error > 2:
         biases.append(f"SYSTEMATIC UPWARD BIAS: predictions are {mean_error:.1f}% too high on average")
     elif mean_error < -2:
         biases.append(f"SYSTEMATIC DOWNWARD BIAS: predictions are {abs(mean_error):.1f}% too low on average")
 
     # 2. Error growth with horizon
-    for horizon in sorted(merged_df['prediction_horizon_days'].unique()):
-        h_data = merged_df[merged_df['prediction_horizon_days'] == horizon]
+    for horizon in sorted(df['prediction_horizon_days'].unique()):
+        h_data = df[df['prediction_horizon_days'] == horizon]
         mae = h_data['abs_error_pct'].mean()
         biases.append(f"  {horizon}D horizon: MAE={mae:.1f}%, direction={h_data['direction_correct'].mean():.1%}")
 
     # 3. Confidence interval calibration
-    in_ci = merged_df['in_confidence'].mean()
+    in_ci = df['in_confidence'].mean()
     if in_ci < 0.80:
         biases.append(f"UNDERCONFIDENT INTERVALS: only {in_ci:.1%} of actuals within 90% CI (expected ~90%)")
     elif in_ci > 0.98:
         biases.append(f"OVERWIDE INTERVALS: {in_ci:.1%} of actuals within 90% CI (intervals too wide)")
 
     # 4. Sector/market bias
-    mean_pred_return = merged_df['predicted_return'].mean()
-    mean_actual_return = merged_df['actual_return'].mean()
+    mean_pred_return = df['predicted_return'].mean()
+    mean_actual_return = df['actual_return'].mean()
     if abs(mean_pred_return - mean_actual_return) > 0.05:
         biases.append(
             f"RETURN LEVEL MISMATCH: predicted avg return={mean_pred_return:.2%}, "
@@ -158,7 +304,8 @@ def identify_biases(merged_df):
     return biases
 
 
-def generate_report(horizon_metrics, ticker_metrics, biases, merged_df, output_file=None):
+def generate_report(horizon_metrics, ticker_metrics, biases, merged_df, output_file=None,
+                     model_comparison=None, ensemble_combos=None):
     """Generate and print/save the accuracy report."""
     lines = []
     lines.append("=" * 80)
@@ -197,6 +344,42 @@ def generate_report(horizon_metrics, ticker_metrics, biases, merged_df, output_f
         lines.append("\n\n--- TOP 10 BEST DIRECTIONAL ACCURACY ---")
         best_dir = ticker_metrics.sort_values('direction_accuracy', ascending=False).head(10)
         lines.append(best_dir.to_string())
+
+    # Individual model comparison
+    if model_comparison is not None and len(model_comparison) > 0:
+        lines.append("\n\n" + "=" * 80)
+        lines.append("INDIVIDUAL MODEL COMPARISON")
+        lines.append("=" * 80)
+        lines.append("\nMetrics by model type and prediction horizon:")
+        lines.append(model_comparison.to_string())
+
+        # Rank models by MAE for each horizon
+        lines.append("\n\nModel Ranking by MAE% (lower is better):")
+        for hz in model_comparison.index.get_level_values('prediction_horizon_days').unique():
+            hz_data = model_comparison.xs(hz, level='prediction_horizon_days')
+            ranked = hz_data.sort_values('mae_pct')
+            lines.append(f"\n  {hz}D Horizon:")
+            for rank, (model, row) in enumerate(ranked.iterrows(), 1):
+                lines.append(f"    #{rank} {model:>10s}: MAE={row['mae_pct']:.2f}%  "
+                           f"Dir={row['direction_accuracy']:.1%}  "
+                           f"Bias={row['mean_error_pct']:+.2f}%")
+
+    # Ensemble combination comparison
+    if ensemble_combos is not None and len(ensemble_combos) > 0:
+        lines.append("\n\n" + "=" * 80)
+        lines.append("ENSEMBLE COMBINATION COMPARISON")
+        lines.append("=" * 80)
+        lines.append("\nEqual-weight ensemble combinations (hypothetical):")
+
+        for hz in sorted(ensemble_combos['horizon_days'].unique()):
+            hz_data = ensemble_combos[ensemble_combos['horizon_days'] == hz].sort_values('mae_pct')
+            lines.append(f"\n  {hz}D Horizon:")
+            lines.append(f"  {'Combination':<30s} {'MAE%':>8s} {'Dir.Acc':>8s} {'Bias%':>8s} {'N':>5s}")
+            lines.append(f"  {'-'*30} {'-'*8} {'-'*8} {'-'*8} {'-'*5}")
+            for _, row in hz_data.iterrows():
+                lines.append(f"  {row['ensemble_combo']:<30s} {row['mae_pct']:>8.2f} "
+                           f"{row['direction_accuracy']:>8.1%} {row['mean_error_pct']:>+8.2f} "
+                           f"{row['n_predictions']:>5d}")
 
     # Known prediction pipeline issues
     lines.append("\n\n" + "=" * 80)
@@ -302,6 +485,45 @@ def plot_accuracy_summary(merged_df, output_dir):
     print(f"[GRAPH] Saved: {graph_path}")
 
 
+def plot_model_comparison(merged_df, output_dir):
+    """Generate model comparison visualization plots."""
+    if merged_df is None or len(merged_df) == 0:
+        return
+
+    model_types = sorted(merged_df['model_type'].unique())
+    if len(model_types) <= 1:
+        return
+
+    horizons = sorted(merged_df['prediction_horizon_days'].unique())
+    fig, axes = plt.subplots(1, min(len(horizons), 4), figsize=(6 * min(len(horizons), 4), 6),
+                             squeeze=False)
+
+    colors = plt.cm.Set2(np.linspace(0, 1, len(model_types)))
+
+    for i, hz in enumerate(horizons[:4]):
+        ax = axes[0, i]
+        hz_data = merged_df[merged_df['prediction_horizon_days'] == hz]
+        model_mae = hz_data.groupby('model_type')['abs_error_pct'].mean().sort_values()
+
+        bars = ax.bar(range(len(model_mae)), model_mae.values,
+                      color=[colors[model_types.index(m)] for m in model_mae.index])
+        ax.set_xticks(range(len(model_mae)))
+        ax.set_xticklabels(model_mae.index, rotation=45, ha='right')
+        ax.set_ylabel('MAE (%)')
+        ax.set_title(f'{hz}D Horizon: Model MAE%')
+
+        # Add value labels
+        for bar, val in zip(bars, model_mae.values):
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.2,
+                    f'{val:.1f}', ha='center', va='bottom', fontsize=8)
+
+    plt.tight_layout()
+    graph_path = os.path.join(output_dir, "model_comparison.png")
+    plt.savefig(graph_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"[GRAPH] Saved: {graph_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(description='Analyze prediction accuracy')
     parser.add_argument('--ticker', help='Analyze specific ticker only')
@@ -346,11 +568,29 @@ def main():
         return
     biases = identify_biases(merged_df)
 
+    # Model comparison analysis
+    print("Analyzing individual model performance...")
+    model_comparison = analyze_model_comparison(merged_df)
+    ensemble_combos = analyze_ensemble_combinations(merged_df)
+
+    if model_comparison is not None:
+        n_models = model_comparison.index.get_level_values('model_type').nunique()
+        print(f"Compared {n_models} model types")
+    else:
+        print("No per-model predictions found (only ensemble). "
+              "Re-run predictions to store per-model data.")
+
+    if ensemble_combos is not None:
+        print(f"Evaluated {ensemble_combos['ensemble_combo'].nunique()} ensemble combinations")
+
     # Generate report
-    generate_report(horizon_metrics, ticker_metrics, biases, merged_df, args.output)
+    generate_report(horizon_metrics, ticker_metrics, biases, merged_df, args.output,
+                    model_comparison=model_comparison, ensemble_combos=ensemble_combos)
 
     # Generate plots
     plot_accuracy_summary(merged_df, graphs_dir)
+    if model_comparison is not None:
+        plot_model_comparison(merged_df, graphs_dir)
 
 
 if __name__ == '__main__':
