@@ -1,8 +1,11 @@
 #LEGACY REQUIREMENTS FILE
 #
-#Python Version: 3.10 (Required for TensorFlow 2.10.0)
+# Python Version: 3.10 (legacy TensorFlow 2.10 environment)
 #
-#This environment is NOT compatible with Python 3.11 or newer.
+# Prefer Python 3.12 plus requirements_PY_3_12_ml.txt for new work.
+# Keep this file only for users who still need the old TensorFlow 2.10 stack.
+#
+# This environment is NOT compatible with Python 3.11 or newer.
 #
 #!!! GPU ACCELERATION REQUIREMENT !!!
 #

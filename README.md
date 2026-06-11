@@ -12,71 +12,94 @@ A comprehensive stock data pipeline and machine learning system for fetching fin
 
 ## Prerequisites
 
-- Python 3.10 or 3.12 (see [Python Environment](#python-environment) below)
-- MySQL database server
+- Python 3.12
+- Docker Desktop with WSL2 backend or Docker Engine
+- NVIDIA GPU support for the ML container
 - Database credentials configured in `dev.env`
 
 ## Python Environment
 
-This project supports two Python environments depending on your use case:
+This project now targets Python 3.12 everywhere, with a split between the base
+application runtime and the ML runtime overlay.
 
 ### Python 3.12 (Recommended)
 
-Use this environment for the **data pipeline, Streamlit UI, and general usage**. It includes:
+Use this environment for the **data pipeline, portfolio construction, Streamlit UI, and general usage**. It includes:
 
 - **Data & Visualization**: pandas, numpy, matplotlib, scipy, scikit-learn, plotly
 - **Financial Data**: yfinance, pandas-ta, lxml
 - **Web UI**: Streamlit
 - **Database**: SQLAlchemy, mysql-connector-python
 
-This environment does **not** include TensorFlow or GPU-accelerated ML libraries.
+Install `requirements_PY_3_12.txt` for the base app runtime.
 
-### Python 3.10 (Legacy — GPU / Deep Learning)
+### Python 3.12 ML Overlay
 
-Use this environment **only if you need TensorFlow GPU support** for LSTM model training. It includes:
+Use `requirements_PY_3_12_ml.txt` when you need **TensorFlow 2.21**, **Keras Tuner**,
+and **XGBoost** for `model_trainer.py` and `price_predictor.py`.
 
-- **Deep Learning**: TensorFlow 2.10 (GPU), Keras Tuner
-- **ML**: scikit-learn, XGBoost
-- **Data**: pandas, numpy, matplotlib, scipy, yfinance
-
-> **GPU Requirement**: TensorFlow 2.10 requires **NVIDIA CUDA 11.2** and **cuDNN 8.1** installed separately. You can also install via `conda install tensorflow-gpu==2.10.0`.
-
-> **Note**: This environment is **not compatible with Python 3.11 or newer**. It does not include Streamlit or the web UI dependencies.
+For Windows hosts, GPU-backed ML must run through **Docker Desktop + WSL2** with
+NVIDIA GPU passthrough enabled.
 
 ## Installation
 
 1. Clone or download the repository to your local machine.
 
-2. Create a virtual environment (recommended):
+2. Create a virtual environment (optional for non-Docker workflows):
 
-    **For Python 3.12 (recommended):**
+    **Base runtime:**
     ```bash
     conda create -n stock_env python=3.12
     conda activate stock_env
     pip install -r requirements_PY_3_12.txt
     ```
 
-    **For Python 3.10 (GPU/TensorFlow):**
+    **ML runtime overlay:**
     ```bash
-    conda create -n stock_env_gpu python=3.10
-    conda activate stock_env_gpu
-    pip install -r requirements_PY_3_10.txt
+    conda activate stock_env
+    pip install -r requirements_PY_3_12_ml.txt
     ```
 
 3. Configure database credentials in `dev.env`:
     ```
-    DB_HOST=your_host
+    DB_HOST=db
     DB_USER=your_user
-    DB_PASS=your_password
+    DB_PASSWORD=your_password
     DB_NAME=your_database
+    DB_ROOT_PASSWORD=your_root_password
     ```
 
-4. Initialize the database using the DDL scripts in `database_files/`:
+4. Start the Docker environment:
     ```bash
-    mysql -u your_user -p your_database < database_files/ddl.sql
+    docker compose --env-file dev.env up -d db app ml
     ```
+
+    - The `db` container initializes MySQL from `database_backup.sql` when that file
+      exists in the repository root.
+    - If no backup file is present, the container falls back to `database_files/ddl.sql`.
+    - On Windows, ensure Docker Desktop uses the **WSL2 backend** and that GPU support
+      is enabled before starting the `ml` service.
 
 ## Usage
+
+### Docker-first Commands
+
+```bash
+# Start the stack
+docker compose --env-file dev.env up -d db app ml
+
+# Fetch or update stock data
+docker compose exec app python stock_orchestrator.py
+
+# Train GPU-backed ML models
+docker compose exec ml python model_trainer.py
+
+# Generate predictions
+docker compose exec ml python price_predictor.py
+
+# Build the portfolio
+docker compose exec app python portfolio_builder.py
+```
 
 ### Fetching Stock Data (Recommended)
 
@@ -226,7 +249,8 @@ Blacklisted tickers are stored in `blacklisted_tickers.json` and filtered from f
 ### Environment Variables
 
 Configure in `dev.env`:
-- `DB_HOST`, `DB_USER`, `DB_PASS`, `DB_NAME` - Database credentials
+- `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` - Database credentials
+- `DB_ROOT_PASSWORD` - root password used by the Dockerized MySQL service
 
 ## License
 

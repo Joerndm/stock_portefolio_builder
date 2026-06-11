@@ -45,6 +45,7 @@ try:
     from unit import test_stock_data_fetch_units
     from unit import test_db_interactions_units
     from unit import test_additional_modules_units
+    from unit import test_runtime_compat_units
 except ImportError:
     print("Warning: Some unit test modules could not be imported")
 
@@ -184,6 +185,7 @@ def run_unit_tests(verbose=False):
         suite.addTests(loader.loadTestsFromModule(test_stock_data_fetch_units))
         suite.addTests(loader.loadTestsFromModule(test_db_interactions_units))
         suite.addTests(loader.loadTestsFromModule(test_additional_modules_units))
+        suite.addTests(loader.loadTestsFromModule(test_runtime_compat_units))
     except NameError as e:
         print(f"Warning: Could not load some unit test modules: {e}")
     

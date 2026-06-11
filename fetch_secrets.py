@@ -11,6 +11,11 @@ Functions:
 import os
 from dotenv import load_dotenv
 
+
+def _get_db_password():
+    """Return the canonical DB password value with backward-compatible fallback."""
+    return os.getenv("DB_PASSWORD") or os.getenv("DB_PASS")
+
 def secret_import():
     """
     Imports the secret environment variables from the .env file and returns them.
@@ -28,7 +33,7 @@ def secret_import():
         try:
             db_host = os.getenv("DB_HOST")
             db_user = os.getenv("DB_USER")
-            db_pass = os.getenv("DB_PASSWORD")
+            db_pass = _get_db_password()
             db_name = os.getenv("DB_NAME")
             return db_host, db_user, db_pass, db_name
         

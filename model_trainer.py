@@ -36,10 +36,10 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import pandas as pd
 
 import db_interactions
-import ml_builder
 from cache_contract_admin import refresh_cache_contracts
 from gpu_runtime_utils import configure_tensorflow_gpu
 from blacklist_manager import get_blacklist_manager
+from ml_runtime_loader import load_ml_builder_module
 from model_pipeline_preprocessing import InsufficientDataError, prepare_modeling_data
 from pipeline_config import get_gpu_config, get_data_config, get_ml_config
 
@@ -138,6 +138,7 @@ def train_single_stock(
     start_time = time.time()
 
     try:
+        ml_builder = load_ml_builder_module()
         # Pre-validate data availability before expensive operations
         availability = validate_data_availability(stock_symbol)
         if not availability['valid']:

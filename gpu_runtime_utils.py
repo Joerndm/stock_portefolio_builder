@@ -17,7 +17,13 @@ def _log_warning(logger: Optional[logging.Logger], message: str, *args) -> None:
 
 
 def _load_tensorflow():
-    import tensorflow as tf
+    try:
+        import tensorflow as tf
+    except ImportError as exc:
+        raise ImportError(
+            "TensorFlow is not installed. Install ML dependencies with: "
+            "pip install -r requirements_PY_3_12_ml.txt"
+        ) from exc
 
     return tf
 

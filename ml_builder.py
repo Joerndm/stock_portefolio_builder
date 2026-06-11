@@ -1896,7 +1896,7 @@ def tune_lstm_model(stock, x_train_lstm, y_train_lstm, x_val_lstm, y_val_lstm, t
                     )
                 )
             elif lr_schedule_choice == "exp_decay":
-                from keras.callbacks import LearningRateScheduler
+                from tensorflow.keras.callbacks import LearningRateScheduler
                 initial_lr = hp.get("learning_rate")
                 decay_rate = hp.Float("decay_rate", 0.9, 0.99, step=0.01)
 
