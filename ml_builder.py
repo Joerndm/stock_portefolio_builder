@@ -198,7 +198,7 @@ from tensorflow.keras.optimizers import Adam, RMSprop
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from tensorflow.keras import regularizers
 import keras_tuner as kt
-from keras_tuner.tuners import Sklearn
+from keras_tuner.tuners import SklearnTuner as Sklearn
 
 matplotlib.use('Agg')
 pd.set_option('future.no_silent_downcasting', True)
