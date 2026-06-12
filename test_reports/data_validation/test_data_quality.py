@@ -163,15 +163,19 @@ class TestDataRangeValidation(unittest.TestCase):
         """Test that financial ratios are reasonable"""
         
         test_data = pd.DataFrame({
+            'ticker': ['AAPL'] * 10,
             'close_Price': [100] * 10,
-            'earnings_per_share': [5] * 10,
-            'book_value_per_share': [50] * 10
+            'revenue': [1000] * 10,
+            'average_shares': [100] * 10,
+            'eps': [5] * 10,
+            'book_Value_Per_Share': [50] * 10,
+            'free_Cash_Flow_Per_Share': [4] * 10,
         })
         
-        result = stock_data_fetch.calculate_ratios(test_data)
+        result = stock_data_fetch.calculate_ratios(test_data, prefer_ttm=False)
         
-        if 'p_e_ratio' in result.columns:
-            pe_ratios = result['p_e_ratio'].dropna()
+        if 'P/E' in result.columns:
+            pe_ratios = result['P/E'].dropna()
             
             # P/E ratios should typically be between 0 and 100
             self.assertTrue((pe_ratios > 0).all(), "P/E should be positive")
@@ -185,12 +189,12 @@ class TestOutlierDetection(unittest.TestCase):
         """Test detection of price outliers"""
         
         # Create data with an outlier
-        normal_prices = [100, 102, 101, 103, 105, 104, 106]
+        normal_prices = [100, 102, 101, 103, 105, 104, 106] * 5
         outlier_price = 500  # Clear outlier
         
         test_data = pd.DataFrame({
             'close_Price': normal_prices + [outlier_price],
-            'ticker': ['AAPL'] * 8
+            'ticker': ['AAPL'] * (len(normal_prices) + 1)
         })
         
         # Calculate z-scores

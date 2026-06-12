@@ -57,13 +57,13 @@ class TestSQLInjectionPrevention(unittest.TestCase):
                 # If it doesn't raise an error, check that SQL query was safe
                 call_args = mock_read_sql.call_args
                 if call_args:
-                    query = call_args[1]['sql']
+                    query = str(call_args[1]['sql']).upper()
                     
                     # Query should use parameterized approach or escape properly
                     # The malicious input should not break query structure
-                    self.assertNotIn('DROP TABLE', query.upper(),
+                    self.assertNotIn('DROP TABLE', query,
                                    "Should not contain DROP TABLE")
-                    self.assertNotIn('DELETE FROM', query.upper(),
+                    self.assertNotIn('DELETE FROM', query,
                                    "Should not contain DELETE FROM")
                 
             except (ValueError, KeyError):
@@ -185,7 +185,7 @@ class TestSecretsManagement(unittest.TestCase):
         )
         
         if os.path.exists(db_interactions_path):
-            with open(db_interactions_path, 'r') as f:
+            with open(db_interactions_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
             
             # Check for common hardcoded credential patterns

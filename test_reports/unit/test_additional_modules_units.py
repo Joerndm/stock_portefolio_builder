@@ -117,6 +117,12 @@ class TestFeatureSelectionRF(unittest.TestCase):
         self.y_test = pd.Series(np.random.randn(10))
         self.x_pred = pd.DataFrame(np.random.randn(5, 20),
                                   columns=[f'feature_{i}' for i in range(20)])
+        dataset_columns = [f'feature_{i}' for i in range(20)]
+        dataset_columns.extend([
+            'date', 'name', 'date_published', 'ticker', 'currency', 'financial_date_used',
+            'open_Price', 'high_Price', 'low_Price', 'close_Price', 'trade_Volume', '1D', 'prediction'
+        ])
+        self.dataset_df = pd.DataFrame(np.random.randn(100, len(dataset_columns)), columns=dataset_columns)
     
     def test_rf_feature_selection(self):
         """Test Random Forest feature selection"""
@@ -125,7 +131,7 @@ class TestFeatureSelectionRF(unittest.TestCase):
         x_train_reduced, x_val_reduced, x_test_reduced, x_pred_reduced, model, features = \
             dimension_reduction.feature_selection_rf(
                 dimensions, self.x_train, self.x_val, self.x_test,
-                self.y_train, self.y_val, self.y_test, self.x_pred
+                self.y_train, self.y_val, self.y_test, self.x_pred, self.dataset_df
             )
         
         self.assertEqual(x_train_reduced.shape[1], dimensions, "Should reduce to correct dimensions")
@@ -138,12 +144,36 @@ class TestFeatureSelectionRF(unittest.TestCase):
         
         _, _, _, _, model, features = dimension_reduction.feature_selection_rf(
             dimensions, self.x_train, self.x_val, self.x_test,
-            self.y_train, self.y_val, self.y_test, self.x_pred
+            self.y_train, self.y_val, self.y_test, self.x_pred, self.dataset_df
         )
         
         # Features should be valid column names
         for feature in features:
             self.assertIn(feature, self.x_train.columns, "Selected features should be valid")
+
+    @patch('dimension_reduction.RandomForestRegressor')
+    def test_rf_feature_selection_drops_zero_importance_tail(self, mock_rf_cls):
+        """Feature selection should not pad the result with zero-importance columns."""
+
+        class MockRFSelector:
+            feature_importances_ = np.array([0.6, 0.3, 0.1] + [0.0] * 17)
+
+            def fit(self, x_data, y_data):
+                return self
+
+        mock_rf_cls.return_value = MockRFSelector()
+
+        x_train_reduced, x_val_reduced, x_test_reduced, x_pred_reduced, _, features = \
+            dimension_reduction.feature_selection_rf(
+                10, self.x_train, self.x_val, self.x_test,
+                self.y_train, self.y_val, self.y_test, self.x_pred, self.dataset_df
+            )
+
+        self.assertEqual(x_train_reduced.shape[1], 3)
+        self.assertEqual(x_val_reduced.shape[1], 3)
+        self.assertEqual(x_test_reduced.shape[1], 3)
+        self.assertEqual(x_pred_reduced.shape[1], 3)
+        self.assertEqual(features, ['feature_0', 'feature_1', 'feature_2'])
 
 
 class TestPCADatasetTransformation(unittest.TestCase):
@@ -161,9 +191,9 @@ class TestPCADatasetTransformation(unittest.TestCase):
         """Test PCA reduces dimensions correctly"""
         n_components = 10
         
-        x_train_pca, x_val_pca, x_test_pca, x_pred_pca, pca_model = \
+        x_train_pca, x_val_pca, x_test_pca, x_pred_pca = \
             dimension_reduction.pca_dataset_transformation(
-                n_components, self.x_train, self.x_val, self.x_test, self.x_pred
+                self.x_train, self.x_val, self.x_test, self.x_pred, n_components
             )
         
         self.assertEqual(x_train_pca.shape[1], n_components, "Should reduce to n_components")
@@ -174,24 +204,27 @@ class TestPCADatasetTransformation(unittest.TestCase):
         """Test that PCA preserves number of samples"""
         n_components = 10
         
-        x_train_pca, x_val_pca, x_test_pca, x_pred_pca, _ = \
+        x_train_pca, x_val_pca, x_test_pca, x_pred_pca = \
             dimension_reduction.pca_dataset_transformation(
-                n_components, self.x_train, self.x_val, self.x_test, self.x_pred
+                self.x_train, self.x_val, self.x_test, self.x_pred, n_components
             )
         
         self.assertEqual(x_train_pca.shape[0], self.x_train.shape[0])
         self.assertEqual(x_val_pca.shape[0], self.x_val.shape[0])
         self.assertEqual(x_test_pca.shape[0], self.x_test.shape[0])
     
-    def test_pca_returns_model(self):
-        """Test that PCA model is returned"""
+    def test_pca_returns_reduced_arrays(self):
+        """Test that PCA returns reduced arrays for each split."""
         n_components = 10
         
-        _, _, _, _, pca_model = dimension_reduction.pca_dataset_transformation(
-            n_components, self.x_train, self.x_val, self.x_test, self.x_pred
+        x_train_pca, x_val_pca, x_test_pca, x_pred_pca = dimension_reduction.pca_dataset_transformation(
+            self.x_train, self.x_val, self.x_test, self.x_pred, n_components
         )
         
-        self.assertIsNotNone(pca_model, "Should return PCA model")
+        self.assertIsInstance(x_train_pca, np.ndarray, "Should return transformed train array")
+        self.assertIsInstance(x_val_pca, np.ndarray, "Should return transformed val array")
+        self.assertIsInstance(x_test_pca, np.ndarray, "Should return transformed test array")
+        self.assertIsInstance(x_pred_pca, np.ndarray, "Should return transformed prediction array")
 
 
 class TestMonteCarloAnalysis(unittest.TestCase):
@@ -199,6 +232,10 @@ class TestMonteCarloAnalysis(unittest.TestCase):
     
     def setUp(self):
         """Set up test data"""
+        self.savefig_patcher = patch('matplotlib.pyplot.savefig')
+        self.savefig_patcher.start()
+        self.addCleanup(self.savefig_patcher.stop)
+
         self.stock_data_df = pd.DataFrame({
             'ticker': ['AAPL'] * 250,
             'date': pd.date_range('2023-01-01', periods=250),
@@ -276,9 +313,28 @@ class TestMonteCarloAnalysis(unittest.TestCase):
             decimal=5, err_msg="Same seed should produce same results"
         )
 
+    @patch('monte_carlo_sim.os.makedirs')
+    def test_monte_carlo_creates_graph_directory_before_save(self, mock_makedirs):
+        """Monte Carlo graph export should create its output directory on demand."""
+        monte_carlo_sim.monte_carlo_analysis(
+            seed_number=42,
+            stock_data_df=self.stock_data_df,
+            forecast_df=self.forecast_df,
+            years=1,
+            sim_amount=50
+        )
+
+        expected_dir = os.path.join(
+            os.path.dirname(os.path.abspath(monte_carlo_sim.__file__)),
+            'generated_graphs'
+        )
+        mock_makedirs.assert_called_once_with(expected_dir, exist_ok=True)
+
 
 class TestEfficientFrontierSim(unittest.TestCase):
     """Test suite for efficient_frontier_sim function"""
+
+    SIM_COUNT = 500
     
     def setUp(self):
         """Set up test data"""
@@ -294,15 +350,25 @@ class TestEfficientFrontierSim(unittest.TestCase):
     @patch('matplotlib.pyplot.show')
     def test_efficient_frontier_returns_dataframe(self, mock_show, mock_savefig):
         """Test that efficient frontier returns DataFrame"""
-        result = efficient_frontier.efficient_frontier_sim(self.price_df)
+        result = efficient_frontier.efficient_frontier_sim(
+            self.price_df,
+            sim_count=self.SIM_COUNT,
+            progress_step=0,
+        )
         
         self.assertIsInstance(result, pd.DataFrame, "Should return DataFrame")
+        self.assertGreater(len(result), 0, "Should return at least one efficient frontier row")
+        self.assertLessEqual(len(result), self.SIM_COUNT, "Reduced frontier should not exceed simulation count")
     
     @patch('matplotlib.pyplot.savefig')
     @patch('matplotlib.pyplot.show')
     def test_portfolio_weights_sum_to_one(self, mock_show, mock_savefig):
         """Test that portfolio weights sum to 1"""
-        result = efficient_frontier.efficient_frontier_sim(self.price_df)
+        result = efficient_frontier.efficient_frontier_sim(
+            self.price_df,
+            sim_count=self.SIM_COUNT,
+            progress_step=0,
+        )
         
         # Check if weight columns exist and sum to 1
         weight_cols = [col for col in result.columns if col in self.price_df.columns]
@@ -317,7 +383,11 @@ class TestEfficientFrontierSim(unittest.TestCase):
     @patch('matplotlib.pyplot.show')
     def test_return_and_volatility_columns(self, mock_show, mock_savefig):
         """Test that return and volatility columns exist"""
-        result = efficient_frontier.efficient_frontier_sim(self.price_df)
+        result = efficient_frontier.efficient_frontier_sim(
+            self.price_df,
+            sim_count=self.SIM_COUNT,
+            progress_step=0,
+        )
         
         # Should have Return and Volatility columns
         self.assertIn('Return', result.columns, "Should have Return column")
@@ -327,11 +397,20 @@ class TestEfficientFrontierSim(unittest.TestCase):
     @patch('matplotlib.pyplot.show')
     def test_positive_volatility(self, mock_show, mock_savefig):
         """Test that volatility is non-negative"""
-        result = efficient_frontier.efficient_frontier_sim(self.price_df)
+        result = efficient_frontier.efficient_frontier_sim(
+            self.price_df,
+            sim_count=self.SIM_COUNT,
+            progress_step=0,
+        )
         
         if 'Volatility' in result.columns:
             self.assertTrue((result['Volatility'] >= 0).all(),
                           "Volatility should be non-negative")
+
+    def test_invalid_simulation_count_raises(self):
+        """Simulation count should reject non-positive values."""
+        with self.assertRaises(ValueError):
+            efficient_frontier.efficient_frontier_sim(self.price_df, sim_count=0, progress_step=0)
 
 
 class TestDatasetTrainTestSplit(unittest.TestCase):

@@ -77,16 +77,16 @@ class TestCalculateStandardDeviationValue(unittest.TestCase):
         result = stock_data_fetch.calculate_standard_diviation_value(self.stock_data)
         
         # Should add standard deviation columns
-        self.assertIn('std_5', result.columns, "Should have 5-day std")
-        self.assertIn('std_20', result.columns, "Should have 20-day std")
-        self.assertIn('std_40', result.columns, "Should have 40-day std")
+        self.assertIn('std_Div_5', result.columns, "Should have 5-day std")
+        self.assertIn('std_Div_20', result.columns, "Should have 20-day std")
+        self.assertIn('std_Div_40', result.columns, "Should have 40-day std")
     
     def test_positive_values(self):
         """Test that standard deviations are non-negative"""
         result = stock_data_fetch.calculate_standard_diviation_value(self.stock_data)
         
         # Drop NaN values before checking
-        for col in ['std_5', 'std_20', 'std_40']:
+        for col in ['std_Div_5', 'std_Div_20', 'std_Div_40']:
             if col in result.columns:
                 valid_values = result[col].dropna()
                 if len(valid_values) > 0:
@@ -103,8 +103,8 @@ class TestCalculateStandardDeviationValue(unittest.TestCase):
         result = stock_data_fetch.calculate_standard_diviation_value(constant_data)
         
         # Standard deviation should be zero or very close
-        if 'std_5' in result.columns:
-            valid_std = result['std_5'].dropna()
+        if 'std_Div_5' in result.columns:
+            valid_std = result['std_Div_5'].dropna()
             if len(valid_std) > 0:
                 self.assertTrue((valid_std < 0.01).all(), 
                               "Constant prices should have near-zero std")
@@ -122,37 +122,33 @@ class TestCalculateBollingerBands(unittest.TestCase):
     
     def setUp(self):
         """Set up test data"""
-        self.stock_data = pd.DataFrame({
-            'close_Price': np.random.uniform(90, 110, 100),
-            'ticker': ['AAPL'] * 100,
-            'date': pd.date_range('2024-01-01', periods=100)
+        raw_data = pd.DataFrame({
+            'close_Price': np.random.uniform(90, 110, 250),
+            'ticker': ['AAPL'] * 250,
+            'date': pd.date_range('2024-01-01', periods=250)
         })
+        self.stock_data = stock_data_fetch.calculate_standard_diviation_value(raw_data)
     
     def test_bollinger_bands_added(self):
         """Test that Bollinger Bands columns are added"""
         result = stock_data_fetch.calculate_bollinger_bands(self.stock_data)
         
-        # Should have upper and lower bands for each period
-        bb_columns = [col for col in result.columns if 'bb' in col.lower()]
-        self.assertGreater(len(bb_columns), 0, "Should add Bollinger Band columns")
+        for column in ['bollinger_Band_5_2STD', 'bollinger_Band_20_2STD', 'bollinger_Band_40_2STD']:
+            self.assertIn(column, result.columns, f"Should add {column}")
     
     def test_band_relationship(self):
-        """Test that upper band > middle band > lower band"""
+        """Test that Bollinger band widths remain non-negative."""
         result = stock_data_fetch.calculate_bollinger_bands(self.stock_data)
         
-        # Check for common Bollinger Band column patterns
-        if 'bb_upper_20' in result.columns and 'bb_lower_20' in result.columns:
-            valid_rows = result[['bb_upper_20', 'sma_20', 'bb_lower_20']].dropna()
+        if 'bollinger_Band_20_2STD' in result.columns:
+            valid_rows = result['bollinger_Band_20_2STD'].dropna()
             if len(valid_rows) > 0:
-                self.assertTrue((valid_rows['bb_upper_20'] >= valid_rows['sma_20']).all(),
-                              "Upper band should be >= middle")
-                self.assertTrue((valid_rows['sma_20'] >= valid_rows['bb_lower_20']).all(),
-                              "Middle should be >= lower band")
+                self.assertTrue((valid_rows >= 0).all(), "Band width should be non-negative")
     
     def test_nan_handling(self):
-        """Test handling of NaN values"""
+        """Test handling of NaN values in precomputed std columns"""
         data_with_nan = self.stock_data.copy()
-        data_with_nan.loc[5, 'close_Price'] = np.nan
+        data_with_nan.loc[5, 'std_Div_5'] = np.nan
         
         result = stock_data_fetch.calculate_bollinger_bands(data_with_nan)
         

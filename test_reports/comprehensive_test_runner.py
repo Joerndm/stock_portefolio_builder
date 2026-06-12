@@ -26,6 +26,8 @@ import unittest
 import sys
 import os
 import argparse
+import subprocess
+import tempfile
 from datetime import datetime
 import json
 import io
@@ -39,39 +41,22 @@ if sys.stderr.encoding != 'utf-8':
 # Add parent directory to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# Import all test modules
-try:
-    from unit import test_ml_builder_units
-    from unit import test_stock_data_fetch_units
-    from unit import test_db_interactions_units
-    from unit import test_additional_modules_units
-except ImportError:
-    print("Warning: Some unit test modules could not be imported")
+from test_reports.test_runner_envs import (
+    CATEGORY_ENVIRONMENTS,
+    default_unit_env_plan,
+    resolve_python_executable,
+)
 
-try:
-    from integration import test_pipelines_integration
-except ImportError:
-    print("Warning: Integration test module could not be imported")
 
-try:
-    from e2e import test_complete_workflows
-except ImportError:
-    print("Warning: E2E test module could not be imported")
+TEST_REPORTS_DIR = os.path.dirname(__file__)
 
-try:
-    from performance import test_performance_benchmarks
-except ImportError:
-    print("Warning: Performance test module could not be imported")
 
-try:
-    from security import test_security_validation
-except ImportError:
-    print("Warning: Security test module could not be imported")
-
-try:
-    from data_validation import test_data_quality
-except ImportError:
-    print("Warning: Data validation test module could not be imported")
+def _discover_tests(subdir, pattern='test*.py'):
+    loader = unittest.TestLoader()
+    start_dir = os.path.join(TEST_REPORTS_DIR, subdir)
+    if not os.path.isdir(start_dir):
+        raise FileNotFoundError(f"Test directory not found: {start_dir}")
+    return loader.discover(start_dir=start_dir, pattern=pattern, top_level_dir=TEST_REPORTS_DIR)
 
 
 class ComprehensiveTestResult:
@@ -89,19 +74,52 @@ class ComprehensiveTestResult:
     def add_category_result(self, category, result):
         """Add results from a test category"""
         successes = result.testsRun - len(result.failures) - len(result.errors)
+        self.add_category_stats(
+            category,
+            tests_run=result.testsRun,
+            failures=len(result.failures),
+            errors=len(result.errors),
+        )
+
+    def add_category_stats(self, category, tests_run, failures, errors):
+        """Add summary stats from a test category or subprocess report."""
+        successes = tests_run - failures - errors
         
-        self.categories[category] = {
-            'tests_run': result.testsRun,
-            'successes': successes,
-            'failures': len(result.failures),
-            'errors': len(result.errors),
-            'success_rate': (successes / result.testsRun * 100) if result.testsRun > 0 else 0
-        }
+        existing = self.categories.get(
+            category,
+            {
+                'tests_run': 0,
+                'successes': 0,
+                'failures': 0,
+                'errors': 0,
+                'success_rate': 0,
+            },
+        )
+
+        existing['tests_run'] += tests_run
+        existing['successes'] += successes
+        existing['failures'] += failures
+        existing['errors'] += errors
+        existing['success_rate'] = (
+            existing['successes'] / existing['tests_run'] * 100
+        ) if existing['tests_run'] > 0 else 0
+
+        self.categories[category] = existing
         
-        self.total_tests += result.testsRun
+        self.total_tests += tests_run
         self.total_successes += successes
-        self.total_failures += len(result.failures)
-        self.total_errors += len(result.errors)
+        self.total_failures += failures
+        self.total_errors += errors
+
+    def absorb_report(self, report):
+        """Merge a saved subprocess report into this result."""
+        for category, stats in report.get('categories', {}).items():
+            self.add_category_stats(
+                category,
+                tests_run=stats.get('tests_run', 0),
+                failures=stats.get('failures', 0),
+                errors=stats.get('errors', 0),
+            )
     
     def print_summary(self):
         """Print comprehensive summary"""
@@ -146,9 +164,8 @@ class ComprehensiveTestResult:
         
         print("="*80)
     
-    def save_report(self, filename='test_report.json'):
-        """Save test results to JSON file"""
-        report = {
+    def to_dict(self):
+        return {
             'timestamp': datetime.now().isoformat(),
             'duration_seconds': (self.end_time - self.start_time).total_seconds() if self.start_time and self.end_time else 0,
             'summary': {
@@ -160,32 +177,36 @@ class ComprehensiveTestResult:
             },
             'categories': self.categories
         }
-        
-        report_path = os.path.join(os.path.dirname(__file__), filename)
-        
+
+    def save_report(self, filename='test_report.json', report_path=None):
+        """Save test results to JSON file"""
+        report = self.to_dict()
+
+        if report_path is None:
+            report_path = os.path.join(os.path.dirname(__file__), filename)
+
         with open(report_path, 'w') as f:
             json.dump(report, f, indent=2)
         
         print(f"\n✓ Test report saved to: {report_path}")
 
 
-def run_unit_tests(verbose=False):
+def run_unit_tests(verbose=False, unit_files=None):
     """Run all unit tests"""
     print("\n" + "="*80)
     print("RUNNING UNIT TESTS")
     print("="*80)
     
-    loader = unittest.TestLoader()
-    suite = unittest.TestSuite()
-    
-    # Load all unit test modules
     try:
-        suite.addTests(loader.loadTestsFromModule(test_ml_builder_units))
-        suite.addTests(loader.loadTestsFromModule(test_stock_data_fetch_units))
-        suite.addTests(loader.loadTestsFromModule(test_db_interactions_units))
-        suite.addTests(loader.loadTestsFromModule(test_additional_modules_units))
-    except NameError as e:
-        print(f"Warning: Could not load some unit test modules: {e}")
+        if unit_files:
+            suite = unittest.TestSuite()
+            for unit_file in unit_files:
+                suite.addTests(_discover_tests('unit', pattern=os.path.basename(unit_file)))
+        else:
+            suite = _discover_tests('unit', pattern='test*_units.py')
+    except FileNotFoundError as e:
+        print(f"Warning: Could not discover unit tests: {e}")
+        return None
     
     verbosity = 2 if verbose else 1
     runner = unittest.TextTestRunner(verbosity=verbosity)
@@ -201,13 +222,15 @@ def run_integration_tests(verbose=False):
     print("="*80)
     
     try:
+        from test_reports.integration import test_pipelines_integration
+
         verbosity = 2 if verbose else 1
         loader = unittest.TestLoader()
         suite = loader.loadTestsFromModule(test_pipelines_integration)
         runner = unittest.TextTestRunner(verbosity=verbosity)
         result = runner.run(suite)
         return result
-    except NameError:
+    except ImportError:
         print("Integration tests module not available")
         return None
 
@@ -219,13 +242,15 @@ def run_e2e_tests(verbose=False):
     print("="*80)
     
     try:
+        from test_reports.e2e import test_complete_workflows
+
         verbosity = 2 if verbose else 1
         loader = unittest.TestLoader()
         suite = loader.loadTestsFromModule(test_complete_workflows)
         runner = unittest.TextTestRunner(verbosity=verbosity)
         result = runner.run(suite)
         return result
-    except NameError:
+    except ImportError:
         print("E2E tests module not available")
         return None
 
@@ -237,13 +262,15 @@ def run_performance_tests(verbose=False):
     print("="*80)
     
     try:
+        from test_reports.performance import test_performance_benchmarks
+
         verbosity = 2 if verbose else 1
         loader = unittest.TestLoader()
         suite = loader.loadTestsFromModule(test_performance_benchmarks)
         runner = unittest.TextTestRunner(verbosity=verbosity)
         result = runner.run(suite)
         return result
-    except NameError:
+    except ImportError:
         print("Performance tests module not available")
         return None
 
@@ -255,13 +282,15 @@ def run_security_tests(verbose=False):
     print("="*80)
     
     try:
+        from test_reports.security import test_security_validation
+
         verbosity = 2 if verbose else 1
         loader = unittest.TestLoader()
         suite = loader.loadTestsFromModule(test_security_validation)
         runner = unittest.TextTestRunner(verbosity=verbosity)
         result = runner.run(suite)
         return result
-    except NameError:
+    except ImportError:
         print("Security tests module not available")
         return None
 
@@ -273,15 +302,144 @@ def run_validation_tests(verbose=False):
     print("="*80)
     
     try:
+        from test_reports.data_validation import test_data_quality
+
         verbosity = 2 if verbose else 1
         loader = unittest.TestLoader()
         suite = loader.loadTestsFromModule(test_data_quality)
         runner = unittest.TextTestRunner(verbosity=verbosity)
         result = runner.run(suite)
         return result
-    except NameError:
+    except ImportError:
         print("Data validation tests module not available")
         return None
+
+
+def _wrap_single_category_result(category, result, start_time=None, end_time=None):
+    wrapped_result = ComprehensiveTestResult()
+    wrapped_result.start_time = start_time
+    wrapped_result.end_time = end_time
+    if result is not None:
+        wrapped_result.add_category_result(category, result)
+    return wrapped_result
+
+
+def _run_requested_category(category, verbose=False, unit_files=None):
+    if category == 'unit':
+        return run_unit_tests(verbose=verbose, unit_files=unit_files)
+    if category == 'integration':
+        return run_integration_tests(verbose=verbose)
+    if category == 'e2e':
+        return run_e2e_tests(verbose=verbose)
+    if category == 'performance':
+        return run_performance_tests(verbose=verbose)
+    if category == 'security':
+        return run_security_tests(verbose=verbose)
+    if category == 'validation':
+        return run_validation_tests(verbose=verbose)
+    raise ValueError(f"Unsupported category: {category}")
+
+
+def _run_env_routed_category(category, target_env, verbose=False, unit_files=None):
+    python_executable = resolve_python_executable(target_env)
+    report_file = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.json') as handle:
+            report_file = handle.name
+
+        print(f"\n[ENV] Routing {category} tests to {target_env}")
+        command = [
+            python_executable,
+            os.path.abspath(__file__),
+            '--category', category,
+            '--disable-env-routing',
+            '--report-file', report_file,
+        ]
+        if verbose:
+            command.append('--verbose')
+        if unit_files:
+            command.extend(['--unit-files', *unit_files])
+
+        completed = subprocess.run(
+            command,
+            cwd=os.path.abspath(os.path.join(TEST_REPORTS_DIR, '..')),
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+        )
+
+        if completed.stdout:
+            print(completed.stdout, end='' if completed.stdout.endswith('\n') else '\n')
+        if completed.stderr:
+            print(completed.stderr, file=sys.stderr, end='' if completed.stderr.endswith('\n') else '\n')
+
+        if not report_file or not os.path.exists(report_file):
+            raise RuntimeError(f"Missing subprocess report for {category} in {target_env}")
+
+        with open(report_file, 'r', encoding='utf-8') as handle:
+            report = json.load(handle)
+
+        routed_result = ComprehensiveTestResult()
+        routed_result.absorb_report(report)
+        return routed_result
+    finally:
+        if report_file and os.path.exists(report_file):
+            os.remove(report_file)
+
+
+def run_unit_tests_env_aware(verbose=False, save_report=False):
+    """Run unit tests across the required Python 3.10 and 3.12 environments."""
+    comprehensive_result = ComprehensiveTestResult()
+    comprehensive_result.start_time = datetime.now()
+
+    for target_env, unit_files in default_unit_env_plan().items():
+        if not unit_files:
+            continue
+        routed_result = _run_env_routed_category(
+            'unit',
+            target_env,
+            verbose=verbose,
+            unit_files=unit_files,
+        )
+        comprehensive_result.absorb_report(routed_result.to_dict())
+
+    comprehensive_result.end_time = datetime.now()
+    comprehensive_result.print_summary()
+
+    if save_report:
+        comprehensive_result.save_report()
+
+    return comprehensive_result
+
+
+def run_all_tests_env_aware(verbose=False, save_report=False):
+    """Run all test categories in their required Python environments."""
+    comprehensive_result = ComprehensiveTestResult()
+    comprehensive_result.start_time = datetime.now()
+
+    for target_env, unit_files in default_unit_env_plan().items():
+        if not unit_files:
+            continue
+        routed_result = _run_env_routed_category(
+            'unit',
+            target_env,
+            verbose=verbose,
+            unit_files=unit_files,
+        )
+        comprehensive_result.absorb_report(routed_result.to_dict())
+
+    for category, target_env in CATEGORY_ENVIRONMENTS.items():
+        routed_result = _run_env_routed_category(category, target_env, verbose=verbose)
+        comprehensive_result.absorb_report(routed_result.to_dict())
+
+    comprehensive_result.end_time = datetime.now()
+    comprehensive_result.print_summary()
+
+    if save_report:
+        comprehensive_result.save_report()
+
+    return comprehensive_result
 
 
 def run_all_tests(verbose=False, save_report=False):
@@ -340,6 +498,25 @@ def main():
         action='store_true',
         help='Save test report to JSON file'
     )
+
+    parser.add_argument(
+        '--report-file',
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+
+    parser.add_argument(
+        '--disable-env-routing',
+        action='store_true',
+        help=argparse.SUPPRESS,
+    )
+
+    parser.add_argument(
+        '--unit-files',
+        nargs='*',
+        default=None,
+        help=argparse.SUPPRESS,
+    )
     
     args = parser.parse_args()
     
@@ -349,30 +526,38 @@ def main():
     print(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Category: {args.category}")
     print("="*80)
-    
+    start_time = datetime.now()
+
     # Run requested tests
     if args.category == 'all':
-        result = run_all_tests(verbose=args.verbose, save_report=args.report)
-    elif args.category == 'unit':
-        result = run_unit_tests(verbose=args.verbose)
-    elif args.category == 'integration':
-        result = run_integration_tests(verbose=args.verbose)
-    elif args.category == 'e2e':
-        result = run_e2e_tests(verbose=args.verbose)
-    elif args.category == 'performance':
-        result = run_performance_tests(verbose=args.verbose)
-    elif args.category == 'security':
-        result = run_security_tests(verbose=args.verbose)
-    elif args.category == 'validation':
-        result = run_validation_tests(verbose=args.verbose)
+        if args.disable_env_routing:
+            result = run_all_tests(verbose=args.verbose, save_report=False)
+        else:
+            result = run_all_tests_env_aware(verbose=args.verbose, save_report=False)
+    elif args.category == 'unit' and not args.disable_env_routing and not args.unit_files:
+        result = run_unit_tests_env_aware(verbose=args.verbose, save_report=False)
+    elif args.category in CATEGORY_ENVIRONMENTS and not args.disable_env_routing:
+        result = _run_env_routed_category(args.category, CATEGORY_ENVIRONMENTS[args.category], verbose=args.verbose)
+        result.start_time = start_time
+        result.end_time = datetime.now()
+        result.print_summary()
+    else:
+        raw_result = _run_requested_category(args.category, verbose=args.verbose, unit_files=args.unit_files)
+        result = _wrap_single_category_result(
+            args.category,
+            raw_result,
+            start_time=start_time,
+            end_time=datetime.now(),
+        )
+
+    report_target = args.report_file
+    if report_target or args.report:
+        result.save_report(report_path=report_target)
     
     print(f"\nCompleted at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     # Return exit code based on results
-    if isinstance(result, ComprehensiveTestResult):
-        exit_code = 0 if (result.total_failures + result.total_errors) == 0 else 1
-    else:
-        exit_code = 0 if result and (len(result.failures) + len(result.errors)) == 0 else 1
+    exit_code = 0 if (result.total_failures + result.total_errors) == 0 else 1
     
     sys.exit(exit_code)
 

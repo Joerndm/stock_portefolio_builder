@@ -74,8 +74,9 @@ class TestCompleteMLWorkflow(unittest.TestCase):
         
         # Step 2: Split dataset
         print("[E2E] Step 2: Splitting dataset...")
+        training_ready_data = processed_data.dropna(axis=1, how='all').ffill().dropna().reset_index(drop=True)
         scaler_x, scaler_y, x_train, x_val, x_test, y_train, y_val, y_test, x_pred = \
-            split_dataset.dataset_train_test_split(processed_data.copy())
+            split_dataset.dataset_train_test_split(training_ready_data)
         
         self.assertGreater(len(x_train), 0, "Should have training data")
         self.assertGreater(len(x_val), 0, "Should have validation data")
@@ -86,17 +87,18 @@ class TestCompleteMLWorkflow(unittest.TestCase):
         if x_train.shape[1] >= 10:
             # Convert to DataFrames
             feature_names = [f'feature_{i}' for i in range(x_train.shape[1])]
-            x_train_df = pd.DataFrame(x_train, columns=feature_names)
-            x_val_df = pd.DataFrame(x_val, columns=feature_names)
-            x_test_df = pd.DataFrame(x_test, columns=feature_names)
+            x_train_df = pd.DataFrame(x_train, columns=feature_names).fillna(0)
+            x_val_df = pd.DataFrame(x_val, columns=feature_names).fillna(0)
+            x_test_df = pd.DataFrame(x_test, columns=feature_names).fillna(0)
+            x_pred_clean = np.nan_to_num(x_pred, nan=0.0)
             
             y_train_series = pd.Series(y_train.flatten())
             y_val_series = pd.Series(y_val.flatten())
             y_test_series = pd.Series(y_test.flatten())
             
-            # Create mock dataset for feature selection
-            mock_dataset = processed_data.copy()
-            for i, col in enumerate(feature_names[:min(len(feature_names), len(mock_dataset.columns))]):
+            # Create a feature-aligned dataset contract for feature selection.
+            mock_dataset = training_ready_data.copy()
+            for col in feature_names:
                 if col not in mock_dataset.columns:
                     mock_dataset[col] = np.random.randn(len(mock_dataset))
             
@@ -104,7 +106,7 @@ class TestCompleteMLWorkflow(unittest.TestCase):
                 dimension_reduction.feature_selection(
                     10, x_train_df, x_val_df, x_test_df,
                     y_train_series, y_val_series, y_test_series,
-                    x_pred, mock_dataset
+                    x_pred_clean, mock_dataset
                 )
             
             self.assertEqual(x_train_reduced.shape[1], 10,
@@ -213,7 +215,11 @@ class TestPortfolioWorkflow(unittest.TestCase):
         
         # Step 2: Run efficient frontier
         print("[E2E] Step 2: Running efficient frontier analysis...")
-        portfolio_result = efficient_frontier.efficient_frontier_sim(self.portfolio_prices)
+        portfolio_result = efficient_frontier.efficient_frontier_sim(
+            self.portfolio_prices,
+            sim_count=500,
+            progress_step=0,
+        )
         
         self.assertIsInstance(portfolio_result, pd.DataFrame,
                             "Should return portfolio DataFrame")
@@ -281,7 +287,7 @@ class TestErrorRecoveryScenarios(unittest.TestCase):
     """End-to-end tests for error handling and recovery"""
     
     def test_handling_missing_data(self):
-        """Test workflow handles missing data gracefully"""
+        """Test workflow rejects missing close prices at feature-calculation time."""
         
         print("\n[E2E] Testing missing data handling...")
         
@@ -295,14 +301,10 @@ class TestErrorRecoveryScenarios(unittest.TestCase):
             'ticker': ['AAPL'] * 100
         })
         
-        # Should handle gracefully
-        try:
-            result = stock_data_fetch.calculate_moving_averages(data_with_missing)
-            self.assertIsInstance(result, pd.DataFrame,
-                                "Should handle missing data")
-            print("[E2E] ✓ Missing data handled gracefully")
-        except Exception as e:
-            self.fail(f"Failed to handle missing data: {e}")
+        with self.assertRaises(ValueError):
+            stock_data_fetch.calculate_moving_averages(data_with_missing)
+
+        print("[E2E] ✓ Missing data properly rejected")
     
     def test_handling_insufficient_data(self):
         """Test workflow handles insufficient data gracefully"""

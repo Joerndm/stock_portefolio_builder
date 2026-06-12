@@ -205,7 +205,7 @@ python test_reports/comprehensive_test_runner.py --category e2e
 
 - Simulation Performance:
   - Monte Carlo (100, 500, 1000 simulations)
-  - Efficient frontier (3 stocks, 10 stocks)
+  - Efficient frontier (bounded suite benchmark with reduced simulation counts)
 
 - Memory Usage:
   - Large dataset memory profiling
@@ -221,6 +221,10 @@ python test_reports/comprehensive_test_runner.py --category e2e
 ```bash
 python test_reports/comprehensive_test_runner.py --category performance
 ```
+
+The suite benchmark for `efficient_frontier_sim()` now uses reduced simulation counts so the
+comprehensive runner completes in a reasonable time. Full-scale legacy Monte Carlo frontier runs
+should be executed separately when you explicitly want a long benchmark rather than routine validation.
 
 ### 5. Security Tests (✓ Complete)
 

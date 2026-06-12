@@ -1,0 +1,24 @@
+======================================================================
+TTM MIGRATION VALIDATION REPORT
+Generated: 2026-01-26 18:11:58
+Margin of Error: 15%
+======================================================================
+
+📊 SUMMARY
+   Total tickers validated: 1
+   ✅ Passed validation: 1 (100.0%)
+   ⚠️ Needs review: 0 (0.0%)
+   ❌ Errors: 0 (0.0%)
+
+📈 DATA SOURCES
+   TTM (quarterly): 1 (100.0%)
+   Annual (fallback): 0 (0.0%)
+
+📉 RATIO COMPARISON SUMMARY
+   Note: P/FCF is expected to differ significantly (TTM vs annual methodology)
+   P/S: 0/0 (0.0%) within margin
+   P/E: 0/0 (0.0%) within margin
+   P/B: 0/0 (0.0%) within margin
+   P/FCF: 144/144 (100.0%) within margin (expected)
+
+======================================================================

@@ -163,6 +163,22 @@ Test 5: Alternative Remediation Strategies - ✅ PASS
 python test_reports/comprehensive_test_runner.py
 ```
 
+The comprehensive runner is environment-aware:
+- `unit` tests are split automatically so TensorFlow-heavy files run under the Python 3.10 ML env while fetch/data unit files run under Python 3.12.
+- `integration`, `e2e`, `performance`, `security`, and `validation` categories are routed to Python 3.12 because they import `stock_data_fetch.py` and therefore require `pandas_ta`.
+
+By default the runner looks for:
+- Python 3.10 at `C:\Users\joern\anaconda3\envs\tf_gpu_py_3_10\python.exe`
+- Python 3.12 at `C:\Users\joern\anaconda3\envs\fetch_stock_data_py_3_12\python.exe`
+
+If your local env names differ, override them before running the suite:
+
+```powershell
+$env:SPB_TEST_PY310 = "C:\path\to\python310\python.exe"
+$env:SPB_TEST_PY312 = "C:\path\to\python312\python.exe"
+python test_reports/comprehensive_test_runner.py --verbose
+```
+
 **Run specific category:**
 ```bash
 python test_reports/comprehensive_test_runner.py --category unit

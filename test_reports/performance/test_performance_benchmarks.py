@@ -18,9 +18,14 @@ import pandas as pd
 import time
 import sys
 import os
-from memory_profiler import profile
 import psutil
 import gc
+
+try:
+    from memory_profiler import profile
+except ImportError:
+    def profile(func):
+        return func
 
 # Add parent directory to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
@@ -205,7 +210,10 @@ class TestFeatureSelectionPerformance(unittest.TestCase):
             np.random.randn(50, self.n_features),
             columns=[f'feature_{i}' for i in range(self.n_features)]
         )
-        self.x_pred = np.random.randn(10, self.n_features)
+        self.x_pred = pd.DataFrame(
+            np.random.randn(10, self.n_features),
+            columns=[f'feature_{i}' for i in range(self.n_features)]
+        )
         
         self.y_train = pd.Series(np.random.randn(self.n_samples))
         self.y_val = pd.Series(np.random.randn(100))
@@ -250,7 +258,7 @@ class TestFeatureSelectionPerformance(unittest.TestCase):
             dimension_reduction.feature_selection_rf(
                 dimensions, self.x_train, self.x_val, self.x_test,
                 self.y_train, self.y_val, self.y_test,
-                self.x_pred
+                self.x_pred, self.dataset_df
             )
         
         elapsed = time.time() - start
@@ -306,22 +314,22 @@ class TestMonteCarloPerformance(unittest.TestCase):
 
 class TestEfficientFrontierPerformance(unittest.TestCase):
     """Performance tests for efficient frontier calculation"""
+
+    SMALL_SIM_COUNT = 2500
+    LARGE_SIM_COUNT = 5000
     
     def setUp(self):
         """Set up portfolio data"""
         dates = pd.date_range('2021-01-01', periods=500)
+        rng_small = np.random.randn(500, 3) * 0.01
+        rng_large = np.random.randn(500, 10) * 0.01
+        small_prices = 100 * np.exp(np.cumsum(rng_small, axis=0))
+        large_prices = 100 * np.exp(np.cumsum(rng_large, axis=0))
         
         # Test with different portfolio sizes
-        self.small_portfolio = pd.DataFrame({
-            'AAPL': np.cumsum(np.random.randn(500) * 2) + 100,
-            'GOOGL': np.cumsum(np.random.randn(500) * 2) + 100,
-            'MSFT': np.cumsum(np.random.randn(500) * 2) + 100
-        }, index=dates)
+        self.small_portfolio = pd.DataFrame(small_prices, index=dates, columns=['AAPL', 'GOOGL', 'MSFT'])
         
-        self.large_portfolio = pd.DataFrame({
-            f'Stock{i}': np.cumsum(np.random.randn(500) * 2) + 100
-            for i in range(10)
-        }, index=dates)
+        self.large_portfolio = pd.DataFrame(large_prices, index=dates, columns=[f'Stock{i}' for i in range(10)])
     
     def test_efficient_frontier_performance(self):
         """Benchmark efficient frontier calculation"""
@@ -333,20 +341,32 @@ class TestEfficientFrontierPerformance(unittest.TestCase):
         # Small portfolio (3 stocks)
         with patch('matplotlib.pyplot.savefig'), patch('matplotlib.pyplot.show'):
             start = time.time()
-            result_small = efficient_frontier.efficient_frontier_sim(self.small_portfolio)
+            result_small = efficient_frontier.efficient_frontier_sim(
+                self.small_portfolio,
+                sim_count=self.SMALL_SIM_COUNT,
+                progress_step=0,
+            )
             time_small = time.time() - start
             
             print(f"  3 stocks: {time_small:.4f}s")
-            self.assertLess(time_small, 120.0, "3-stock EF should complete in <120s")
+            self.assertGreater(len(result_small), 0)
+            self.assertLessEqual(len(result_small), self.SMALL_SIM_COUNT)
+            self.assertLess(time_small, 30.0, "3-stock EF benchmark should complete in <30s")
         
         # Large portfolio (10 stocks)
         with patch('matplotlib.pyplot.savefig'), patch('matplotlib.pyplot.show'):
             start = time.time()
-            result_large = efficient_frontier.efficient_frontier_sim(self.large_portfolio)
+            result_large = efficient_frontier.efficient_frontier_sim(
+                self.large_portfolio,
+                sim_count=self.LARGE_SIM_COUNT,
+                progress_step=0,
+            )
             time_large = time.time() - start
             
             print(f"  10 stocks: {time_large:.4f}s")
-            self.assertLess(time_large, 180.0, "10-stock EF should complete in <180s")
+            self.assertGreater(len(result_large), 0)
+            self.assertLessEqual(len(result_large), self.LARGE_SIM_COUNT)
+            self.assertLess(time_large, 60.0, "10-stock EF benchmark should complete in <60s")
 
 
 class TestMemoryUsage(unittest.TestCase):
