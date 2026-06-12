@@ -348,7 +348,7 @@ def build_lstm_cache_callbacks(hyperparameters: Mapping[str, Any] | None) -> lis
             )
         )
     elif lr_schedule_choice == 'exp_decay':
-        from keras.callbacks import LearningRateScheduler
+        from tensorflow.keras.callbacks import LearningRateScheduler
 
         initial_lr = _coerce_float(params.get('learning_rate')) or 0.001
         decay_rate = _coerce_float(params.get('decay_rate')) or 0.95

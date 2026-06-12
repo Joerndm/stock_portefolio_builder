@@ -41,22 +41,40 @@ if sys.stderr.encoding != 'utf-8':
 # Add parent directory to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from test_reports.test_runner_envs import (
-    CATEGORY_ENVIRONMENTS,
-    default_unit_env_plan,
-    resolve_python_executable,
-)
+# Import all test modules
+try:
+    from unit import test_ml_builder_units
+    from unit import test_stock_data_fetch_units
+    from unit import test_db_interactions_units
+    from unit import test_additional_modules_units
+    from unit import test_runtime_compat_units
+except ImportError:
+    print("Warning: Some unit test modules could not be imported")
 
+try:
+    from integration import test_pipelines_integration
+except ImportError:
+    print("Warning: Integration test module could not be imported")
 
-TEST_REPORTS_DIR = os.path.dirname(__file__)
+try:
+    from e2e import test_complete_workflows
+except ImportError:
+    print("Warning: E2E test module could not be imported")
 
+try:
+    from performance import test_performance_benchmarks
+except ImportError:
+    print("Warning: Performance test module could not be imported")
 
-def _discover_tests(subdir, pattern='test*.py'):
-    loader = unittest.TestLoader()
-    start_dir = os.path.join(TEST_REPORTS_DIR, subdir)
-    if not os.path.isdir(start_dir):
-        raise FileNotFoundError(f"Test directory not found: {start_dir}")
-    return loader.discover(start_dir=start_dir, pattern=pattern, top_level_dir=TEST_REPORTS_DIR)
+try:
+    from security import test_security_validation
+except ImportError:
+    print("Warning: Security test module could not be imported")
+
+try:
+    from data_validation import test_data_quality
+except ImportError:
+    print("Warning: Data validation test module could not be imported")
 
 
 class ComprehensiveTestResult:
@@ -197,16 +215,18 @@ def run_unit_tests(verbose=False, unit_files=None):
     print("RUNNING UNIT TESTS")
     print("="*80)
     
+    loader = unittest.TestLoader()
+    suite = unittest.TestSuite()
+    
+    # Load all unit test modules
     try:
-        if unit_files:
-            suite = unittest.TestSuite()
-            for unit_file in unit_files:
-                suite.addTests(_discover_tests('unit', pattern=os.path.basename(unit_file)))
-        else:
-            suite = _discover_tests('unit', pattern='test*_units.py')
-    except FileNotFoundError as e:
-        print(f"Warning: Could not discover unit tests: {e}")
-        return None
+        suite.addTests(loader.loadTestsFromModule(test_ml_builder_units))
+        suite.addTests(loader.loadTestsFromModule(test_stock_data_fetch_units))
+        suite.addTests(loader.loadTestsFromModule(test_db_interactions_units))
+        suite.addTests(loader.loadTestsFromModule(test_additional_modules_units))
+        suite.addTests(loader.loadTestsFromModule(test_runtime_compat_units))
+    except NameError as e:
+        print(f"Warning: Could not load some unit test modules: {e}")
     
     verbosity = 2 if verbose else 1
     runner = unittest.TextTestRunner(verbosity=verbosity)

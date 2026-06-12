@@ -40,30 +40,23 @@ available on the target machine.
 | Requirement | Version / Notes |
 |---|---|
 | **Git** | 2.30+ recommended |
-| **conda** or **mamba** | Package / environment manager (Miniconda or Mambaforge) |
-| **MySQL Server** | 8.0+ — The application requires a running MySQL instance |
-| **MySQL client tools** | `mysql` CLI for executing DDL scripts |
-| **NVIDIA GPU Driver** | 470+ *(only if using TensorFlow GPU on the Py 3.10 environment)* |
-| **NVIDIA CUDA Toolkit** | **11.2** *(only for TensorFlow 2.10 GPU)* |
-| **NVIDIA cuDNN** | **8.1** *(only for TensorFlow 2.10 GPU)* |
-| **Python 3.12** | Primary environment (data pipeline, Streamlit, scikit-learn models) |
-| **Python 3.10** | Legacy environment (TensorFlow 2.10 GPU — LSTM/TCN training only) |
+| **Docker Desktop / Docker Engine** | Docker Desktop 4.0+ on Windows/macOS or Docker Engine 20.10+ on Linux |
+| **Docker Compose V2** | Required for the multi-container workflow |
+| **NVIDIA GPU Driver** | Current driver with WSL2 GPU support enabled |
+| **NVIDIA Container Toolkit** | Required for the GPU-backed `ml` service |
+| **Python 3.12** | Primary runtime for app and ML containers |
 
-> **Windows users:** TensorFlow 2.10 is the *last* version with native Windows GPU support.
-> For TensorFlow ≥ 2.11 GPU on Windows you must use WSL2.
+> **Windows users:** The supported setup is **Docker Desktop + WSL2 backend + NVIDIA GPU passthrough**.
 
 ### Quick validation
 
 ```bash
-# Verify conda
-conda --version
+# Verify Docker
+docker --version
+docker compose version
 
-# Verify MySQL
-mysql --version
-
-# Verify GPU (optional)
+# Verify GPU
 nvidia-smi          # Shows GPU + driver
-nvcc --version      # Shows CUDA toolkit
 ```
 
 ---
@@ -278,7 +271,7 @@ pipeline_config.py
 │   └── tf_log_level: str = '2'
 │
 └── DatabaseConfig         (loaded from dev.env)
-    ├── DB_HOST, DB_USER, DB_PASS, DB_NAME
+    ├── DB_HOST, DB_USER, DB_PASSWORD, DB_NAME
 ```
 
 ### 3.2 Rules
@@ -559,7 +552,7 @@ Create `dev.env` in the project root:
 ```ini
 DB_HOST=localhost
 DB_USER=stock_user
-DB_PASS=your_password
+DB_PASSWORD=your_password
 DB_NAME=stock_portefolio_builder
 ```
 
@@ -593,7 +586,7 @@ ALTER TABLE model_hyperparameters
 
 ### Step 1.1: Secrets Loader (`fetch_secrets.py`)
 
-- Load `DB_HOST`, `DB_USER`, `DB_PASS`, `DB_NAME` from `dev.env` using `python-dotenv`.
+- Load `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` from `dev.env` using `python-dotenv`.
 - Expose as module-level variables.
 - **Test:** Verify `ValueError` raised if any variable is missing.
 
@@ -1587,120 +1580,66 @@ eliminates manual prerequisite installation and provides reproducible builds.
 ```
 docker-compose.yml
 ├── db           (MySQL 8.0)     ─ port 3306
-├── app-cpu      (Python 3.12)   ─ data pipeline + Streamlit + sklearn models
-└── app-gpu      (Python 3.10)   ─ LSTM/TCN training (nvidia runtime)
+├── app         (Python 3.12)   ─ data pipeline + Streamlit + portfolio workflows
+└── ml          (Python 3.12)   ─ GPU-backed TensorFlow training and prediction
 ```
 
-### 16.2 Dockerfile — CPU Application (`Dockerfile.cpu`)
+### 16.2 Dockerfiles
 
-```dockerfile
-FROM python:3.12-slim
+- `Dockerfile.app` — Python 3.12 base application runtime
+- `Dockerfile.ml` — Python 3.12 CPU-only compatibility build for ML tasks
+- `Dockerfile.ml.gpu` — Python 3.12 GPU-backed TensorFlow 2.21 ML runtime
 
-# System dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    default-mysql-client \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-COPY requirements_PY_3_12.txt .
-RUN pip install --no-cache-dir -r requirements_PY_3_12.txt
-
-COPY . .
-
-# Streamlit port
-EXPOSE 8501
-
-# Default: run Streamlit GUI
-CMD ["streamlit", "run", "streamlit_app.py", "--server.port=8501", "--server.address=0.0.0.0"]
-```
-
-### 16.3 Dockerfile — GPU Application (`Dockerfile.gpu`)
-
-```dockerfile
-FROM nvidia/cuda:11.2.2-cudnn8-runtime-ubuntu20.04
-
-# Avoid interactive prompts
-ENV DEBIAN_FRONTEND=noninteractive
-
-# Python 3.10 + system deps
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    software-properties-common git default-mysql-client \
-    && add-apt-repository ppa:deadsnakes/ppa \
-    && apt-get update \
-    && apt-get install -y python3.10 python3.10-venv python3.10-dev python3-pip \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN python3.10 -m pip install --upgrade pip
-
-WORKDIR /app
-COPY requirements_PY_3_10.txt .
-RUN python3.10 -m pip install --no-cache-dir -r requirements_PY_3_10.txt
-
-COPY . .
-
-# Default: run model trainer
-CMD ["python3.10", "model_trainer.py"]
-```
-
-### 16.4 Docker Compose (`docker-compose.yml`)
+### 16.3 Docker Compose (`docker-compose.yml`)
 
 ```yaml
-version: "3.9"
-
 services:
   db:
     image: mysql:8.0
     environment:
-      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASS:-rootpassword}
-      MYSQL_DATABASE: stock_portefolio_builder
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${DB_NAME:-stock_portefolio_builder}
       MYSQL_USER: ${DB_USER:-stock_user}
-      MYSQL_PASSWORD: ${DB_PASS:-stock_pass}
-    ports:
-      - "3306:3306"
+      MYSQL_PASSWORD: ${DB_PASSWORD:-stock_pass}
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./database_files/ddl.sql:/docker-entrypoint-initdb.d/01-schema.sql
-      - ./database_files/migrate_add_quarterly_tables.sql:/docker-entrypoint-initdb.d/02-quarterly.sql
-      - ./database_files/migrate_add_hyperparameter_storage.sql:/docker-entrypoint-initdb.d/03-hyperparams.sql
-      - ./database_files/migrate_add_prediction_mc_tables.sql:/docker-entrypoint-initdb.d/04-predictions.sql
-      - ./database_files/migrate_add_financial_date_used.sql:/docker-entrypoint-initdb.d/05-findate.sql
-      - ./database_files/migrate_add_quarterly_fetch_metadata.sql:/docker-entrypoint-initdb.d/06-quarterly-meta.sql
+      - ./docker/mysql-init/01-import-schema-or-backup.sh:/docker-entrypoint-initdb.d/01-import-schema-or-backup.sh:ro
+      - ./:/seed-repo:ro
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${DB_ROOT_PASSWORD:-rootpassword}"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 20
 
-  app-cpu:
+  app:
     build:
       context: .
-      dockerfile: Dockerfile.cpu
+      dockerfile: Dockerfile.app
     depends_on:
       db:
         condition: service_healthy
     environment:
       DB_HOST: db
       DB_USER: ${DB_USER:-stock_user}
-      DB_PASS: ${DB_PASS:-stock_pass}
-      DB_NAME: stock_portefolio_builder
+      DB_PASSWORD: ${DB_PASSWORD:-stock_pass}
+      DB_NAME: ${DB_NAME:-stock_portefolio_builder}
     ports:
       - "8501:8501"
     volumes:
       - ./:/app
 
-  app-gpu:
+  ml:
     build:
       context: .
-      dockerfile: Dockerfile.gpu
+      dockerfile: Dockerfile.ml.gpu
     depends_on:
       db:
         condition: service_healthy
     environment:
       DB_HOST: db
       DB_USER: ${DB_USER:-stock_user}
-      DB_PASS: ${DB_PASS:-stock_pass}
-      DB_NAME: stock_portefolio_builder
+      DB_PASSWORD: ${DB_PASSWORD:-stock_pass}
+      DB_NAME: ${DB_NAME:-stock_portefolio_builder}
     volumes:
       - ./:/app
     deploy:
@@ -1708,75 +1647,71 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
+              count: all
               capabilities: [gpu]
-    profiles:
-      - gpu   # Only started with: docker compose --profile gpu up app-gpu
 
 volumes:
   mysql_data:
 ```
 
-### 16.5 Running with Docker
+### 16.4 Running with Docker
 
 ```bash
-# 1. Start MySQL + CPU app (Streamlit + sklearn models)
-docker compose up -d db app-cpu
+# 1. Copy the example env file and adjust passwords if needed
+cp dev.env.example dev.env
 
-# 2. Run data pipeline inside the CPU container
-docker compose exec app-cpu python stock_orchestrator.py
+# 2. Start MySQL, Streamlit app, and the GPU ML container
+docker compose --env-file dev.env up -d db app ml
 
-# 3. Run model training (CPU-only models: RF, XGBoost, Ridge, SVR)
-docker compose exec app-cpu python model_trainer.py --use-lstm  # Uses CPU LSTM fallback
+# 3. If database_backup.sql exists in the repo root, MySQL imports it automatically.
+#    Otherwise the DB falls back to database_files/ddl.sql on first startup.
 
-# 4. (Optional) Run GPU model training
-docker compose --profile gpu up -d app-gpu
-docker compose exec app-gpu python3.10 model_trainer.py
+# 4. Run data pipeline inside the app container
+docker compose exec app python stock_orchestrator.py
 
-# 5. Run price predictions
-docker compose exec app-cpu python price_predictor.py
+# 5. Run GPU-backed model training and predictions
+docker compose exec ml python model_trainer.py
+docker compose exec ml python price_predictor.py
 
 # 6. Build portfolio
-docker compose exec app-cpu python portfolio_builder.py
+docker compose exec app python portfolio_builder.py
 
 # 7. Access Streamlit GUI
 # Open http://localhost:8501 in your browser
 ```
 
-### 16.6 What Changes in Docker Mode
+### 16.5 What Changes in Docker Mode
 
 | Area | Without Docker | With Docker |
 |---|---|---|
-| **MySQL** | Install + configure manually | Auto-started container, schema auto-loaded |
-| **Python envs** | Two conda envs to create | Two Dockerfiles handle it |
-| **CUDA / cuDNN** | Manual driver + toolkit install | NVIDIA base image includes them |
+| **MySQL** | Install + configure manually | Auto-started container, imports `database_backup.sql` when present |
+| **Python envs** | Manual Python + pip setup | Dockerfiles provide Python 3.12 app + GPU ML runtimes |
+| **CUDA / cuDNN** | Manual driver + toolkit install | GPU ML container handles the TensorFlow runtime |
 | **`dev.env`** | Points to `localhost` | Points to `db` (Docker service name) |
 | **Streamlit** | `streamlit run ...` | Runs inside container, exposed on `:8501` |
 | **File paths** | Absolute local paths | Volume-mounted at `/app` |
-| **GPU access** | Native GPU access | Requires `nvidia-docker` / `nvidia-container-toolkit` |
+| **GPU access** | Native GPU access | Requires Docker Desktop + WSL2 + NVIDIA Container Toolkit |
 
-### 16.7 Docker Prerequisites
+### 16.6 Docker Prerequisites
 
 | Requirement | Version / Notes |
 |---|---|
-| **Docker Desktop** | 4.0+ (Windows/Mac) or **Docker Engine** 20.10+ (Linux) |
-| **Docker Compose** | V2 (included in Docker Desktop; `docker compose` not `docker-compose`) |
-| **NVIDIA Container Toolkit** | *(GPU only)* — enables `--gpus` flag in Docker |
-| **Disk space** | ~8 GB for images (MySQL + Python + CUDA) |
+| **Docker Desktop** | 4.0+ with **WSL2 backend enabled** on Windows |
+| **Docker Compose** | V2 (use `docker compose`) |
+| **NVIDIA Container Toolkit** | Required because GPU training is mandatory |
+| **Disk space** | ~8 GB for images (MySQL + Python + TensorFlow) |
 
-> **Important:** On Windows, Docker Desktop must be set to use **WSL 2 backend** for
-> Linux containers.  GPU passthrough to Docker requires WSL 2 + NVIDIA Container Toolkit.
+> **Important:** For Windows hosts, this repository expects **Docker Desktop + WSL2 + GPU passthrough**.
 
-### 16.8 Build Instructions Adjustments for Docker
+### 16.7 Build Instructions Adjustments for Docker
 
 When using Docker, the following sections change:
 
-- **§0 Prerequisites** — only Docker (+ NVIDIA Container Toolkit for GPU) is needed.
-  MySQL, conda, Python, CUDA, and cuDNN are all handled by containers.
+- **§0 Prerequisites** — Docker, WSL2, and NVIDIA GPU support replace manual MySQL/CUDA setup.
 - **Phase 0** — replace conda environment creation with `docker compose build`.
-  Replace manual MySQL setup with `docker compose up db`.
-- **`dev.env`** — set `DB_HOST=db` instead of `DB_HOST=localhost`.
-- **All `python` commands** — prefix with `docker compose exec app-cpu` or `app-gpu`.
+  Replace manual MySQL setup with `docker compose --env-file dev.env up -d db app ml`.
+- **`dev.env`** — use `DB_PASSWORD`, and set `DB_HOST=db`.
+- **All `python` commands** — prefix with `docker compose exec app` or `docker compose exec ml`.
 
 The rest of the build instructions (Phase 1–5, §14, §15) remain unchanged — the code
 itself is the same regardless of whether it runs in Docker or natively.
@@ -1886,7 +1821,7 @@ for name, module in checks.items():
 "
 
 # ─── Python 3.10 environment (GPU only) ───
-# conda activate stock_env_gpu  (or docker compose exec app-gpu)
+# conda activate stock_env_gpu  (or docker compose exec ml)
 python3 -c "
 import sys
 print(f'Python: {sys.version}')
@@ -1925,7 +1860,7 @@ except Exception as e:
 > **Prompt for AI:** After database setup, verify all required tables exist.
 
 ```bash
-mysql -u ${DB_USER:-stock_user} -p${DB_PASS} -h ${DB_HOST:-localhost} \
+mysql -u ${DB_USER:-stock_user} -p${DB_PASSWORD} -h ${DB_HOST:-localhost} \
     ${DB_NAME:-stock_portefolio_builder} -e "
 SELECT
   CASE
@@ -1965,7 +1900,7 @@ python model_trainer.py --max-stocks 1
 python price_predictor.py --max-stocks 1
 
 # 4. Verify data landed in DB
-mysql -u ${DB_USER} -p${DB_PASS} -h ${DB_HOST} ${DB_NAME} -e "
+mysql -u ${DB_USER} -p${DB_PASSWORD} -h ${DB_HOST} ${DB_NAME} -e "
 SELECT 'stock_price_data' AS tbl, COUNT(*) AS rows FROM stock_price_data WHERE ticker='AAPL'
 UNION ALL
 SELECT 'model_hyperparameters', COUNT(*) FROM model_hyperparameters WHERE ticker='AAPL'

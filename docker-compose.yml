@@ -1,0 +1,63 @@
+services:
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${DB_NAME:-stock_portefolio_builder}
+      MYSQL_USER: ${DB_USER:-stock_user}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-stock_pass}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./docker/mysql-init/01-import-schema-or-backup.sh:/docker-entrypoint-initdb.d/01-import-schema-or-backup.sh:ro
+      - ./:/seed-repo:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${DB_ROOT_PASSWORD:-rootpassword}"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_USER: ${DB_USER:-stock_user}
+      DB_PASSWORD: ${DB_PASSWORD:-stock_pass}
+      DB_NAME: ${DB_NAME:-stock_portefolio_builder}
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./:/app
+
+  ml:
+    build:
+      context: .
+      dockerfile: Dockerfile.ml.gpu
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_USER: ${DB_USER:-stock_user}
+      DB_PASSWORD: ${DB_PASSWORD:-stock_pass}
+      DB_NAME: ${DB_NAME:-stock_portefolio_builder}
+    volumes:
+      - ./:/app
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  mysql_data:

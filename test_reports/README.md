@@ -199,6 +199,14 @@ python test_reports/comprehensive_test_runner.py --report
 python test_reports/comprehensive_test_runner.py --verbose
 ```
 
+**Dockerized validation:**
+```bash
+docker compose --env-file dev.env up -d db app ml
+docker compose exec app python test_reports/comprehensive_test_runner.py --category integration
+docker compose exec ml python test_reports/comprehensive_test_runner.py --category unit
+docker compose exec ml python test_reports/comprehensive_test_runner.py --verbose
+```
+
 See [COMPREHENSIVE_TEST_SUITE_README.md](COMPREHENSIVE_TEST_SUITE_README.md) for complete documentation.
 
 ### Archived Tests (Legacy)
@@ -287,5 +295,4 @@ python test_reports/populate_all_tables.py
 **Active Test Files:** 9 comprehensive test modules  
 **Total Test Count:** 305+ tests  
 **Test Success Rate:** ✅ Production Ready
-
 

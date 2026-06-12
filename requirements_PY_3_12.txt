@@ -1,8 +1,12 @@
-#OPTIMIZED REQUIREMENTS FILE
+# OPTIMIZED REQUIREMENTS FILE
 #
-#Python Version: 3.12 (Maximum compatibility based on imported libraries)
+# Python Version: 3.12
 #
-#Purpose: To fetch stock data and create additional measurements related to each stock using pandas and yfinance.
+# Purpose: Base runtime for data fetching, portfolio construction, Streamlit,
+# and general application workflows.
+#
+# For ML training and prediction on Python 3.12, install
+# requirements_PY_3_12_ml.txt in addition to this base file.
 #
 #CORE SCIENTIFIC / DL STACK
 #

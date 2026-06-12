@@ -50,6 +50,11 @@ def _env_bool(key: str, default: bool) -> bool:
     return val.lower() in ("1", "true", "yes")
 
 
+def _get_db_password() -> str:
+    """Return the database password using the normalized env var with fallback."""
+    return os.environ.get("DB_PASSWORD") or os.environ.get("DB_PASS", "")
+
+
 # ---------------------------------------------------------------------------
 # Database
 # ---------------------------------------------------------------------------
@@ -57,7 +62,7 @@ def _env_bool(key: str, default: bool) -> bool:
 class DatabaseConfig:
     host: str = field(default_factory=lambda: os.environ.get("DB_HOST", "127.0.0.1"))
     user: str = field(default_factory=lambda: os.environ.get("DB_USER", "root"))
-    password: str = field(default_factory=lambda: os.environ.get("DB_PASSWORD", ""))
+    password: str = field(default_factory=_get_db_password)
     name: str = field(default_factory=lambda: os.environ.get("DB_NAME", "stock_portefolio_builder"))
 
 
