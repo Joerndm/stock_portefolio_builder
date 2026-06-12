@@ -198,7 +198,7 @@ from tensorflow.keras.optimizers import Adam, RMSprop
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from tensorflow.keras import regularizers
 import keras_tuner as kt
-from keras_tuner.tuners import Sklearn
+from keras_tuner.tuners import SklearnTuner as Sklearn
 
 matplotlib.use('Agg')
 pd.set_option('future.no_silent_downcasting', True)
@@ -1896,7 +1896,7 @@ def tune_lstm_model(stock, x_train_lstm, y_train_lstm, x_val_lstm, y_val_lstm, t
                     )
                 )
             elif lr_schedule_choice == "exp_decay":
-                from keras.callbacks import LearningRateScheduler
+                from tensorflow.keras.callbacks import LearningRateScheduler
                 initial_lr = hp.get("learning_rate")
                 decay_rate = hp.Float("decay_rate", 0.9, 0.99, step=0.01)
 

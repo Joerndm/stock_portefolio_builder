@@ -41,10 +41,10 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 import db_interactions
-import ml_builder
 import monte_carlo_sim
 from gpu_runtime_utils import configure_tensorflow_gpu
 from blacklist_manager import get_blacklist_manager
+from ml_runtime_loader import load_ml_builder_module
 from model_pipeline_preprocessing import prepare_modeling_data
 from pipeline_config import get_gpu_config, get_data_config, get_ml_config, get_pred_config
 from prediction_cache_contract import PredictionCacheContractError, require_prediction_cache
@@ -212,6 +212,7 @@ def predict_single_stock(
     start_time = time.time()
 
     try:
+        ml_builder = load_ml_builder_module()
         cache_state = require_prediction_cache(
             stock_symbol,
             required_model_types=ml_cfg.required_model_types,

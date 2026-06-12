@@ -172,6 +172,7 @@ Improvement_recommendations.md
 output.txt
 migration_output.txt
 validation_output.txt
+database_backup.sql
 data_validation_report.json
 index_cache.json
 monthly_index_fetch_cache.json

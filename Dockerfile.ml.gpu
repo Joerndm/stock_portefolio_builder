@@ -1,0 +1,20 @@
+FROM tensorflow/tensorflow:2.21.0-gpu
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    default-mysql-client \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements_PY_3_12.txt requirements_PY_3_12_ml.txt ./
+RUN python -m pip install --upgrade pip \
+    && python -m pip install --no-cache-dir -r requirements_PY_3_12_ml.txt
+
+COPY . .
+
+CMD ["sleep", "infinity"]
