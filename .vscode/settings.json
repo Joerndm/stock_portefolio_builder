@@ -1,3 +1,6 @@
 {
-    "codeQL.githubDatabase.update": "never"
+    "codeQL.githubDatabase.update": "never",
+    "python.defaultInterpreterPath": "C:\\Users\\joern\\anaconda3\\envs\\tf_gpu_py_3_10\\python.exe",
+    "python.terminal.activateEnvironment": true,
+    "codeQL.githubDatabase.download": "never"
 }

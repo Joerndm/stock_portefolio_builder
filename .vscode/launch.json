@@ -1,0 +1,50 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Stock Orchestrator (Full)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/stock_orchestrator.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": ["--workers", "4"]
+        },
+        {
+            "name": "Stock Orchestrator (C25 only)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/stock_orchestrator.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": ["--indices", "C25", "--workers", "2"]
+        },
+        {
+            "name": "Stock Orchestrator (Update only)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/stock_orchestrator.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": ["--update-only", "--workers", "2"]
+        },
+        {
+            "name": "Stock Orchestrator (Specific Tickers)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/stock_orchestrator.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": ["--ticker", "AAPL", "MSFT", "GOOGL"]
+        },
+        {
+            "name": "Stock Orchestrator (Force Full)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/stock_orchestrator.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": ["--force-full", "--indices", "C25", "--workers", "2"]
+        }
+    ]
+}

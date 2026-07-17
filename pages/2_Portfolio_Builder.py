@@ -50,7 +50,7 @@ with st.sidebar:
     risk_level = RiskLevel(risk_level_str)
 
     # Investment strategy
-    strategy_options = {STRATEGY_LABELS[s]: s for s in InvestmentStrategy}
+    strategy_options = {STRATEGY_LABELS[s.value]: s for s in InvestmentStrategy}
     strategy_label = st.selectbox(
         "Investment Strategy",
         options=list(strategy_options.keys()),
@@ -58,7 +58,7 @@ with st.sidebar:
         help="Blends a fundamental overlay (30 %) with ML predictions (70 %)"
     )
     strategy = strategy_options[strategy_label]
-    st.caption(STRATEGY_DESCRIPTIONS[strategy])
+    st.caption(STRATEGY_DESCRIPTIONS[strategy.value])
 
     investment_years = st.slider(
         "Investment Horizon (years)",

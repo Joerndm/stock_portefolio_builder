@@ -16,7 +16,7 @@ ENV_OVERRIDE_VARIABLES = {
 
 DEFAULT_PYTHON_EXECUTABLES = {
     'py310': os.path.join('C:\\Users\\joern\\anaconda3\\envs\\tf_gpu_py_3_10', 'python.exe'),
-    'py312': os.path.join('C:\\Users\\joern\\anaconda3\\envs\\fetch_stock_data_py_3_12', 'python.exe'),
+    'py312': os.path.join('C:\\Users\\joern\\anaconda3\\envs\\fetch_Stock_data_3_12', 'python.exe'),
 }
 
 CATEGORY_ENVIRONMENTS = {

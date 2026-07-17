@@ -34,6 +34,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple, Set
 from dateutil.relativedelta import relativedelta
+from sqlalchemy import text as sa_text
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -106,6 +107,7 @@ import db_connectors
 import db_interactions
 from financial_data_utils import drop_all_null_columns
 from technical_patterns import add_all_technical_patterns
+from ticker_cleanup_utils import canonicalize_ticker
 
 # Cache file to track when Wikipedia was last fetched
 MONTHLY_FETCH_CACHE_FILE = os.path.join(
@@ -230,16 +232,62 @@ class StockDataOrchestrator:
         self._monthly_fetch_cache['indices_fetched'] = self.indices
         self._save_monthly_fetch_cache()
 
+    @staticmethod
+    def _is_running_in_container() -> bool:
+        """Best-effort runtime check for Docker/container environments."""
+        return os.path.exists('/.dockerenv')
+
+    def _probe_database_connection(self, db_engine):
+        """Force a lightweight DB round-trip so startup status is accurate."""
+        with db_engine.connect() as conn:
+            conn.execute(sa_text("SELECT 1"))
+
+    def _build_db_connection_hint(self, db_host: Optional[str], error_message: str) -> Optional[str]:
+        """Return actionable troubleshooting guidance for common DB failures."""
+        if not db_host:
+            return "Set DB_HOST, DB_USER, DB_PASSWORD (or DB_PASS), and DB_NAME before running."
+
+        lowered_error = (error_message or "").lower()
+        if db_host == 'db' and not self._is_running_in_container() and 'getaddrinfo' in lowered_error:
+            return (
+                "DB_HOST=db resolves only inside docker compose networking. "
+                "Use docker compose exec app python stock_orchestrator.py, "
+                "or set DB_HOST=127.0.0.1 for host-local runs."
+            )
+
+        return None
+
     def _connect_database(self):
         """Establish database connection."""
+        db_host = None
         try:
             db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
-            self.db_con = db_connectors.pandas_mysql_connector(
+            missing_keys = []
+            if not db_host:
+                missing_keys.append('DB_HOST')
+            if not db_user:
+                missing_keys.append('DB_USER')
+            if not db_pass:
+                missing_keys.append('DB_PASSWORD/DB_PASS')
+            if not db_name:
+                missing_keys.append('DB_NAME')
+            if missing_keys:
+                raise ValueError(
+                    "Missing required database settings: "
+                    + ", ".join(missing_keys)
+                )
+
+            db_engine = db_connectors.pandas_mysql_connector(
                 db_host, db_user, db_pass, db_name
             )
+            self._probe_database_connection(db_engine)
+            self.db_con = db_engine
             print("✓ Database connection established")
         except Exception as e:
             print(f"⚠️  Database connection failed: {e}")
+            hint = self._build_db_connection_hint(db_host, str(e))
+            if hint:
+                print(f"   ↳ {hint}")
             self.db_con = None
 
     def _reconnect_database(self):
@@ -369,6 +417,43 @@ class StockDataOrchestrator:
         except (ValueError, TypeError):
             return {'status': 'invalid_cache', 'last_fetch': None, 'will_fetch': True}
 
+    def _repair_legacy_tickers(self, tickers: List[str]) -> List[str]:
+        """Canonicalize tickers and migrate obvious legacy aliases in the database."""
+        repaired_tickers = []
+        seen = set()
+
+        for original_ticker in tickers:
+            canonical_ticker = canonicalize_ticker(original_ticker)
+            if not canonical_ticker:
+                continue
+
+            if canonical_ticker != original_ticker:
+                print(f"   ↳ Legacy ticker detected: {original_ticker} → {canonical_ticker}")
+                try:
+                    migration = db_interactions.migrate_legacy_ticker(
+                        original_ticker,
+                        canonical_ticker,
+                        db_con=self.db_con,
+                    )
+                    if migration.get('changes'):
+                        print(
+                            f"   ↳ Migrated legacy database rows for {original_ticker} "
+                            f"to {canonical_ticker}"
+                        )
+                except Exception as migration_error:
+                    print(
+                        f"   ⚠️  Could not migrate legacy ticker {original_ticker}: "
+                        f"{migration_error}"
+                    )
+
+            if canonical_ticker in seen or self.blacklist.is_blacklisted(canonical_ticker):
+                continue
+
+            seen.add(canonical_ticker)
+            repaired_tickers.append(canonical_ticker)
+
+        return repaired_tickers
+
     def _handle_ticker_error(self, ticker: str, error: Exception, 
                               error_type: str = "error") -> bool:
         """
@@ -496,13 +581,21 @@ class StockDataOrchestrator:
             stale_candidates = []
             for ticker in sorted(disappeared):
                 try:
-                    info = yf.Ticker(ticker).info
+                    lookup_ticker = canonicalize_ticker(ticker)
+                    info = yf.Ticker(lookup_ticker).info
+                    resolved_symbol = canonicalize_ticker(info.get('symbol', lookup_ticker))
                     price = info.get('regularMarketPrice')
                     if price is None:
                         stale_candidates.append((ticker, 'no_data'))
                     # If API returns data but with a different symbol, it was renamed
-                    elif info.get('symbol') and info['symbol'] != ticker:
-                        stale_candidates.append((ticker, f"renamed→{info['symbol']}"))
+                    elif resolved_symbol != lookup_ticker:
+                        migration = db_interactions.migrate_legacy_ticker(
+                            ticker,
+                            resolved_symbol,
+                            db_con=self.db_con,
+                        )
+                        if migration.get('changes'):
+                            print(f"     {ticker}: migrated to {resolved_symbol}")
                 except Exception:
                     stale_candidates.append((ticker, 'api_error'))
 
@@ -630,6 +723,38 @@ class StockDataOrchestrator:
                 return False, None
             return False, None
 
+    def _sanitize_price_frame(self, ticker: str, price_df: pd.DataFrame,
+                              context: str) -> pd.DataFrame:
+        """Drop unusable OHLC rows before feature recalculation."""
+        if price_df is None or price_df.empty:
+            return price_df
+
+        sanitized_df = price_df.loc[:, ~price_df.columns.duplicated()].copy()
+        if 'date' in sanitized_df.columns:
+            sanitized_df['date'] = pd.to_datetime(sanitized_df['date'])
+
+        critical_cols = [
+            'date', 'ticker', 'close_Price', 'open_Price', 'high_Price', 'low_Price'
+        ]
+        existing_critical_cols = [col for col in critical_cols if col in sanitized_df.columns]
+        before_count = len(sanitized_df)
+
+        if existing_critical_cols:
+            sanitized_df = sanitized_df.dropna(subset=existing_critical_cols)
+
+        if 'date' in sanitized_df.columns:
+            sanitized_df = sanitized_df.drop_duplicates(subset=['date'], keep='last')
+            sanitized_df = sanitized_df.sort_values('date').reset_index(drop=True)
+
+        dropped_rows = before_count - len(sanitized_df)
+        if dropped_rows > 0:
+            print(
+                f"   ↳ Dropped {dropped_rows} invalid price rows for {ticker} "
+                f"during {context}"
+            )
+
+        return sanitized_df
+
     def _update_price_data(self, ticker: str, stock_info: dict,
                            is_index: bool) -> Tuple[bool, Optional[pd.DataFrame]]:
         """
@@ -727,10 +852,33 @@ class StockDataOrchestrator:
             cols_to_drop = [c for c in indicator_cols if c in stock_price_data_df.columns]
             if cols_to_drop:
                 stock_price_data_df = stock_price_data_df.drop(columns=cols_to_drop)
-            
-            # Deduplicate columns (parallel yfinance downloads can corrupt column structure)
-            stock_price_data_df = stock_price_data_df.loc[:, ~stock_price_data_df.columns.duplicated()]
-            new_stock_price_data_df = new_stock_price_data_df.loc[:, ~new_stock_price_data_df.columns.duplicated()]
+
+            invalid_history_dates = stock_price_data_df.loc[
+                stock_price_data_df[['date', 'close_Price', 'open_Price', 'high_Price', 'low_Price']]
+                .isna()
+                .any(axis=1),
+                'date',
+            ].tolist()
+            if invalid_history_dates:
+                deleted_counts = db_interactions.delete_price_dates_across_related_tables(
+                    ticker,
+                    invalid_history_dates,
+                    db_con=self.db_con,
+                )
+                if deleted_counts:
+                    deleted_total = sum(deleted_counts.values())
+                    print(f"   ↳ Deleted {deleted_total} invalid historical rows across related tables")
+
+            stock_price_data_df = self._sanitize_price_frame(
+                ticker, stock_price_data_df, "historical update preparation"
+            )
+            new_stock_price_data_df = self._sanitize_price_frame(
+                ticker, new_stock_price_data_df, "fresh price fetch"
+            )
+
+            if stock_price_data_df.empty or new_stock_price_data_df.empty:
+                print(f"   ↳ No valid price rows available after sanitation")
+                return True, None
             
             # Concatenate, ensuring no duplicate columns
             combined_df = pd.concat(
@@ -738,10 +886,14 @@ class StockDataOrchestrator:
                 axis=0,
                 ignore_index=True
             )
-            
-            # Remove duplicate rows by date
-            combined_df = combined_df.drop_duplicates(subset=['date'], keep='last')
-            combined_df = combined_df.sort_values('date').reset_index(drop=True)
+
+            combined_df = self._sanitize_price_frame(
+                ticker, combined_df, "indicator recalculation"
+            )
+
+            if combined_df.empty:
+                print(f"   ↳ No valid combined price rows to recalculate")
+                return True, None
             
             # Recalculate all indicators
             combined_df = calculate_period_returns(combined_df)
@@ -1537,6 +1689,8 @@ class StockDataOrchestrator:
                 tickers = all_tickers
             except Exception as e:
                 print(f"⚠️  Could not fetch DB tickers: {e}")
+
+        tickers = self._repair_legacy_tickers(tickers)
 
         print(f"\nProcessing {len(tickers)} tickers...")
 

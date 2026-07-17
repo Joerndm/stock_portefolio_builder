@@ -169,7 +169,7 @@ The comprehensive runner is environment-aware:
 
 By default the runner looks for:
 - Python 3.10 at `C:\Users\joern\anaconda3\envs\tf_gpu_py_3_10\python.exe`
-- Python 3.12 at `C:\Users\joern\anaconda3\envs\fetch_stock_data_py_3_12\python.exe`
+- Python 3.12 at `C:\Users\joern\anaconda3\envs\fetch_Stock_data_3_12\python.exe`
 
 If your local env names differ, override them before running the suite:
 
@@ -206,6 +206,10 @@ docker compose exec app python test_reports/comprehensive_test_runner.py --categ
 docker compose exec ml python test_reports/comprehensive_test_runner.py --category unit
 docker compose exec ml python test_reports/comprehensive_test_runner.py --verbose
 ```
+
+**Docker-env coverage in unit tests:**
+- `test_reports/unit/test_fetch_secrets_units.py` verifies `dev.env` loading plus `DB_PASSWORD` / `DB_PASS` fallback behavior.
+- `test_reports/unit/test_stock_orchestrator_units.py` covers the Docker-host hint behavior for `DB_HOST=db` both inside and outside containers.
 
 See [COMPREHENSIVE_TEST_SUITE_README.md](COMPREHENSIVE_TEST_SUITE_README.md) for complete documentation.
 

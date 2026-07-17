@@ -31,6 +31,7 @@ import tempfile
 from datetime import datetime
 import json
 import io
+import importlib
 
 # Force UTF-8 encoding globally to handle Unicode characters on Windows
 if sys.stdout.encoding != 'utf-8':
@@ -40,6 +41,21 @@ if sys.stderr.encoding != 'utf-8':
 
 # Add parent directory to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+try:
+    from test_reports.test_runner_envs import (
+        CATEGORY_ENVIRONMENTS,
+        TEST_REPORTS_DIR,
+        default_unit_env_plan,
+        resolve_python_executable,
+    )
+except ModuleNotFoundError:
+    from test_runner_envs import (
+        CATEGORY_ENVIRONMENTS,
+        TEST_REPORTS_DIR,
+        default_unit_env_plan,
+        resolve_python_executable,
+    )
 
 # Import all test modules
 try:
@@ -75,6 +91,43 @@ try:
     from data_validation import test_data_quality
 except ImportError:
     print("Warning: Data validation test module could not be imported")
+
+
+def _import_unit_test_module(module_stem):
+    last_error = None
+    for module_name in (
+        f'test_reports.unit.{module_stem}',
+        f'unit.{module_stem}',
+        module_stem,
+    ):
+        try:
+            return importlib.import_module(module_name)
+        except ImportError as error:
+            last_error = error
+
+    raise last_error
+
+
+def _resolve_unit_test_modules(unit_files=None):
+    if unit_files:
+        return [
+            _import_unit_test_module(os.path.splitext(os.path.basename(unit_file))[0])
+            for unit_file in unit_files
+        ]
+
+    loaded_modules = []
+    for module_name in (
+        'test_ml_builder_units',
+        'test_stock_data_fetch_units',
+        'test_db_interactions_units',
+        'test_additional_modules_units',
+        'test_runtime_compat_units',
+    ):
+        module = globals().get(module_name)
+        if module is not None:
+            loaded_modules.append(module)
+
+    return loaded_modules
 
 
 class ComprehensiveTestResult:
@@ -218,14 +271,10 @@ def run_unit_tests(verbose=False, unit_files=None):
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
     
-    # Load all unit test modules
     try:
-        suite.addTests(loader.loadTestsFromModule(test_ml_builder_units))
-        suite.addTests(loader.loadTestsFromModule(test_stock_data_fetch_units))
-        suite.addTests(loader.loadTestsFromModule(test_db_interactions_units))
-        suite.addTests(loader.loadTestsFromModule(test_additional_modules_units))
-        suite.addTests(loader.loadTestsFromModule(test_runtime_compat_units))
-    except NameError as e:
+        for module in _resolve_unit_test_modules(unit_files=unit_files):
+            suite.addTests(loader.loadTestsFromModule(module))
+    except (ImportError, NameError) as e:
         print(f"Warning: Could not load some unit test modules: {e}")
     
     verbosity = 2 if verbose else 1

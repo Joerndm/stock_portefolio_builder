@@ -13,7 +13,7 @@ WORKDIR /app
 
 COPY requirements_PY_3_12.txt requirements_PY_3_12_ml.txt ./
 RUN python -m pip install --upgrade pip \
-    && python -m pip install --no-cache-dir -r requirements_PY_3_12_ml.txt
+    && python -m pip install --no-cache-dir --break-system-packages -r requirements_PY_3_12_ml.txt
 
 COPY . .
 

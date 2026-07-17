@@ -15,3 +15,15 @@ def load_ml_builder_module():
         return import_module("ml_builder")
     except ImportError as exc:
         raise ImportError(ML_RUNTIME_INSTALL_HINT) from exc
+
+
+class LazyMlBuilderProxy:
+    """Lazy proxy that keeps ml_builder patchable in tests without eager imports."""
+
+    def __getattr__(self, name):
+        return getattr(load_ml_builder_module(), name)
+
+
+def create_ml_builder_proxy():
+    """Return a lazy proxy for ml_builder consumers."""
+    return LazyMlBuilderProxy()

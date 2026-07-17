@@ -460,7 +460,7 @@ The comprehensive test runner must use both supported Python environments:
 Default interpreter lookup:
 
 - Python 3.10: `C:\Users\joern\anaconda3\envs\tf_gpu_py_3_10\python.exe`
-- Python 3.12: `C:\Users\joern\anaconda3\envs\fetch_stock_data_py_3_12\python.exe`
+- Python 3.12: `C:\Users\joern\anaconda3\envs\fetch_Stock_data_3_12\python.exe`
 
 Override these paths when local env names differ:
 
@@ -1667,7 +1667,13 @@ docker compose --env-file dev.env up -d db app ml
 #    Otherwise the DB falls back to database_files/ddl.sql on first startup.
 
 # 4. Run data pipeline inside the app container
-docker compose exec app python stock_orchestrator.py
+docker compose exec app python stock_orchestrator.py --workers 2
+
+# 4a. Update only the tickers already stored in the Docker-hosted DB
+docker compose exec app python stock_orchestrator.py --update-only --workers 2
+
+# 4b. Update a small manual subset
+docker compose exec app python stock_orchestrator.py --ticker AAPL MSFT NOVO-B.CO --workers 2
 
 # 5. Run GPU-backed model training and predictions
 docker compose exec ml python model_trainer.py

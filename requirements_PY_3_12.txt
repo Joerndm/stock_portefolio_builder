@@ -36,6 +36,7 @@ SQLAlchemy>=2.0.30
 mysql-connector-python>=8.3.0
 python-dotenv>=1.0.1
 oauthlib>=3.3.1
+psutil>=6.1.0
 #
 #DEPENDENCIES (Included to prevent conflicts and resemble a frozen list)
 #

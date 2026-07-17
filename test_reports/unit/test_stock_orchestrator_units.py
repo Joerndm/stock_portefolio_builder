@@ -122,5 +122,212 @@ class TestStockDataOrchestratorProcessRatioData(unittest.TestCase):
         self.assertIsNone(result)
 
 
+class TestStockDataOrchestratorUpdatePriceData(unittest.TestCase):
+    """Focused coverage for incremental price update sanitation."""
+
+    def _make_orchestrator(self):
+        orchestrator = stock_orchestrator.StockDataOrchestrator.__new__(stock_orchestrator.StockDataOrchestrator)
+        orchestrator._validate_price_continuity = Mock(side_effect=lambda ticker, price_df: price_df)
+        return orchestrator
+
+    @patch("stock_orchestrator.db_interactions.export_stock_price_data")
+    @patch("stock_orchestrator.db_interactions.delete_price_dates_across_related_tables")
+    @patch("stock_orchestrator.db_interactions.import_stock_price_data")
+    @patch("market_hours_utils.should_fetch_new_data")
+    @patch("stock_data_fetch.fetch_stock_price_data")
+    @patch("stock_data_fetch.calculate_period_returns")
+    @patch("stock_data_fetch.add_technical_indicators")
+    @patch("stock_data_fetch.add_volume_indicators")
+    @patch("stock_data_fetch.add_volatility_indicators")
+    @patch("stock_data_fetch.calculate_moving_averages")
+    @patch("stock_data_fetch.calculate_standard_diviation_value")
+    @patch("stock_data_fetch.calculate_bollinger_bands")
+    @patch("stock_data_fetch.calculate_momentum")
+    @patch("stock_orchestrator.add_all_technical_patterns")
+    def test_update_price_data_drops_invalid_historical_rows_before_recalculation(
+        self,
+        mock_add_patterns,
+        mock_momentum,
+        mock_bollinger,
+        mock_std,
+        mock_ma,
+        mock_volatility,
+        mock_volume,
+        mock_technical,
+        mock_returns,
+        mock_fetch_price,
+        mock_should_fetch,
+        mock_import_price,
+        mock_delete_bad_dates,
+        mock_export_price,
+    ):
+        orchestrator = self._make_orchestrator()
+        orchestrator.db_con = object()
+
+        latest_row = pd.DataFrame(
+            {
+                "date": [pd.Timestamp("2026-05-31")],
+                "ticker": ["AAPL"],
+                "close_Price": [100.0],
+                "open_Price": [99.0],
+                "high_Price": [101.0],
+                "low_Price": [98.5],
+                "trade_Volume": [1_000_000],
+            }
+        )
+        historical_rows = pd.DataFrame(
+            {
+                "date": [pd.Timestamp("2026-05-30"), pd.Timestamp("2026-05-31")],
+                "ticker": ["AAPL", "AAPL"],
+                "close_Price": [None, 100.0],
+                "open_Price": [98.0, 99.0],
+                "high_Price": [101.0, 101.0],
+                "low_Price": [97.5, 98.5],
+                "trade_Volume": [900_000, 1_000_000],
+                "1D": [0.01, 0.02],
+            }
+        )
+        fresh_rows = pd.DataFrame(
+            {
+                "date": [pd.Timestamp("2026-06-01")],
+                "ticker": ["AAPL"],
+                "close_Price": [102.0],
+                "open_Price": [101.0],
+                "high_Price": [103.0],
+                "low_Price": [100.5],
+                "trade_Volume": [1_100_000],
+            }
+        )
+
+        mock_import_price.side_effect = [latest_row, historical_rows]
+        mock_should_fetch.return_value = (True, datetime.date(2026, 6, 1), "fetch")
+        mock_fetch_price.return_value = fresh_rows
+        mock_delete_bad_dates.return_value = {"stock_price_data": 1, "stock_ratio_data": 1}
+
+        def passthrough(df):
+            return df
+
+        mock_returns.side_effect = passthrough
+        mock_technical.side_effect = passthrough
+        mock_volume.side_effect = passthrough
+        mock_volatility.side_effect = passthrough
+        mock_ma.side_effect = passthrough
+        mock_std.side_effect = passthrough
+        mock_bollinger.side_effect = passthrough
+        mock_momentum.side_effect = passthrough
+        mock_add_patterns.side_effect = passthrough
+
+        success, exported_df = orchestrator._update_price_data("AAPL", stock_info={}, is_index=False)
+
+        self.assertTrue(success)
+        self.assertIsNotNone(exported_df)
+        self.assertEqual(list(exported_df["date"]), [pd.Timestamp("2026-06-01")])
+        self.assertEqual(exported_df["close_Price"].tolist(), [102.0])
+
+        recalculation_input = mock_returns.call_args.args[0]
+        self.assertEqual(recalculation_input["date"].tolist(), [pd.Timestamp("2026-05-31"), pd.Timestamp("2026-06-01")])
+        self.assertFalse(recalculation_input["close_Price"].isna().any())
+        mock_delete_bad_dates.assert_called_once()
+        mock_export_price.assert_called_once()
+
+    @patch("stock_orchestrator.db_interactions.migrate_legacy_ticker")
+    def test_repair_legacy_tickers_canonicalizes_and_deduplicates(self, mock_migrate):
+        orchestrator = self._make_orchestrator()
+        orchestrator.blacklist = Mock()
+        orchestrator.blacklist.is_blacklisted.return_value = False
+        orchestrator.db_con = object()
+
+        repaired = orchestrator._repair_legacy_tickers([
+            "EURONEXT-BRUSSELS: SOF.BR",
+            "BF.B",
+            "SOF.BR",
+        ])
+
+        self.assertEqual(repaired, ["SOF.BR", "BF-B"])
+        self.assertEqual(mock_migrate.call_count, 2)
+
+
+class TestStockDataOrchestratorDatabaseStartup(unittest.TestCase):
+    """Focused coverage for DB startup validation and diagnostics."""
+
+    def _make_orchestrator(self):
+        orchestrator = stock_orchestrator.StockDataOrchestrator.__new__(stock_orchestrator.StockDataOrchestrator)
+        orchestrator.db_con = None
+        return orchestrator
+
+    @patch("builtins.print")
+    @patch("stock_orchestrator.db_connectors.pandas_mysql_connector")
+    @patch("stock_orchestrator.fetch_secrets.secret_import")
+    def test_connect_database_success_probes_before_reporting_success(
+        self,
+        mock_secret_import,
+        mock_db_connector,
+        mock_print,
+    ):
+        orchestrator = self._make_orchestrator()
+        orchestrator._probe_database_connection = Mock()
+
+        mock_secret_import.return_value = ("db", "stock_user", "stock_pass", "stock_db")
+        fake_engine = Mock()
+        mock_db_connector.return_value = fake_engine
+
+        orchestrator._connect_database()
+
+        self.assertIs(orchestrator.db_con, fake_engine)
+        orchestrator._probe_database_connection.assert_called_once_with(fake_engine)
+        mock_print.assert_any_call("✓ Database connection established")
+
+    @patch("builtins.print")
+    @patch("stock_orchestrator.db_connectors.pandas_mysql_connector")
+    @patch("stock_orchestrator.fetch_secrets.secret_import")
+    def test_connect_database_prints_actionable_hint_for_host_local_db_hostname(
+        self,
+        mock_secret_import,
+        mock_db_connector,
+        mock_print,
+    ):
+        orchestrator = self._make_orchestrator()
+
+        mock_secret_import.return_value = ("db", "stock_user", "stock_pass", "stock_db")
+        mock_db_connector.side_effect = Exception("Errno 11001: getaddrinfo failed")
+
+        with patch.object(stock_orchestrator.StockDataOrchestrator, "_is_running_in_container", return_value=False):
+            orchestrator._connect_database()
+
+        self.assertIsNone(orchestrator.db_con)
+        print_messages = [args[0] for args, _ in mock_print.call_args_list if args]
+        self.assertTrue(any("Database connection failed" in msg for msg in print_messages))
+        self.assertTrue(any("DB_HOST=db resolves only inside docker compose networking" in msg for msg in print_messages))
+
+    @patch("builtins.print")
+    @patch("stock_orchestrator.db_connectors.pandas_mysql_connector")
+    @patch("stock_orchestrator.fetch_secrets.secret_import")
+    def test_connect_database_skips_host_local_hint_inside_container(
+        self,
+        mock_secret_import,
+        mock_db_connector,
+        mock_print,
+    ):
+        orchestrator = self._make_orchestrator()
+
+        mock_secret_import.return_value = ("db", "stock_user", "stock_pass", "stock_db")
+        mock_db_connector.side_effect = Exception("Errno 11001: getaddrinfo failed")
+
+        with patch.object(stock_orchestrator.StockDataOrchestrator, "_is_running_in_container", return_value=True):
+            orchestrator._connect_database()
+
+        self.assertIsNone(orchestrator.db_con)
+        print_messages = [args[0] for args, _ in mock_print.call_args_list if args]
+        self.assertTrue(any("Database connection failed" in msg for msg in print_messages))
+        self.assertFalse(any("DB_HOST=db resolves only inside docker compose networking" in msg for msg in print_messages))
+
+    def test_build_db_connection_hint_reports_missing_env_values(self):
+        orchestrator = self._make_orchestrator()
+
+        hint = orchestrator._build_db_connection_hint(None, "")
+
+        self.assertIn("Set DB_HOST, DB_USER, DB_PASSWORD", hint)
+
+
 if __name__ == "__main__":
     unittest.main()

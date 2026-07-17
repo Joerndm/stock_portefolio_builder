@@ -1,4 +1,17 @@
--r requirements_PY_3_12.txt
+pandas>=2.2.0
+numpy>=1.26.5
+matplotlib>=3.8.0
+scipy>=1.12.0
+scikit-learn>=1.4.0
+python-dateutil==2.8.2
+yfinance>=0.2.40
+lxml>=5.0.0
+SQLAlchemy>=2.0.30
+mysql-connector-python>=8.3.0
+python-dotenv>=1.0.1
+oauthlib>=3.3.1
+psutil>=6.1.0
+plotly>=5.22.0
 tensorflow==2.21.0
 keras-tuner==1.4.8
 xgboost==3.2.0

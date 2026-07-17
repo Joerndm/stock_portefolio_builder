@@ -69,6 +69,10 @@ NVIDIA GPU passthrough enabled.
     DB_ROOT_PASSWORD=your_root_password
     ```
 
+Keep `DB_HOST=db` for containerized runs (`docker compose exec ...`).
+For host-local runs (`python stock_orchestrator.py` from your terminal), set
+`DB_HOST=127.0.0.1` (or `localhost`) so MySQL resolves outside Docker networking.
+
 4. Start the Docker environment:
     ```bash
     docker compose --env-file dev.env up -d db app ml
@@ -89,7 +93,7 @@ NVIDIA GPU passthrough enabled.
 docker compose --env-file dev.env up -d db app ml
 
 # Fetch or update stock data
-docker compose exec app python stock_orchestrator.py
+docker compose exec app python stock_orchestrator.py --workers 2
 
 # Train GPU-backed ML models
 docker compose exec ml python model_trainer.py
@@ -100,6 +104,33 @@ docker compose exec ml python price_predictor.py
 # Build the portfolio
 docker compose exec app python portfolio_builder.py
 ```
+
+### Manual Stock Data Updates Against The Docker DB
+
+If the MySQL database is running in Docker, the simplest manual path is to run the orchestrator inside the `app` container so `DB_HOST=db` keeps working:
+
+```bash
+# Start or refresh the app + DB services
+docker compose --env-file dev.env up -d db app
+
+# Update all tracked tickers incrementally
+docker compose exec app python stock_orchestrator.py --workers 2
+
+# Update only the tickers already stored in the Docker-hosted DB
+docker compose exec app python stock_orchestrator.py --update-only --workers 2
+
+# Update specific tickers
+docker compose exec app python stock_orchestrator.py --ticker AAPL MSFT NOVO-B.CO --workers 2
+```
+
+If you prefer to run from the Windows host instead, point `dev.env` at the published MySQL port first:
+
+```powershell
+$env:DB_HOST = "127.0.0.1"
+.venv\Scripts\python.exe stock_orchestrator.py --update-only --workers 2
+```
+
+For host-local runs, keep Docker publishing port `3306` and make sure the local Python environment was installed from `requirements_PY_3_12.txt`.
 
 ### Fetching Stock Data (Recommended)
 

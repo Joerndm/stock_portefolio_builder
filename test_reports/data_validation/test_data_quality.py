@@ -265,7 +265,7 @@ class TestMissingDataHandling(unittest.TestCase):
         })
         
         # Forward fill
-        filled_data = test_data.fillna(method='ffill')
+        filled_data = test_data.ffill()
         
         # Should have fewer NaN values
         original_na = test_data['close_Price'].isna().sum()

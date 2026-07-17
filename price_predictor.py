@@ -44,12 +44,14 @@ import db_interactions
 import monte_carlo_sim
 from gpu_runtime_utils import configure_tensorflow_gpu
 from blacklist_manager import get_blacklist_manager
-from ml_runtime_loader import load_ml_builder_module
+from ml_runtime_loader import create_ml_builder_proxy
 from model_pipeline_preprocessing import prepare_modeling_data
 from pipeline_config import get_gpu_config, get_data_config, get_ml_config, get_pred_config
 from prediction_cache_contract import PredictionCacheContractError, require_prediction_cache
 
 logger = logging.getLogger(__name__)
+
+ml_builder = create_ml_builder_proxy()
 
 
 DB_EXPORT_RECOVERY_EXCEPTIONS = (KeyError, ValueError)
@@ -212,7 +214,6 @@ def predict_single_stock(
     start_time = time.time()
 
     try:
-        ml_builder = load_ml_builder_module()
         cache_state = require_prediction_cache(
             stock_symbol,
             required_model_types=ml_cfg.required_model_types,

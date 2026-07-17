@@ -81,6 +81,7 @@ logging.getLogger('yfinance').setLevel(logging.CRITICAL)
 _yfinance_download_lock = threading.Lock()
 
 from dynamic_index_fetcher import dynamic_fetch_index_data
+from ticker_cleanup_utils import canonicalize_ticker
 from ttm_financial_calculator import (
     TTMFinancialCalculator,
     calculate_ratios_ttm_with_fallback,
@@ -149,7 +150,7 @@ def fetch_stock_standard_data(stock_symbol = ""):
 
     try:
         # Fetch the stock data for the symbol with retry for transient API errors
-        symbol = stock_symbol
+        symbol = canonicalize_ticker(stock_symbol)
         stock_info = None
         last_error = None
         
@@ -222,62 +223,76 @@ def fetch_stock_price_data(stock_ticker="", start_date=(datetime.datetime.now() 
     if start_date == "":
         raise ValueError("The start_date parameter cannot be empty.")
 
+    requested_ticker = canonicalize_ticker(stock_ticker)
+
     try:
         # Fetch the stock data for the ticker
         # Use lock to prevent yfinance thread-safety issues (shared session/crumb
         # can cause data for one ticker to be returned for another ticker's request)
         with _yfinance_download_lock:
             stock_price_data = yf.download(
-                stock_ticker, start=start_date,
+                requested_ticker, start=start_date,
                 auto_adjust=True, progress=False
             )
 
     except KeyError as e:
-        raise KeyError(f"Stock ticker '{stock_ticker}' is invalid or not found.") from e
+        raise KeyError(f"Stock ticker '{requested_ticker}' is invalid or not found.") from e
 
     try:
         stock_price_data_df = pd.DataFrame(stock_price_data)
-        # Handle MultiIndex columns from yfinance (ticker level)
+
         if isinstance(stock_price_data_df.columns, pd.MultiIndex):
-            # Validate: ensure yfinance returned data for the requested ticker
             ticker_levels = stock_price_data_df.columns.get_level_values(1).unique()
-            if len(ticker_levels) == 1 and ticker_levels[0] != stock_ticker:
+            if len(ticker_levels) == 1 and ticker_levels[0] != requested_ticker:
                 raise ValueError(
                     f"yfinance returned data for '{ticker_levels[0]}' when "
-                    f"'{stock_ticker}' was requested (thread-safety issue)"
+                    f"'{requested_ticker}' was requested"
                 )
             stock_price_data_df = stock_price_data_df.droplevel(1, axis=1)
-        # Deduplicate columns (parallel yfinance downloads can corrupt MultiIndex)
+
         stock_price_data_df = stock_price_data_df.loc[:, ~stock_price_data_df.columns.duplicated()]
         stock_price_data_df = stock_price_data_df.reset_index()
-        stock_price_data_df = stock_price_data_df[["Date", "Open", "High", "Low", "Close", "Volume"]]
-        stock_price_data_df = stock_price_data_df.rename(
-                        columns={
-                "Date": "date",
-                "Open": "open_Price",
-                "High": "high_Price",
-                "Low": "low_Price",
-                "Close": "close_Price",
-                "Volume": "trade_Volume"
-            }
-        )
-        stock_price_data_df = stock_price_data_df.rename_axis(None, axis=1)
 
-    except KeyError as e:
+        date_col = next(
+            (col for col in ["Date", "Datetime", "index", "date"] if col in stock_price_data_df.columns),
+            None,
+        )
+
+        required = ["Open", "High", "Low", "Close", "Volume"]
+        missing = [col for col in required if col not in stock_price_data_df.columns]
+
+        if date_col is None or missing:
+            raise KeyError(
+                f"Unexpected yfinance schema for {requested_ticker}. "
+                f"Columns: {list(stock_price_data_df.columns)}"
+            )
+
+        stock_price_data_df = stock_price_data_df[[date_col, *required]].rename(columns={
+            date_col: "date",
+            "Open": "open_Price",
+            "High": "high_Price",
+            "Low": "low_Price",
+            "Close": "close_Price",
+            "Volume": "trade_Volume",
+        })
+        stock_price_data_df = stock_price_data_df.rename_axis(None, axis=1)
+    except KeyError:
+        raise
+    except Exception as e:
         raise KeyError("Could not transform stock_price_data to a pandas dataframe") from e
 
     try:
         # Get ticker symbol and currency
         # Use the input parameter directly for the ticker name (avoids extra API call)
         # Try to get currency from yfinance .info, with retry and fallback
-        ticker_symbol = stock_ticker
+        ticker_symbol = requested_ticker
         currency = None
         
         for attempt in range(2):
             try:
-                yf_info = yf.Ticker(stock_ticker).info
+                yf_info = yf.Ticker(requested_ticker).info
                 if yf_info:
-                    ticker_symbol = yf_info.get("symbol", stock_ticker)
+                    ticker_symbol = canonicalize_ticker(yf_info.get("symbol", requested_ticker))
                     currency = yf_info.get("currency")
                     if currency:
                         break
@@ -295,7 +310,7 @@ def fetch_stock_price_data(stock_ticker="", start_date=(datetime.datetime.now() 
                 '.T': 'JPY', '.NS': 'INR', '.BO': 'INR',
             }
             for suffix, curr in suffix_currency_map.items():
-                if stock_ticker.endswith(suffix):
+                if requested_ticker.endswith(suffix):
                     currency = curr
                     break
             if not currency:
@@ -309,7 +324,7 @@ def fetch_stock_price_data(stock_ticker="", start_date=(datetime.datetime.now() 
     except Exception as e:
         # Last resort: use input ticker and USD
         stock_info = {
-            "ticker": stock_ticker,
+            "ticker": requested_ticker,
             "currency": "USD"
         }
 
@@ -854,14 +869,32 @@ def calculate_and_export_beta(stock_ticker, stock_price_df=None,
             if idx_data.empty:
                 continue
             
-            idx_df = pd.DataFrame(idx_data).reset_index()
-            # Handle MultiIndex columns from yfinance
+            idx_df = pd.DataFrame(idx_data)
+
             if isinstance(idx_df.columns, pd.MultiIndex):
                 idx_df = idx_df.droplevel(1, axis=1)
+
             idx_df = idx_df.loc[:, ~idx_df.columns.duplicated()]
-            idx_df = idx_df.rename(columns={'Date': 'date', 'Close': 'close_Price'})
-            
-            if 'close_Price' not in idx_df.columns or idx_df.empty:
+            idx_df = idx_df.reset_index()
+
+            date_col = next(
+                (col for col in ["Date", "Datetime", "index", "date"] if col in idx_df.columns),
+                None,
+            )
+
+            if date_col is None or "Close" not in idx_df.columns:
+                print(
+                    f"   ⚠️  Unexpected yfinance schema for index {yf_symbol}. "
+                    f"Columns: {list(idx_df.columns)}"
+                )
+                continue
+
+            idx_df = idx_df.rename(columns={
+                date_col: "date",
+                "Close": "close_Price",
+            })
+
+            if "close_Price" not in idx_df.columns or idx_df.empty:
                 continue
             
             # Calculate beta

@@ -34,10 +34,12 @@ Author: Stock Portfolio Builder
 """
 import os
 import pandas as pd
+from sqlalchemy import text
 
 import fetch_secrets
 import db_connectors
 from data_contracts import DataContractError, STOCK_PRICE_EXPORT_SCHEMA, validate_dataframe
+from ticker_cleanup_utils import canonicalize_ticker
 
 
 def _prepare_stock_price_export_batch(stock_price_data_df):
@@ -99,6 +101,200 @@ def _prepare_stock_price_export_batch(stock_price_data_df):
         raise ValueError(f"Invalid stock price export batch: {e}") from e
 
     return stock_price_data_df
+
+
+def _get_db_connection():
+    """Create a database connection using the configured secrets."""
+    db_host, db_user, db_pass, db_name = fetch_secrets.secret_import()
+    return db_connectors.pandas_mysql_connector(db_host, db_user, db_pass, db_name)
+
+
+def _build_in_params(values, prefix):
+    placeholders = []
+    params = {}
+    for idx, value in enumerate(values):
+        key = f"{prefix}_{idx}"
+        placeholders.append(f":{key}")
+        params[key] = value
+    return ", ".join(placeholders), params
+
+
+def delete_price_dates_across_related_tables(stock_ticker: str, dates, db_con=None):
+    """Delete invalid price dates across price-derived tables for a ticker."""
+    if stock_ticker == "":
+        raise ValueError("The stock_ticker parameter cannot be empty.")
+
+    normalized_dates = sorted({
+        pd.Timestamp(date_value).date()
+        for date_value in dates
+        if pd.notna(date_value)
+    })
+    if not normalized_dates:
+        return {}
+
+    own_connection = db_con is None
+    if own_connection:
+        db_con = _get_db_connection()
+
+    table_date_columns = {
+        'stock_price_data': 'date',
+        'stock_ratio_data': 'date',
+        'stock_beta_data': 'date',
+    }
+    in_clause, date_params = _build_in_params(normalized_dates, 'cleanup_date')
+    deleted_counts = {}
+
+    try:
+        with db_con.begin() as connection:
+            for table_name, date_column in table_date_columns.items():
+                try:
+                    row_count = connection.execute(
+                        text(
+                            f"SELECT COUNT(*) FROM {table_name} "
+                            f"WHERE ticker = :ticker AND {date_column} IN ({in_clause})"
+                        ),
+                        {'ticker': stock_ticker, **date_params},
+                    ).scalar() or 0
+                except Exception:
+                    continue
+
+                if row_count <= 0:
+                    continue
+
+                connection.execute(
+                    text(
+                        f"DELETE FROM {table_name} "
+                        f"WHERE ticker = :ticker AND {date_column} IN ({in_clause})"
+                    ),
+                    {'ticker': stock_ticker, **date_params},
+                )
+                deleted_counts[table_name] = int(row_count)
+    finally:
+        if own_connection and hasattr(db_con, 'dispose'):
+            db_con.dispose()
+
+    return deleted_counts
+
+
+def migrate_legacy_ticker(old_ticker: str, new_ticker: str, db_con=None):
+    """Rename a legacy ticker across ticker-bound tables, resolving key conflicts."""
+    if old_ticker == "" or new_ticker == "":
+        raise ValueError("Both old_ticker and new_ticker are required.")
+
+    old_ticker = str(old_ticker).strip().upper()
+    new_ticker = canonicalize_ticker(new_ticker)
+    if not old_ticker or not new_ticker or old_ticker == new_ticker:
+        return {'old_ticker': old_ticker, 'new_ticker': new_ticker, 'changes': {}}
+
+    own_connection = db_con is None
+    if own_connection:
+        db_con = _get_db_connection()
+
+    table_key_map = [
+        ('stock_price_data', ['date']),
+        ('stock_ratio_data', ['date']),
+        ('stock_ratio_data_ttm', ['date']),
+        ('stock_income_stmt_data', ['financial_Statement_Date']),
+        ('stock_balancesheet_data', ['financial_Statement_Date']),
+        ('stock_cash_flow_data', ['financial_Statement_Date']),
+        ('stock_income_stmt_quarterly', ['fiscal_quarter_end']),
+        ('stock_balancesheet_quarterly', ['fiscal_quarter_end']),
+        ('stock_cashflow_quarterly', ['fiscal_quarter_end']),
+        ('stock_prediction_data', []),
+        ('stock_prediction_extended', ['prediction_date', 'prediction_horizon_days', 'model_type']),
+        ('monte_carlo_results', ['simulation_date', 'simulation_year']),
+        ('portfolio_holdings', ['run_id']),
+        ('model_hyperparameters', ['model_type']),
+        ('index_membership', ['index_code']),
+        ('stock_beta_data', ['date', 'index_code']),
+        ('quarterly_fetch_metadata', []),
+    ]
+    changes = {}
+
+    try:
+        with db_con.begin() as connection:
+            old_info = connection.execute(
+                text(
+                    "SELECT ticker, company_Name, industry "
+                    "FROM stock_info_data WHERE ticker = :ticker"
+                ),
+                {'ticker': old_ticker},
+            ).mappings().first()
+            if old_info is None:
+                return {'old_ticker': old_ticker, 'new_ticker': new_ticker, 'changes': {}}
+
+            new_exists = bool(
+                connection.execute(
+                    text("SELECT 1 FROM stock_info_data WHERE ticker = :ticker LIMIT 1"),
+                    {'ticker': new_ticker},
+                ).first()
+            )
+            if not new_exists:
+                connection.execute(
+                    text(
+                        "INSERT INTO stock_info_data (ticker, company_Name, industry) "
+                        "VALUES (:ticker, :company_name, :industry)"
+                    ),
+                    {
+                        'ticker': new_ticker,
+                        'company_name': old_info['company_Name'],
+                        'industry': old_info['industry'],
+                    },
+                )
+                changes['stock_info_data_inserted'] = 1
+
+            for table_name, key_columns in table_key_map:
+                if key_columns:
+                    join_clause = " AND ".join(
+                        f"legacy.{column_name} = canonical.{column_name}"
+                        for column_name in key_columns
+                    )
+                    deleted = connection.execute(
+                        text(
+                            f"DELETE legacy FROM {table_name} legacy "
+                            f"JOIN {table_name} canonical "
+                            f"ON legacy.ticker = :old_ticker "
+                            f"AND canonical.ticker = :new_ticker "
+                            f"AND {join_clause}"
+                        ),
+                        {'old_ticker': old_ticker, 'new_ticker': new_ticker},
+                    ).rowcount or 0
+                    if deleted:
+                        changes[f'{table_name}:deleted_conflicts'] = int(deleted)
+                else:
+                    new_table_exists = bool(
+                        connection.execute(
+                            text(f"SELECT 1 FROM {table_name} WHERE ticker = :ticker LIMIT 1"),
+                            {'ticker': new_ticker},
+                        ).first()
+                    )
+                    if new_table_exists:
+                        deleted = connection.execute(
+                            text(f"DELETE FROM {table_name} WHERE ticker = :ticker"),
+                            {'ticker': old_ticker},
+                        ).rowcount or 0
+                        if deleted:
+                            changes[f'{table_name}:deleted_conflicts'] = int(deleted)
+                        continue
+
+                updated = connection.execute(
+                    text(f"UPDATE {table_name} SET ticker = :new_ticker WHERE ticker = :old_ticker"),
+                    {'new_ticker': new_ticker, 'old_ticker': old_ticker},
+                ).rowcount or 0
+                if updated:
+                    changes[f'{table_name}:updated'] = int(updated)
+
+            deleted_info = connection.execute(
+                text("DELETE FROM stock_info_data WHERE ticker = :ticker"),
+                {'ticker': old_ticker},
+            ).rowcount or 0
+            if deleted_info:
+                changes['stock_info_data:deleted_legacy'] = int(deleted_info)
+    finally:
+        if own_connection and hasattr(db_con, 'dispose'):
+            db_con.dispose()
+
+    return {'old_ticker': old_ticker, 'new_ticker': new_ticker, 'changes': changes}
 
 def import_ticker_list():
     """
