@@ -20,35 +20,60 @@ import math
 import numpy as np
 import pandas as pd
 
-import db_interactions
 import data_scalers
 
 def dataset_train_test_split(dataset_dataframe, test_size=0.10, validation_size=0.20, rs=1):
     """
-    Split the dataset into training, validation, and test data with proper scaling for both x and y values.
+    Split the dataset chronologically into training, validation, and test data
+    with proper scaling for both x and y values.
+
+    The prediction target is the NEXT trading day's close-to-close return:
+    prediction(t) = close_Price(t+1) / close_Price(t) - 1. Features in row t
+    only contain information available at day t, so there is no same-row or
+    look-ahead leakage between features and target.
+
+    The input dataframe must be sorted by date in ascending order (oldest row
+    first). If a 'date' column is present, this is verified and a ValueError
+    is raised on violation.
 
     Parameters:
-    - dataset_dataframe (pandas.DataFrame): The dataset to split.
-    - test_size (float): The size of the test data (default 0.20).
-    - validation_size (float): The size of the validation data (default 0.15).
-    - rs (int): The random state for the split.
+    - dataset_dataframe (pandas.DataFrame): The dataset to split, sorted by
+      date ascending. Must contain a 'close_Price' column.
+    - test_size (float): The fraction of rows used for the test set (default 0.10).
+    - validation_size (float): The fraction of rows used for the validation set (default 0.20).
+    - rs (int): DEPRECATED and unused. The split is chronological (no
+      shuffling), so no random state is involved. Kept for backward
+      compatibility with existing callers.
 
     Returns:
-    - scaler_x: The fitted MinMaxScaler for x values.
-    - scaler_y: The fitted MinMaxScaler for y values.
+    - scaler_x: The fitted MinMaxScaler for x values (fit on training data only).
+    - scaler_y: The fitted MinMaxScaler for y values (fit on training data only).
     - numpy.ndarray: The scaled training data (x).
     - numpy.ndarray: The scaled validation data (x).
     - numpy.ndarray: The scaled test data (x).
     - numpy.ndarray: The scaled training labels (y).
     - numpy.ndarray: The scaled validation labels (y).
     - numpy.ndarray: The scaled test labels (y).
-    - numpy.ndarray: The scaled prediction data (x for future predictions).
+    - pandas.DataFrame: The scaled prediction frame (most recent rows,
+      reserved for downstream historical blending and future forecasting).
 
     Raises:
     - KeyError: If the dataset does not have the required columns.
+    - ValueError: If the dataset is not sorted by date in ascending order.
     """
 
     try:
+        # GUARD: the split and the forward-shifted target below assume the
+        # dataframe is sorted in ascending chronological order. Verify while
+        # the date column is still available, before it gets dropped.
+        if "date" in dataset_dataframe.columns:
+            date_series = pd.to_datetime(dataset_dataframe["date"])
+            if not date_series.is_monotonic_increasing:
+                raise ValueError(
+                    "dataset_dataframe must be sorted by 'date' in ascending order "
+                    "before splitting (oldest row first)."
+                )
+
         # Drop the columns that are not needed
         drop_colum_list = ["date", "name", "date_published", "ticker", "currency", "financial_date_used"]
         for column in drop_colum_list:
@@ -57,22 +82,39 @@ def dataset_train_test_split(dataset_dataframe, test_size=0.10, validation_size=
 
         train_data_df = dataset_dataframe.copy()
         forecast_out = int(math.ceil(0.05 * len(train_data_df)))
-        train_data_df["prediction"] = train_data_df.iloc[0:-forecast_out]["1D"]
+
+        # TARGET CONSTRUCTION (forward-shifted, no same-row leakage):
+        # prediction(t) = close(t+1) / close(t) - 1  (next trading day's return)
+        #
+        # Features in row t are computed from prices up to and including day t,
+        # so the target must lie strictly in the future relative to row t.
+        # NOTE: the stored "1D" column is a *lagged* return (pct_change(1)
+        # shifted +1 in stock_data_fetch/technical_indicators) and is a valid
+        # feature, but it must never be used as the target — that would ask
+        # the model to reconstruct a past value already embedded in the
+        # features (SMAs/EMAs contain close(t-1)), inflating test metrics.
+        train_data_df["prediction"] = (
+            train_data_df["close_Price"].pct_change().shift(-1)
+        )
 
         # Exclude raw OHLCV columns that won't be available for future predictions
         exclude_cols = ["open_Price", "high_Price", "low_Price", "close_Price", "trade_Volume", "1D", "prediction"]
         x_all = train_data_df.drop(exclude_cols, axis=1, errors='ignore')
 
-        # Separate prediction data (future data with no known y values)
+        # Reserve the most recent forecast_out rows as the prediction frame
+        # used downstream for historical blending and future forecasting.
+        # These rows stay out of train/val/test, preserving their
+        # pseudo-out-of-sample role.
         x_Predictions = x_all.iloc[-forecast_out:].copy()
-        x = x_all.iloc[:-forecast_out].copy()
+        train_data_df = train_data_df.iloc[:-forecast_out]
 
-        # Drop rows with NaN values in prediction column
+        # Drop rows with NaN targets (the final reserved row has no known
+        # next-day return by construction; guard also covers edge cases)
         train_data_df = train_data_df.dropna(subset=["prediction"], axis=0, how="any")
         y = train_data_df["prediction"].values.reshape(-1, 1)  # Reshape for scaler
 
         # Align x with y (remove rows that were dropped from y)
-        x = x.loc[train_data_df.index].copy()
+        x = x_all.loc[train_data_df.index].copy()
 
         # TIME-BASED SPLIT: preserve chronological order (no shuffling)
         n = len(x)
@@ -112,6 +154,7 @@ def dataset_train_test_split(dataset_dataframe, test_size=0.10, validation_size=
 
 # Run the main function
 if __name__ == "__main__":
+    import db_interactions  # local import: only needed for this demo block
     stock_data_df = db_interactions.import_stock_dataset("BAVA.CO")
     print(stock_data_df.info())
     print("stock_data_df")

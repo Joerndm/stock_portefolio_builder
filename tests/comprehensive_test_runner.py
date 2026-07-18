@@ -43,7 +43,7 @@ if sys.stderr.encoding != 'utf-8':
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 try:
-    from test_reports.test_runner_envs import (
+    from tests.test_runner_envs import (
         CATEGORY_ENVIRONMENTS,
         TEST_REPORTS_DIR,
         default_unit_env_plan,
@@ -96,7 +96,7 @@ except ImportError:
 def _import_unit_test_module(module_stem):
     last_error = None
     for module_name in (
-        f'test_reports.unit.{module_stem}',
+        f'tests.unit.{module_stem}',
         f'unit.{module_stem}',
         module_stem,
     ):
@@ -291,7 +291,7 @@ def run_integration_tests(verbose=False):
     print("="*80)
     
     try:
-        from test_reports.integration import test_pipelines_integration
+        from tests.integration import test_pipelines_integration
 
         verbosity = 2 if verbose else 1
         loader = unittest.TestLoader()
@@ -311,7 +311,7 @@ def run_e2e_tests(verbose=False):
     print("="*80)
     
     try:
-        from test_reports.e2e import test_complete_workflows
+        from tests.e2e import test_complete_workflows
 
         verbosity = 2 if verbose else 1
         loader = unittest.TestLoader()
@@ -331,7 +331,7 @@ def run_performance_tests(verbose=False):
     print("="*80)
     
     try:
-        from test_reports.performance import test_performance_benchmarks
+        from tests.performance import test_performance_benchmarks
 
         verbosity = 2 if verbose else 1
         loader = unittest.TestLoader()
@@ -351,7 +351,7 @@ def run_security_tests(verbose=False):
     print("="*80)
     
     try:
-        from test_reports.security import test_security_validation
+        from tests.security import test_security_validation
 
         verbosity = 2 if verbose else 1
         loader = unittest.TestLoader()
@@ -371,7 +371,7 @@ def run_validation_tests(verbose=False):
     print("="*80)
     
     try:
-        from test_reports.data_validation import test_data_quality
+        from tests.data_validation import test_data_quality
 
         verbosity = 2 if verbose else 1
         loader = unittest.TestLoader()

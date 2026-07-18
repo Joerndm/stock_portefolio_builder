@@ -7,7 +7,7 @@ import unittest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
-from test_reports.test_runner_envs import (
+from tests.test_runner_envs import (
     current_python_env,
     default_unit_env_plan,
     plan_unit_test_files,

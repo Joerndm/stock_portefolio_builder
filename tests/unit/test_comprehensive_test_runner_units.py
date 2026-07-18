@@ -9,7 +9,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
-from test_reports import comprehensive_test_runner
+from tests import comprehensive_test_runner
 
 
 class TestResolveUnitTestModules(unittest.TestCase):
@@ -46,10 +46,10 @@ class TestRunUnitTests(unittest.TestCase):
             '_resolve_unit_test_modules',
             return_value=[fake_module],
         ) as resolve_modules, mock.patch(
-            'test_reports.comprehensive_test_runner.unittest.TestLoader.loadTestsFromModule',
+            'tests.comprehensive_test_runner.unittest.TestLoader.loadTestsFromModule',
             return_value=unittest.TestSuite(),
         ) as load_tests, mock.patch(
-            'test_reports.comprehensive_test_runner.unittest.TextTestRunner.run',
+            'tests.comprehensive_test_runner.unittest.TextTestRunner.run',
             return_value=fake_result,
         ) as run_tests:
             result = comprehensive_test_runner.run_unit_tests(
