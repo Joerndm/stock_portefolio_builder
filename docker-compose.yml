@@ -59,5 +59,42 @@ services:
               count: all
               capabilities: [gpu]
 
+# Notes:
+#   - Do NOT run heavy manual training in the `ml` service while a scheduler
+#     cycle is training: both would compete for the same GPU. Check what the
+#     scheduler is doing first:  docker compose logs -f ml-scheduler
+#   - Tune the cadence via the SCHEDULER_* environment variables below.
+#   - MAX_STOCKS_PER_CYCLE=25 spreads the initial full-retrain backlog across
+#     cycles instead of one multi-day marathon. Once the backlog is cleared,
+#     raise it or remove it.
+ 
+  ml-scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile.ml.gpu
+    restart: unless-stopped
+    command: python ml_scheduler.py
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_USER: ${DB_USER:-stock_user}
+      DB_PASSWORD: ${DB_PASSWORD:-stock_pass}
+      DB_NAME: ${DB_NAME:-stock_portefolio_builder}
+      SCHEDULER_INTERVAL_HOURS: "6"
+      TRAIN_MAX_AGE_DAYS: "30"
+      PREDICT_MAX_AGE_DAYS: "1"
+      MAX_STOCKS_PER_CYCLE: "25"
+      SCHEDULER_RUN_ON_START: "true"
+    volumes:
+      - ./:/app
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 volumes:
   mysql_data:

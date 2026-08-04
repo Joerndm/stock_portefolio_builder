@@ -137,6 +137,105 @@ class TestTargetAlignment(unittest.TestCase):
             )
 
 
+class TestHorizonParameterization(unittest.TestCase):
+    """The horizon argument and TARGET_HORIZON_DAYS env var control the
+    forward-return window: prediction(t) = close(t+h)/close(t) - 1."""
+
+    def setUp(self):
+        self.df = _make_synthetic_dataset()
+        os.environ.pop("TARGET_HORIZON_DAYS", None)
+
+    def tearDown(self):
+        os.environ.pop("TARGET_HORIZON_DAYS", None)
+
+    def _expected_target(self, h):
+        close = self.df["close_Price"].reset_index(drop=True)
+        return close.pct_change(h).shift(-h)
+
+    def _unscaled_y_train(self, **kwargs):
+        (scaler_x, scaler_y, x_train, x_val, x_test,
+         y_train, y_val, y_test, x_predictions) = \
+            split_dataset.dataset_train_test_split(self.df.copy(), **kwargs)
+        return scaler_y.inverse_transform(
+            np.asarray(y_train).reshape(-1, 1)
+        ).flatten()
+
+    def test_explicit_horizon_five(self):
+        y = self._unscaled_y_train(horizon=5)
+        expected = self._expected_target(5)
+        np.testing.assert_allclose(
+            y, expected.iloc[:len(y)].values, rtol=1e-9, atol=1e-12,
+            err_msg="horizon=5 target must be the 5-day forward return "
+                    "close(t+5)/close(t) - 1",
+        )
+
+    def test_env_var_horizon(self):
+        os.environ["TARGET_HORIZON_DAYS"] = "10"
+        y = self._unscaled_y_train()  # no explicit arg -> env var applies
+        expected = self._expected_target(10)
+        np.testing.assert_allclose(
+            y, expected.iloc[:len(y)].values, rtol=1e-9, atol=1e-12,
+            err_msg="TARGET_HORIZON_DAYS=10 must produce the 10-day forward return",
+        )
+
+    def test_explicit_horizon_overrides_env(self):
+        os.environ["TARGET_HORIZON_DAYS"] = "10"
+        y = self._unscaled_y_train(horizon=1)
+        expected = self._expected_target(1)
+        np.testing.assert_allclose(
+            y, expected.iloc[:len(y)].values, rtol=1e-9, atol=1e-12,
+            err_msg="Explicit horizon argument must override the env var",
+        )
+
+    def test_default_is_horizon_one(self):
+        y_default = self._unscaled_y_train()
+        expected = self._expected_target(1)
+        np.testing.assert_allclose(
+            y_default, expected.iloc[:len(y_default)].values,
+            rtol=1e-9, atol=1e-12,
+            err_msg="Default (no arg, no env var) must be next-day return",
+        )
+
+    def test_invalid_horizon_rejected(self):
+        with self.assertRaises(ValueError):
+            split_dataset.dataset_train_test_split(self.df.copy(), horizon=0)
+        with self.assertRaises(ValueError):
+            split_dataset.dataset_train_test_split(self.df.copy(), horizon=-3)
+
+    def test_embargo_removes_boundary_rows(self):
+        """horizon-1 rows must be dropped at train/val and val/test
+        boundaries; horizon=1 must leave split sizes unchanged."""
+        def split_sizes(**kwargs):
+            (sx, sy, x_train, x_val, x_test, *_u) = \
+                split_dataset.dataset_train_test_split(self.df.copy(), **kwargs)
+            return len(x_train), len(x_val), len(x_test)
+
+        n_input = len(self.df)
+        forecast_out = int(np.ceil(0.05 * n_input))
+
+        def usable_rows(h):
+            # Rows after reserving forecast_out and dropping NaN targets:
+            # the last h rows of the full frame lack a forward return; the
+            # forecast_out slice already removes min(h, forecast_out) of them.
+            return (n_input - forecast_out) - max(h - forecast_out, 0)
+
+        # h=1: no embargo — every usable row lands in exactly one subset
+        tr1, va1, te1 = split_sizes(horizon=1)
+        self.assertEqual(tr1 + va1 + te1, usable_rows(1))
+
+        # h=10: two embargoes of h-1 rows each are removed at the boundaries
+        h = 10
+        tr, va, te = split_sizes(horizon=h)
+        self.assertEqual(
+            tr + va + te, usable_rows(h) - 2 * (h - 1),
+            "train+val+test must equal usable rows minus two embargoes",
+        )
+        # Embargo trims train and val; test only shifts by the NaN-tail
+        # difference between horizons, never by the embargo itself.
+        self.assertLess(tr, tr1, "train must shrink under embargo")
+        self.assertLess(va, va1, "val must shrink under embargo")
+
+
 class TestChronologyAndShapes(unittest.TestCase):
     """Chronological ordering is enforced; shapes follow the split fractions."""
 

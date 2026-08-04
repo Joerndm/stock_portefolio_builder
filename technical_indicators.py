@@ -369,7 +369,81 @@ def calculate_momentum(df: pd.DataFrame, price_col: str = 'close_Price') -> pd.D
     return df
 
 
-def add_all_technical_indicators(df: pd.DataFrame, 
+def relativize_price_level_features(df: pd.DataFrame,
+                                    price_col: str = 'close_Price') -> pd.DataFrame:
+    """
+    Convert non-stationary price-LEVEL features into stationary, close-relative
+    form, in place, preserving the existing look-ahead shift.
+
+    WHY: features stored as absolute prices (moving averages, VWAP) or as
+    price-scaled dispersion (rolling std, Bollinger width) drift with the
+    price level. A MinMax scaler fitted on a training window then maps later,
+    higher-priced periods far outside [0, 1] (observed: sma_40 -> 18.9x,
+    bollinger_Band_120 -> 152x on trending tickers). Linear/kernel models
+    (Ridge, SVR) extrapolate catastrophically on such inputs; trees merely
+    saturate. Expressing each feature relative to the same-row close makes it
+    scale-free and stationary across price regimes.
+
+    TRANSFORMS:
+      - Moving averages & VWAP:  value / close - 1
+            (e.g. an SMA 3% above close -> 0.03, regardless of price level)
+      - Rolling std & Bollinger: value / close
+            (coefficient-of-variation form; unitless, stays bounded)
+
+    LOOK-AHEAD SAFETY: this runs AFTER every upstream indicator function has
+    already applied its .shift(1). Both the shifted feature at row t and the
+    same-row close(t) are information available at day t, so dividing one by
+    the other introduces no look-ahead. IMPORTANT: this function must be
+    called LAST in the indicator pipeline, after all shifts are in place.
+
+    Volume features (volume_sma_20, volume_ema_20) are also non-stationary but
+    live in volume space, not price space; volume_ratio already provides a
+    relative volume signal, so the raw volume MAs are left for the model's
+    feature selection to drop rather than transformed here.
+
+    Args:
+        df: DataFrame containing the shifted indicator columns and price_col.
+        price_col: Same-row close price column used as the denominator.
+
+    Returns:
+        The same DataFrame with the listed columns replaced by their
+        stationary form. Missing columns are skipped silently so partial
+        frames (e.g. index tickers) do not error.
+    """
+    if df.empty:
+        raise ValueError("DataFrame cannot be empty")
+    if price_col not in df.columns:
+        raise ValueError(f"Column '{price_col}' not found")
+
+    periods = [5, 20, 40, 120, 200]
+
+    # Guard against division by zero / missing prices: where close is 0 or
+    # NaN, the result becomes NaN (dropped later like any other NaN feature)
+    # rather than inf.
+    close = df[price_col].replace(0, np.nan)
+
+    ratio_minus_one_cols = (
+        [f"sma_{p}" for p in periods]
+        + [f"ema_{p}" for p in periods]
+        + ["vwap"]
+    )
+    ratio_cols = (
+        [f"std_Div_{p}" for p in periods]
+        + [f"bollinger_Band_{p}_2STD" for p in periods]
+    )
+
+    for col in ratio_minus_one_cols:
+        if col in df.columns:
+            df[col] = df[col] / close - 1.0
+
+    for col in ratio_cols:
+        if col in df.columns:
+            df[col] = df[col] / close
+
+    return df
+
+
+def add_all_technical_indicators(df: pd.DataFrame,
                                   is_index: bool = False,
                                   verbose: bool = True) -> pd.DataFrame:
     """
@@ -437,6 +511,12 @@ def add_all_technical_indicators(df: pd.DataFrame,
     df = calculate_momentum(df)
     if verbose:
         print("  ✓ Momentum")
+    
+    # Relativize price-level features to make them stationary.
+    # MUST be last: it depends on every prior .shift(1) already being applied.
+    df = relativize_price_level_features(df)
+    if verbose:
+        print("  ✓ Relativized price-level features (stationary)")
     
     return df
 

@@ -82,6 +82,7 @@ _yfinance_download_lock = threading.Lock()
 
 from dynamic_index_fetcher import dynamic_fetch_index_data
 from ticker_cleanup_utils import canonicalize_ticker
+from technical_indicators import relativize_price_level_features
 from ttm_financial_calculator import (
     TTMFinancialCalculator,
     calculate_ratios_ttm_with_fallback,
@@ -1811,6 +1812,9 @@ if __name__ == "__main__":
                 stock_price_data_df = calculate_standard_diviation_value(stock_price_data_df)
                 stock_price_data_df = calculate_bollinger_bands(stock_price_data_df)
                 stock_price_data_df = calculate_momentum(stock_price_data_df)
+                # Make price-level features stationary (close-relative). MUST
+                # run after all indicator shifts; see technical_indicators.py.
+                stock_price_data_df = relativize_price_level_features(stock_price_data_df)
                 
                 # Drop rows with NaN only in critical columns
                 critical_cols = ['date', 'ticker', 'close_Price', 'open_Price', 'high_Price', 'low_Price']
@@ -1852,6 +1856,10 @@ if __name__ == "__main__":
                         stock_price_data_df = calculate_standard_diviation_value(stock_price_data_df)
                         stock_price_data_df = calculate_bollinger_bands(stock_price_data_df)
                         stock_price_data_df = calculate_momentum(stock_price_data_df)
+                        # Make price-level features stationary (close-relative).
+                        # Runs on the concatenated frame BEFORE the date slice,
+                        # while close_Price is present for every row.
+                        stock_price_data_df = relativize_price_level_features(stock_price_data_df)
                         stock_price_data_df = stock_price_data_df.loc[stock_price_data_df["date"] >= new_stock_price_data_df.loc[0, "date"]]
                         
                         critical_cols = ['date', 'ticker', 'close_Price', 'open_Price', 'high_Price', 'low_Price']

@@ -28,6 +28,8 @@ import os
 import time
 import logging
 import traceback
+import json
+from datetime import datetime, timedelta
 from typing import List, Optional, Dict
 
 # Suppress TF warnings (level 2 = hide warnings + info, only show errors)
@@ -46,6 +48,52 @@ from pipeline_config import get_gpu_config, get_data_config, get_ml_config
 logger = logging.getLogger(__name__)
 
 ml_builder = create_ml_builder_proxy()
+
+# ---------------------------------------------------------------------------
+# Insufficient-data skip cache
+#
+# Tickers that skip with InsufficientDataError stay "untrained" in the DB and
+# would otherwise be re-picked at the front of every work queue, clogging it
+# (and making scheduler cycles spin on the same skips forever). Unlike the
+# blacklist, this must NOT be permanent: data-poor tickers accumulate rows
+# daily and become trainable once they reach the minimum history. So skips
+# are cached with a timestamp and retried after SKIP_RETRY_DAYS.
+# ---------------------------------------------------------------------------
+SKIP_CACHE_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "insufficient_data_skips.json"
+)
+SKIP_RETRY_DAYS = 30
+
+
+def _load_skip_cache() -> Dict[str, str]:
+    """Load {ticker: iso_timestamp_of_last_skip}. Missing/corrupt file = empty."""
+    try:
+        with open(SKIP_CACHE_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_skip_cache(cache: Dict[str, str]) -> None:
+    try:
+        with open(SKIP_CACHE_PATH, "w", encoding="utf-8") as fh:
+            json.dump(cache, fh, indent=2, sort_keys=True)
+    except OSError as e:
+        logger.warning("[SKIP-CACHE] Could not save %s: %s", SKIP_CACHE_PATH, e)
+
+
+def _active_skips(cache: Dict[str, str], retry_days: int = SKIP_RETRY_DAYS) -> List[str]:
+    """Tickers whose last insufficient-data skip is younger than retry_days."""
+    cutoff = datetime.now() - timedelta(days=retry_days)
+    active = []
+    for ticker, stamp in cache.items():
+        try:
+            if datetime.fromisoformat(stamp) > cutoff:
+                active.append(ticker)
+        except (TypeError, ValueError):
+            continue  # unparsable entry -> treat as expired, retry the ticker
+    return active
 
 
 def configure_gpu():
@@ -296,10 +344,20 @@ def run_model_training(
     stale = [t for t in training_needs['stale'] if t not in all_excluded]
     fresh = training_needs['fresh']
 
+    # Exclude tickers that recently skipped on insufficient data; they are
+    # retried automatically once their skip entry is older than SKIP_RETRY_DAYS.
+    skip_cache = _load_skip_cache()
+    recently_skipped = set(_active_skips(skip_cache))
+    if recently_skipped:
+        untrained = [t for t in untrained if t not in recently_skipped]
+        stale = [t for t in stale if t not in recently_skipped]
+
     logger.info("[STATUS] Untrained tickers:  %d", len(untrained))
     logger.info("[STATUS] Stale tickers:      %d", len(stale))
     logger.info("[STATUS] Fresh tickers:      %d", len(fresh))
     logger.info("[STATUS] Excluded tickers:   %d", len(all_excluded))
+    logger.info("[STATUS] Data-skip deferred: %d (retry after %dd)",
+                len(recently_skipped), SKIP_RETRY_DAYS)
 
     # Build work queue: untrained first, then stale
     work_queue = untrained + stale
@@ -318,8 +376,9 @@ def run_model_training(
         }
 
     total = len(work_queue)
+    n_untrained_in_queue = sum(1 for t in work_queue if t in untrained)
     logger.info("[INFO] Processing %d tickers (%d untrained + %d stale)",
-                total, len(untrained), min(len(stale), total - len(untrained)))
+                total, n_untrained_in_queue, total - n_untrained_in_queue)
 
     # Process each ticker
     results = {}
@@ -345,9 +404,14 @@ def run_model_training(
         if result['success']:
             successful += 1
             logger.info("[OK] %s trained in %.1fs", ticker, result['execution_time'])
+            if ticker in skip_cache:  # trained successfully -> clear old skip
+                skip_cache.pop(ticker, None)
+                _save_skip_cache(skip_cache)
         elif result.get('skipped', False):
             skipped += 1
             logger.info("[SKIP] %s: %s", ticker, result['error_message'])
+            skip_cache[ticker] = datetime.now().isoformat(timespec="seconds")
+            _save_skip_cache(skip_cache)
         else:
             failed += 1
             logger.error("[FAIL] %s: %s", ticker, result['error_message'])

@@ -17,20 +17,40 @@ Functions:
 """
 
 import math
+import os
 import numpy as np
 import pandas as pd
 
 import data_scalers
 
-def dataset_train_test_split(dataset_dataframe, test_size=0.10, validation_size=0.20, rs=1):
+def dataset_train_test_split(dataset_dataframe, test_size=0.10, validation_size=0.20, rs=1,
+                             horizon=None):
     """
     Split the dataset chronologically into training, validation, and test data
     with proper scaling for both x and y values.
 
-    The prediction target is the NEXT trading day's close-to-close return:
-    prediction(t) = close_Price(t+1) / close_Price(t) - 1. Features in row t
-    only contain information available at day t, so there is no same-row or
-    look-ahead leakage between features and target.
+    The prediction target is the forward return over `horizon` trading days:
+    prediction(t) = close_Price(t + horizon) / close_Price(t) - 1. Features in
+    row t only contain information available at day t, so there is no same-row
+    or look-ahead leakage between features and target. With horizon=1 (the
+    default) this is the next trading day's return.
+
+    The horizon is resolved in priority order:
+      1. The explicit `horizon` argument, if given.
+      2. The TARGET_HORIZON_DAYS environment variable, if set. This allows
+         horizon experiments across the whole pipeline (trainer, scheduler,
+         tests) without threading a parameter through every call site.
+      3. Default: 1 (next-day return).
+
+    IMPORTANT: hyperparameter caches are NOT keyed by horizon. Models trained
+    on different horizons must not be mixed — when changing the horizon,
+    retrain affected tickers from scratch (model_trainer.py --max-age 0) and
+    treat their previous metrics as belonging to a different task.
+
+    With horizon > 1, an embargo of horizon-1 rows is applied at the
+    train/val and val/test boundaries: overlapping forward-return windows
+    would otherwise leak future information across subsets. At horizon=1
+    the embargo is zero and split sizes are unaffected.
 
     The input dataframe must be sorted by date in ascending order (oldest row
     first). If a 'date' column is present, this is verified and a ValueError
@@ -44,6 +64,9 @@ def dataset_train_test_split(dataset_dataframe, test_size=0.10, validation_size=
     - rs (int): DEPRECATED and unused. The split is chronological (no
       shuffling), so no random state is involved. Kept for backward
       compatibility with existing callers.
+    - horizon (int or None): Forward-return horizon in trading days. None
+      (default) resolves via the TARGET_HORIZON_DAYS environment variable,
+      falling back to 1. Must be >= 1.
 
     Returns:
     - scaler_x: The fitted MinMaxScaler for x values (fit on training data only).
@@ -83,8 +106,17 @@ def dataset_train_test_split(dataset_dataframe, test_size=0.10, validation_size=
         train_data_df = dataset_dataframe.copy()
         forecast_out = int(math.ceil(0.05 * len(train_data_df)))
 
+        # Resolve the target horizon: explicit arg > env var > default 1
+        if horizon is None:
+            env_horizon = os.environ.get("TARGET_HORIZON_DAYS", "").strip()
+            horizon = int(env_horizon) if env_horizon else 1
+        horizon = int(horizon)
+        if horizon < 1:
+            raise ValueError(f"horizon must be >= 1, got {horizon}")
+
         # TARGET CONSTRUCTION (forward-shifted, no same-row leakage):
-        # prediction(t) = close(t+1) / close(t) - 1  (next trading day's return)
+        # prediction(t) = close(t + horizon) / close(t) - 1
+        # (the forward return over the next `horizon` trading days)
         #
         # Features in row t are computed from prices up to and including day t,
         # so the target must lie strictly in the future relative to row t.
@@ -94,7 +126,7 @@ def dataset_train_test_split(dataset_dataframe, test_size=0.10, validation_size=
         # the model to reconstruct a past value already embedded in the
         # features (SMAs/EMAs contain close(t-1)), inflating test metrics.
         train_data_df["prediction"] = (
-            train_data_df["close_Price"].pct_change().shift(-1)
+            train_data_df["close_Price"].pct_change(horizon).shift(-horizon)
         )
 
         # Exclude raw OHLCV columns that won't be available for future predictions
@@ -121,12 +153,21 @@ def dataset_train_test_split(dataset_dataframe, test_size=0.10, validation_size=
         train_end = int(n * (1 - test_size - validation_size))
         val_end = int(n * (1 - test_size))
 
-        x_train = x.iloc[:train_end]
-        x_val = x.iloc[train_end:val_end]
+        # EMBARGO (purge) at split boundaries:
+        # With horizon > 1, consecutive rows' targets overlap horizon-1 days,
+        # so the last rows of one subset share future information with the
+        # first rows of the next (e.g. the final training targets peek into
+        # the validation window). Dropping horizon-1 rows at the end of train
+        # and of val removes that boundary leakage. At horizon=1 the embargo
+        # is 0 and the split is unchanged.
+        embargo = horizon - 1
+
+        x_train = x.iloc[:max(train_end - embargo, 0)]
+        x_val = x.iloc[train_end:max(val_end - embargo, train_end)]
         x_test = x.iloc[val_end:]
 
-        y_train = y[:train_end]
-        y_val = y[train_end:val_end]
+        y_train = y[:max(train_end - embargo, 0)]
+        y_val = y[train_end:max(val_end - embargo, train_end)]
         y_test = y[val_end:]
 
         # Fit x scaler on TRAINING data only (prevent data leakage)

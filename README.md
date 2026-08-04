@@ -283,6 +283,137 @@ Configure in `dev.env`:
 - `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` - Database credentials
 - `DB_ROOT_PASSWORD` - root password used by the Dockerized MySQL service
 
+## Development And Maintenance
+
+### Repository Layout For Development
+
+| Directory | Contents |
+|-----------|----------|
+| `tests/` | The real test suites: `unit/`, `integration/`, `e2e/`, `performance/`, `security/`, `data_validation/` plus shared config (`test_config.yaml`) |
+| `scripts/` | One-off diagnostic and maintenance scripts (hit the live DB or yfinance — tools, not tests) |
+| `docs/history/` | Historical fix and status reports, kept for reference |
+
+### Running The Tests
+
+Run from the repo root with the `fetch_Stock_data_3_12` environment activated
+(or any environment installed from `requirements_PY_3_12.txt` plus `pytest`).
+
+```bash
+# Full unit suite (fast, no database or GPU needed — such tests skip themselves)
+pytest tests/unit
+
+# Verbose: one line per test
+pytest tests/unit -v
+
+# Verbose + show WHY skipped tests were skipped
+pytest tests/unit -v -rs
+
+# A single test file
+pytest tests/unit/test_split_dataset_target_alignment.py
+
+# A single test by name
+pytest tests/unit -k "test_target_is_next_day_return"
+```
+
+Run the unit suite locally before every push. The integration, e2e, and
+performance suites need the Dockerized MySQL running and take much longer:
+
+```bash
+docker compose --env-file dev.env up -d db
+pytest tests/integration
+pytest tests/e2e
+```
+
+The target-alignment tests in `tests/unit/test_split_dataset_target_alignment.py`
+are a leakage guard: they verify the ML prediction target is the *next* day's
+close-to-close return and never a same-row or past value. If a change to
+`split_dataset.py`, `stock_data_fetch.py`, or `technical_indicators.py` makes
+these fail, the change has reintroduced target leakage — fix the change, do
+not adjust the tests.
+
+### Linting
+
+CI enforces a minimum pylint score (see `PYLINT_THRESHOLD` in
+`.github/workflows/ci.yml`). Check your score locally before pushing:
+
+```bash
+# Git Bash / Anaconda Prompt (cmd):
+git ls-files *.py > pyfiles.txt
+python -m pylint @pyfiles.txt
+rm pyfiles.txt
+
+# PowerShell:
+python -m pylint (git ls-files '*.py')
+```
+
+The last output line shows the score. The threshold is a ratchet: after a
+cleanup pass raises the score, bump `PYLINT_THRESHOLD` up to just below the
+new score in `ci.yml` to lock in the gain. Never lower it to make a failing
+build pass — fix the findings instead.
+
+### Continuous Integration
+
+Every push and pull request runs `.github/workflows/ci.yml` with two parallel jobs:
+
+- **lint** — pylint over the application code (tests excluded), failing below `PYLINT_THRESHOLD`
+- **tests** — `pytest tests/unit`; DB- and GPU-dependent tests skip automatically since CI has neither
+
+Check results in the repository's **Actions** tab on GitHub. A red X on either
+job blocks the change until fixed.
+
+### Recurring Maintenance Tasks
+
+**Updating stock data** (run regularly, e.g. after market close or weekly):
+
+```bash
+docker compose --env-file dev.env up -d db app
+docker compose exec app python stock_orchestrator.py --update-only --workers 2
+```
+
+**Retraining models** — `model_trainer.py` retrains models older than
+`--max-age` days (default 30), so a periodic run only retrains what is stale:
+
+```bash
+# Routine: retrain anything older than 30 days
+docker compose exec ml python model_trainer.py
+
+# Force full retraining regardless of model age
+docker compose exec ml python model_trainer.py --max-age 0
+
+# Limit a run to the first N stocks (useful for testing changes)
+docker compose exec ml python model_trainer.py --max-age 0 --max-stocks 2
+```
+
+**Data quality audit and repair** (run when results look off, or monthly):
+follow the Auditing And Repair Planning section above — `validate_stock_data.py`,
+then `repair_cohort_planner.py`, then `repair_ticker_cohorts.py` (dry-run
+before `--execute`).
+
+**After changing `requirements_PY_3_12*.txt`**, rebuild the images so the
+containers match the files:
+
+```bash
+docker compose --env-file dev.env build app ml
+docker compose --env-file dev.env up -d db app ml
+```
+
+### After Changing Preprocessing, Features, Or The Target
+
+Cached hyperparameters and flat-model rows (`rf`, `xgb`, `ridge`, `svr`) were
+tuned against the *previous* data contract and are invalid after such a change.
+Either force a full retrain (`model_trainer.py --max-age 0`) or reconcile the
+caches per ticker:
+
+```bash
+python model_trainer.py --refresh-cache-contract APP ASML.AS --validate-prediction
+```
+
+Note that model metrics from before and after a target or feature change are
+**not comparable** — they measure performance against different prediction
+tasks. After the 2026 target-leakage fix in `split_dataset.py`, expect metrics
+to be visibly worse than historical numbers; the old numbers were inflated by
+leakage and the new ones are the honest baseline going forward.
+
 ## License
 
 See [LICENSE](LICENSE) file for details.

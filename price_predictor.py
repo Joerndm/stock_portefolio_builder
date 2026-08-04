@@ -93,6 +93,13 @@ class TeeLogger:
             except (ValueError, OSError):
                 pass
 
+        def close(self):
+            self.flush()
+            try:
+                self.file.close()
+            except (ValueError, OSError):
+                pass  # never close the real console stream
+
         # required so other libraries treat this as a real file-like object
         def fileno(self):
             return self.console.fileno()

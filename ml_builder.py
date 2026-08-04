@@ -564,7 +564,7 @@ def tune_random_forest_model(stock_symbol, x_training_dataset_df, y_training_dat
 
     # Create tuner with PredefinedSplit (uses validation set for scoring)
     tuner = Sklearn(
-        oracle=kt.oracles.Hyperband(
+        oracle=kt.oracles.HyperbandOracle(
             objective=kt.Objective('score', 'min'),
             max_epochs=max_trials,
             factor=3,
@@ -850,7 +850,7 @@ def tune_xgboost_model(stock_symbol, x_training_dataset_df, y_training_dataset_d
 
     # Create tuner with Bayesian Optimization
     tuner = Sklearn(
-        oracle=kt.oracles.BayesianOptimization(
+        oracle=kt.oracles.BayesianOptimizationOracle(
             objective=kt.Objective('score', 'min'),
             max_trials=max_trials,
             num_initial_points=min(5, max_trials // 3),
@@ -1081,7 +1081,7 @@ def tune_ridge_model(stock_symbol, x_training_dataset_df, y_training_dataset_df,
         return build_ridge_model(hp, constrain_for_overfitting=constrain_for_overfitting)
 
     tuner = Sklearn(
-        oracle=kt.oracles.BayesianOptimization(
+        oracle=kt.oracles.BayesianOptimizationOracle(
             objective=kt.Objective('score', 'min'),
             max_trials=max_trials, seed=42
         ),
@@ -1279,7 +1279,7 @@ def tune_svr_model(stock_symbol, x_training_dataset_df, y_training_dataset_df,
         return build_svr_model(hp, constrain_for_overfitting=constrain_for_overfitting)
 
     tuner = Sklearn(
-        oracle=kt.oracles.BayesianOptimization(
+        oracle=kt.oracles.BayesianOptimizationOracle(
             objective=kt.Objective('score', 'min'),
             max_trials=max_trials, seed=42
         ),
@@ -1388,7 +1388,7 @@ def tune_svm_model(stock_symbol, training_dataset_df, max_trials=20):
     mse_scorer = make_scorer(mean_squared_error, greater_is_better=False)
 
     tuner = Sklearn(
-        oracle=kt.oracles.BayesianOptimization(
+        oracle=kt.oracles.BayesianOptimizationOracle(
             objective=kt.Objective('score', 'min'),
             max_trials=max_trials,
             seed=42

@@ -180,3 +180,6 @@ monthly_index_fetch_cache.json
 
 # File types
 *.png
+
+# sql files
+*.sql

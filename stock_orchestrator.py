@@ -107,6 +107,7 @@ import db_connectors
 import db_interactions
 from financial_data_utils import drop_all_null_columns
 from technical_patterns import add_all_technical_patterns
+from technical_indicators import relativize_price_level_features
 from ticker_cleanup_utils import canonicalize_ticker
 
 # Cache file to track when Wikipedia was last fetched
@@ -693,6 +694,9 @@ class StockDataOrchestrator:
             stock_price_data_df = calculate_bollinger_bands(stock_price_data_df)
             stock_price_data_df = calculate_momentum(stock_price_data_df)
             stock_price_data_df = add_all_technical_patterns(stock_price_data_df)
+            # Make price-level features stationary (close-relative); must run
+            # after all indicator shifts. Single source: technical_indicators.
+            stock_price_data_df = relativize_price_level_features(stock_price_data_df)
 
             # Drop rows with NaN in critical columns
             critical_cols = ['date', 'ticker', 'close_Price', 'open_Price', 'high_Price', 'low_Price']
@@ -908,6 +912,9 @@ class StockDataOrchestrator:
             combined_df = calculate_bollinger_bands(combined_df)
             combined_df = calculate_momentum(combined_df)
             combined_df = add_all_technical_patterns(combined_df)
+            # Make price-level features stationary on the combined frame BEFORE
+            # slicing to new rows, while close_Price is present for every row.
+            combined_df = relativize_price_level_features(combined_df)
             
             # Keep only new rows for export
             combined_df = combined_df.loc[
